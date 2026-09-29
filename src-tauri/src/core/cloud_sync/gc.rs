@@ -12,6 +12,8 @@ use super::remote::{
 
 pub(super) const SYNC_SNAPSHOT_KEEP_RECENT: usize = 5;
 pub(super) const SYNC_SNAPSHOT_GC_GRACE_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
+/// Gitee gist hard limit is 10 files; keep headroom for the next upload.
+pub(super) const GIST_REMOTE_MAX_FILES: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SnapshotGcEntry {
@@ -21,10 +23,15 @@ pub(super) struct SnapshotGcEntry {
     pub deletable: bool,
 }
 
+pub(super) fn is_gist_provider(provider: &str) -> bool {
+    matches!(provider, "gitee_snippet" | "github_gist")
+}
+
 pub(super) async fn cleanup_sync_snapshots(
     remote: &CloudRemote,
     remote_root: &str,
     latest: Option<&RemoteSyncPointer>,
+    grace_period: Duration,
 ) {
     let result = collect_snapshots(remote, remote_root)
         .await
@@ -34,7 +41,7 @@ pub(super) async fn cleanup_sync_snapshots(
                 latest.map(|pointer| pointer.revision_id.as_str()),
                 current_time_ms(),
                 SYNC_SNAPSHOT_KEEP_RECENT,
-                SYNC_SNAPSHOT_GC_GRACE_PERIOD,
+                grace_period,
             )
         });
 
@@ -46,6 +53,76 @@ pub(super) async fn cleanup_sync_snapshots(
         }
     };
 
+    delete_snapshot_paths(remote, paths).await;
+}
+
+/// Free gist capacity before uploading a new snapshot file.
+///
+/// Keeps at most `keep_recent - 1` snapshots so the upcoming upload stays within
+/// `keep_recent`, and deletes additional oldest snapshots when total gist files
+/// would exceed `GIST_REMOTE_MAX_FILES - 1`.
+pub(super) async fn prune_gist_snapshots_before_upload(
+    remote: &CloudRemote,
+    remote_root: &str,
+    latest: Option<&RemoteSyncPointer>,
+) -> AppResult<()> {
+    let total_files = remote.list_files("").await?.len();
+    let snapshots = collect_snapshots(remote, remote_root).await?;
+    let keep_before_upload = SYNC_SNAPSHOT_KEEP_RECENT.saturating_sub(1);
+    let mut paths = plan_snapshot_gc(
+        snapshots.clone(),
+        latest.map(|pointer| pointer.revision_id.as_str()),
+        current_time_ms(),
+        keep_before_upload,
+        Duration::from_secs(0),
+    );
+
+    let projected_total = total_files.saturating_sub(paths.len()).saturating_add(1);
+    if projected_total > GIST_REMOTE_MAX_FILES {
+        let extra_needed = projected_total - GIST_REMOTE_MAX_FILES;
+        let mut protected: HashSet<String> = HashSet::new();
+        if let Some(latest) = latest {
+            protected.insert(latest.revision_id.clone());
+        }
+        let mut candidates = snapshots;
+        candidates.sort_by_key(|snapshot| snapshot.created_at_ms);
+        let mut extras = Vec::new();
+        for snapshot in candidates {
+            if extras.len() >= extra_needed {
+                break;
+            }
+            if !snapshot.deletable {
+                // Capacity prune: drop unreadable orphans too when over the hard limit.
+                if snapshot.revision_id.is_empty() || !protected.contains(&snapshot.revision_id) {
+                    if !paths.contains(&snapshot.path) {
+                        extras.push(snapshot.path);
+                    }
+                }
+                continue;
+            }
+            if protected.contains(&snapshot.revision_id) {
+                continue;
+            }
+            if paths.contains(&snapshot.path) {
+                continue;
+            }
+            extras.push(snapshot.path);
+        }
+        paths.extend(extras);
+    }
+
+    if !paths.is_empty() {
+        tracing::info!(
+            delete_count = paths.len(),
+            total_files,
+            "Pruning gist snapshots before upload"
+        );
+    }
+    delete_snapshot_paths(remote, paths).await;
+    Ok(())
+}
+
+async fn delete_snapshot_paths(remote: &CloudRemote, paths: Vec<String>) {
     for path in paths {
         if let Err(error) = remote.delete(&path).await {
             tracing::warn!(
@@ -216,5 +293,32 @@ mod tests {
         );
 
         assert_eq!(delete, vec!["nyaterm/sync/snapshots/old.redb.enc"]);
+    }
+
+    #[test]
+    fn gist_pre_upload_keep_leaves_one_slot() {
+        let delete = plan_snapshot_gc(
+            vec![
+                entry("r1", 1),
+                entry("r2", 2),
+                entry("r3", 3),
+                entry("r4", 4),
+                entry("r5", 5),
+            ],
+            Some("r5"),
+            100_000,
+            SYNC_SNAPSHOT_KEEP_RECENT.saturating_sub(1),
+            Duration::from_secs(0),
+        );
+
+        assert_eq!(delete, vec!["nyaterm/sync/snapshots/r1.redb.enc"]);
+    }
+
+    #[test]
+    fn is_gist_provider_detects_snippet_backends() {
+        assert!(is_gist_provider("gitee_snippet"));
+        assert!(is_gist_provider("github_gist"));
+        assert!(!is_gist_provider("webdav"));
+        assert!(!is_gist_provider("s3"));
     }
 }

@@ -11,10 +11,13 @@ use crate::config::{
     self, CloudConflictPreview, CloudSyncHistoryEntry, CloudSyncSettings, CloudSyncState,
     CloudSyncStatus,
 };
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CloudSyncError};
 
 use super::crypto::require_master_password;
-use super::gc::{SYNC_SNAPSHOT_GC_GRACE_PERIOD, cleanup_sync_snapshots};
+use super::gc::{
+    SYNC_SNAPSHOT_GC_GRACE_PERIOD, cleanup_sync_snapshots, is_gist_provider,
+    prune_gist_snapshots_before_upload,
+};
 use super::history_log::{log_history_entry, read_cloud_sync_history_from_logs};
 use super::migration::{
     RemoteSnapshotResolution, recover_current_remote_snapshot, resolve_remote_snapshot,
@@ -957,16 +960,80 @@ impl CloudSyncManager {
             None,
         )
         .await;
-        trace_cloud_sync_step(trigger, "upload_sync_snapshot", async {
-            upload_sync_snapshot(&remote, &settings.remote_root, &envelope).await
-        })
-        .await?;
 
         let pointer = pointer_from_snapshot(&envelope);
-        trace_cloud_sync_step(trigger, "verify_uploaded_sync_snapshot", async {
-            verify_uploaded_sync_snapshot(&remote, &settings.remote_root, &pointer).await
-        })
-        .await?;
+        let gist_backend = is_gist_provider(&settings.provider);
+        if gist_backend {
+            trace_cloud_sync_step(trigger, "prune_gist_snapshots_before_upload", async {
+                prune_gist_snapshots_before_upload(&remote, &settings.remote_root, latest.as_ref())
+                    .await
+            })
+            .await?;
+        }
+
+        let mut upload_attempts = 0;
+        loop {
+            upload_attempts += 1;
+            let upload_result = trace_cloud_sync_step(trigger, "upload_sync_snapshot", async {
+                upload_sync_snapshot(&remote, &settings.remote_root, &envelope).await
+            })
+            .await;
+            match upload_result {
+                Ok(()) => {}
+                Err(error)
+                    if gist_backend
+                        && upload_attempts < 2
+                        && matches!(
+                            &error,
+                            AppError::CloudSync(CloudSyncError::RemoteFileRejected { .. })
+                        ) =>
+                {
+                    tracing::warn!(
+                        error = %error,
+                        attempt = upload_attempts,
+                        "Gist upload rejected; pruning and retrying once"
+                    );
+                    prune_gist_snapshots_before_upload(
+                        &remote,
+                        &settings.remote_root,
+                        latest.as_ref(),
+                    )
+                    .await?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+
+            match trace_cloud_sync_step(trigger, "verify_uploaded_sync_snapshot", async {
+                verify_uploaded_sync_snapshot(&remote, &settings.remote_root, &pointer).await
+            })
+            .await
+            {
+                Ok(_) => break,
+                Err(error)
+                    if gist_backend
+                        && upload_attempts < 2
+                        && matches!(
+                            &error,
+                            AppError::CloudSync(CloudSyncError::SnapshotNotAccepted { .. })
+                                | AppError::CloudSync(CloudSyncError::RemoteFileRejected { .. })
+                        ) =>
+                {
+                    tracing::warn!(
+                        error = %error,
+                        attempt = upload_attempts,
+                        "Gist upload verify failed; pruning and retrying once"
+                    );
+                    prune_gist_snapshots_before_upload(
+                        &remote,
+                        &settings.remote_root,
+                        latest.as_ref(),
+                    )
+                    .await?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
 
         if !force {
             trace_cloud_sync_step(trigger, "recheck_sync_pointer", async {
@@ -998,8 +1065,13 @@ impl CloudSyncManager {
                 "Compatible current cloud sync snapshot write failed after commit"
             );
         }
-        self.schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer))
-            .await?;
+        self.schedule_sync_snapshot_gc(
+            remote.clone(),
+            settings.remote_root.clone(),
+            Some(pointer),
+            &settings.provider,
+        )
+        .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -1074,8 +1146,13 @@ impl CloudSyncManager {
         })
         .await?;
         let pointer = pointer_from_snapshot(&envelope);
-        self.schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer))
-            .await?;
+        self.schedule_sync_snapshot_gc(
+            remote.clone(),
+            settings.remote_root.clone(),
+            Some(pointer),
+            &settings.provider,
+        )
+        .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -1323,6 +1400,7 @@ impl CloudSyncManager {
             remote.clone(),
             settings.remote_root.clone(),
             Some(pointer.clone()),
+            &settings.provider,
         )
         .await?;
 
@@ -1364,11 +1442,20 @@ impl CloudSyncManager {
         remote: super::operator::CloudRemote,
         remote_root: String,
         latest: Option<RemoteSyncPointer>,
+        provider: &str,
     ) -> AppResult<()> {
+        let gist_backend = is_gist_provider(provider);
+        let grace_period = if gist_backend {
+            Duration::from_secs(0)
+        } else {
+            SYNC_SNAPSHOT_GC_GRACE_PERIOD
+        };
         let now = current_time_ms();
         {
             let mut state = self.state.lock().await;
-            if !maintenance_due(state.last_gc_attempt_at_ms, now, CLOUD_SYNC_GC_INTERVAL_MS) {
+            if !gist_backend
+                && !maintenance_due(state.last_gc_attempt_at_ms, now, CLOUD_SYNC_GC_INTERVAL_MS)
+            {
                 tracing::info!("Cloud sync snapshot cleanup skipped by daily throttle");
                 return Ok(());
             }
@@ -1381,7 +1468,8 @@ impl CloudSyncManager {
                 "cleanup_sync_snapshots",
                 CLOUD_SYNC_CLEANUP_TIMEOUT,
                 async {
-                    cleanup_sync_snapshots(&remote, &remote_root, latest.as_ref()).await;
+                    cleanup_sync_snapshots(&remote, &remote_root, latest.as_ref(), grace_period)
+                        .await;
                     Ok(())
                 },
             )
@@ -1390,7 +1478,7 @@ impl CloudSyncManager {
             if let Err(error) = result {
                 tracing::warn!(
                     error = %error,
-                    grace_hours = SYNC_SNAPSHOT_GC_GRACE_PERIOD.as_secs() / 3600,
+                    grace_hours = grace_period.as_secs() / 3600,
                     "Cloud sync snapshot cleanup did not complete"
                 );
             }
@@ -1802,10 +1890,15 @@ fn is_automatic_trigger(trigger: &str) -> bool {
 }
 
 fn is_non_retryable_automatic_error(error: &AppError) -> bool {
-    matches!(
-        error,
-        AppError::Auth(_) | AppError::Config(_) | AppError::Crypto(_) | AppError::CloudSync(_)
-    )
+    match error {
+        AppError::CloudSync(
+            CloudSyncError::SnapshotNotAccepted { .. } | CloudSyncError::RemoteFileRejected { .. },
+        ) => false,
+        AppError::Auth(_) | AppError::Config(_) | AppError::Crypto(_) | AppError::CloudSync(_) => {
+            true
+        }
+        _ => false,
+    }
 }
 
 fn should_record_startup_check_failure(error: &AppError) -> bool {
@@ -2091,6 +2184,21 @@ mod tests {
         )));
         assert!(!is_non_retryable_automatic_error(&AppError::Io(
             std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")
+        )));
+        assert!(!is_non_retryable_automatic_error(&AppError::CloudSync(
+            CloudSyncError::SnapshotNotAccepted {
+                revision: "r1".to_string(),
+            }
+        )));
+        assert!(!is_non_retryable_automatic_error(&AppError::CloudSync(
+            CloudSyncError::RemoteFileRejected {
+                filename: "nyaterm-x.blob".to_string(),
+            }
+        )));
+        assert!(is_non_retryable_automatic_error(&AppError::CloudSync(
+            CloudSyncError::SnapshotMissing {
+                revision: "r1".to_string(),
+            }
         )));
     }
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -136,6 +136,7 @@ fn map_optional_read(result: Result<Buffer, Error>) -> AppResult<Option<Vec<u8>>
 pub(super) struct MemoryRemote {
     files: Arc<StdMutex<HashMap<String, Vec<u8>>>>,
     fail_writes: Arc<StdMutex<Vec<String>>>,
+    drop_writes: Arc<StdMutex<Vec<String>>>,
 }
 
 #[cfg(test)]
@@ -144,6 +145,7 @@ impl MemoryRemote {
         Self {
             files: Arc::new(StdMutex::new(files)),
             fail_writes: Arc::new(StdMutex::new(Vec::new())),
+            drop_writes: Arc::new(StdMutex::new(Vec::new())),
         }
     }
 
@@ -151,6 +153,13 @@ impl MemoryRemote {
         self.fail_writes
             .lock()
             .expect("lock fail writes")
+            .push(needle.to_string());
+    }
+
+    pub(super) fn drop_next_write_containing(&self, needle: &str) {
+        self.drop_writes
+            .lock()
+            .expect("lock drop writes")
             .push(needle.to_string());
     }
 
@@ -183,6 +192,17 @@ impl MemoryRemote {
             )));
         }
         drop(fail_writes);
+
+        let mut drop_writes = self.drop_writes.lock().expect("lock drop writes");
+        if let Some(index) = drop_writes
+            .iter()
+            .position(|needle| path.contains(needle.as_str()))
+        {
+            drop_writes.remove(index);
+            return Ok(());
+        }
+        drop(drop_writes);
+
         self.files
             .lock()
             .expect("lock files")
@@ -530,6 +550,8 @@ struct GiteeSnippetFile {
     content: Option<String>,
     #[serde(default)]
     raw_url: Option<String>,
+    #[serde(default)]
+    truncated: bool,
 }
 
 impl GiteeSnippetRemote {
@@ -582,13 +604,17 @@ impl GiteeSnippetRemote {
         let Some(file) = snippet.files.get(&filename) else {
             return Ok(None);
         };
-        let content = match file
-            .content
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(content) => content.to_string(),
-            None => self.fetch_raw_file(&filename, file).await?,
+        let content = if file.truncated {
+            self.fetch_raw_file(&filename, file).await?
+        } else {
+            match file
+                .content
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                Some(content) => content.to_string(),
+                None => self.fetch_raw_file(&filename, file).await?,
+            }
         };
         decode_gitee_file_content(&content).map(Some)
     }
@@ -675,7 +701,7 @@ impl GiteeSnippetRemote {
         &self,
         files: serde_json::Map<String, serde_json::Value>,
     ) -> AppResult<()> {
-        let body = gitee_patch_body(self.access_token.as_str(), files);
+        let body = gitee_patch_body(self.access_token.as_str(), files.clone());
         let url = format!("{}/gists/{}", self.api_endpoint, self.gist_id);
         let response = self
             .client
@@ -684,7 +710,9 @@ impl GiteeSnippetRemote {
             .send()
             .await
             .map_err(map_gitee_client_error)?;
-        let _: serde_json::Value = decode_gitee_response(response).await?;
+        let snippet: GiteeSnippet = decode_gitee_response(response).await?;
+        let response_files: HashSet<String> = snippet.files.keys().cloned().collect();
+        ensure_gist_patch_accepted(&files, &response_files)?;
         Ok(())
     }
 }
@@ -714,6 +742,28 @@ fn gitee_patch_body(
         "access_token": access_token,
         "files": files,
     })
+}
+
+fn ensure_gist_patch_accepted(
+    requested: &serde_json::Map<String, serde_json::Value>,
+    response_filenames: &HashSet<String>,
+) -> AppResult<()> {
+    for (filename, value) in requested {
+        let should_exist = !value.is_null();
+        let exists = response_filenames.contains(filename);
+        if should_exist && !exists {
+            return Err(crate::error::CloudSyncError::RemoteFileRejected {
+                filename: filename.clone(),
+            }
+            .into());
+        }
+        if !should_exist && exists {
+            return Err(AppError::Config(format!(
+                "Remote gist still contains deleted file '{filename}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn decode_gitee_file_content(content: &str) -> AppResult<Vec<u8>> {
@@ -920,7 +970,9 @@ impl GithubGistRemote {
             .send()
             .await
             .map_err(map_github_gist_client_error)?;
-        let _: serde_json::Value = decode_github_gist_response(response).await?;
+        let gist: GithubGist = decode_github_gist_response(response).await?;
+        let response_files: HashSet<String> = gist.files.keys().cloned().collect();
+        ensure_gist_patch_accepted(files, &response_files)?;
         Ok(())
     }
 }
@@ -1267,6 +1319,33 @@ mod tests {
     }
 
     #[test]
+    fn gist_patch_requires_written_files_in_response() {
+        let mut requested = serde_json::Map::new();
+        requested.insert(
+            "nyaterm-new.blob".to_string(),
+            serde_json::json!({ "content": "abc" }),
+        );
+        let response = HashSet::from(["nyaterm-old.blob".to_string()]);
+        let err = ensure_gist_patch_accepted(&requested, &response).expect_err("missing file");
+        assert!(matches!(
+            err,
+            AppError::CloudSync(crate::error::CloudSyncError::RemoteFileRejected { filename })
+                if filename == "nyaterm-new.blob"
+        ));
+    }
+
+    #[test]
+    fn gist_patch_accepts_when_response_contains_file() {
+        let mut requested = serde_json::Map::new();
+        requested.insert(
+            "nyaterm-new.blob".to_string(),
+            serde_json::json!({ "content": "abc" }),
+        );
+        let response = HashSet::from(["nyaterm-new.blob".to_string()]);
+        ensure_gist_patch_accepted(&requested, &response).expect("accepted");
+    }
+
+    #[test]
     fn webdav_remote_layout_paths_support_empty_and_nested_roots() {
         let webdav = webdav_remote();
 
@@ -1409,6 +1488,16 @@ mod tests {
             r#"{"content":"partial","raw_url":"https://gist.githubusercontent.com/raw","truncated":true}"#,
         )
         .expect("deserialize gist file");
+
+        assert!(file.truncated);
+    }
+
+    #[test]
+    fn gitee_snippet_file_deserializes_truncated_flag() {
+        let file: GiteeSnippetFile = serde_json::from_str(
+            r#"{"content":"partial","raw_url":"https://gitee.com/raw","truncated":true}"#,
+        )
+        .expect("deserialize gitee file");
 
         assert!(file.truncated);
     }

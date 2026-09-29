@@ -1,7 +1,7 @@
 use crate::core::portable_snapshot::{
     DecodedPortableSnapshot, PortableSnapshot, encode_portable_snapshot,
 };
-use crate::error::{AppResult, CloudSyncError};
+use crate::error::{AppError, AppResult, CloudSyncError};
 
 use super::crypto::encrypt_snapshot_bytes;
 use super::operator::CloudRemote;
@@ -54,7 +54,17 @@ pub(super) async fn verify_uploaded_sync_snapshot(
     remote_root: &str,
     pointer: &RemoteSyncPointer,
 ) -> AppResult<PortableSnapshot> {
-    read_snapshot_for_pointer(remote, remote_root, pointer).await
+    match read_snapshot_for_pointer(remote, remote_root, pointer).await {
+        Ok(snapshot) => Ok(snapshot),
+        Err(AppError::CloudSync(CloudSyncError::SnapshotMissing { revision })) => {
+            tracing::warn!(
+                revision = %revision,
+                "Uploaded sync snapshot is missing on remote; latest pointer was not changed"
+            );
+            Err(CloudSyncError::SnapshotNotAccepted { revision }.into())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) async fn read_snapshot_for_pointer(
@@ -251,7 +261,7 @@ mod tests {
         PortableAppSettings, PortableSnapshotKind, calculate_payload_hash,
         calculate_v3_raw_payload_hash, encode_v3_raw_snapshot_redb_for_test,
     };
-    use crate::error::AppError;
+    use crate::error::{AppError, CloudSyncError};
     use crate::utils::crypto::set_master_password;
 
     use super::super::migration::{RemoteSnapshotResolution, resolve_remote_snapshot};
@@ -475,6 +485,34 @@ mod tests {
         let result = upload_sync_snapshot(&remote, "nyaterm", &new_snapshot).await;
 
         assert!(result.is_err());
+        let latest = load_sync_pointer(&remote, "nyaterm")
+            .await
+            .expect("load latest")
+            .expect("latest");
+        assert_eq!(latest.revision_id, old_pointer.revision_id);
+        set_master_password(None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn verify_uploaded_missing_snapshot_maps_to_not_accepted() {
+        let _guard = MASTER_PASSWORD_TEST_LOCK.lock().expect("lock password");
+        set_master_password(Some("secret".to_string()));
+        let (memory, remote) = memory_remote();
+        let old_pointer = write_committed_snapshot(&remote, "r1").await;
+        let new_snapshot = sample_snapshot("r2", 2);
+        let new_pointer = pointer_from_snapshot(&new_snapshot);
+        memory.drop_next_write_containing("snapshots/r2");
+
+        upload_sync_snapshot(&remote, "nyaterm", &new_snapshot)
+            .await
+            .expect("upload reports success even when silently dropped");
+        let result = verify_uploaded_sync_snapshot(&remote, "nyaterm", &new_pointer).await;
+
+        assert!(matches!(
+            result,
+            Err(AppError::CloudSync(CloudSyncError::SnapshotNotAccepted { revision }))
+                if revision == "r2"
+        ));
         let latest = load_sync_pointer(&remote, "nyaterm")
             .await
             .expect("load latest")

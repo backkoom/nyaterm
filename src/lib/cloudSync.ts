@@ -237,3 +237,15 @@ export function hasConflict(conflict?: CloudConflictPreview | null) {
 export function isRemoteInconsistentConflict(conflict?: CloudConflictPreview | null) {
   return conflict?.kind === "remote_inconsistent";
 }
+
+/** Detect gist capacity / silent-reject failures that can self-heal via prune + push. */
+export function isGistCapacitySyncFailure(message?: string | null) {
+  if (!message) {
+    return false;
+  }
+  return (
+    message.includes("was not accepted by remote storage") ||
+    message.includes("rejected file") ||
+    message.includes("gist may be at file capacity")
+  );
+}
