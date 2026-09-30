@@ -15,6 +15,7 @@
     "installed": "安装版",
     "issues": "问题反馈",
     "operatingSystem": "操作系统",
+    "packageManager": "包管理器",
     "portable": "便携版",
     "runtime": "运行环境",
     "supportInfo": "支持信息",

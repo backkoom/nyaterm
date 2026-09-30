@@ -100,14 +100,14 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
     }
 
     const runtimeLabel =
-      packageManagerDisplay ??
-      (supportInfo.runtime === "portable" ? t("about.portable") : t("about.installed"));
+      supportInfo.runtime === "portable" ? t("about.portable") : t("about.installed");
     const text = [
       "NyaTerm Support Information",
       `Version: ${appVersion}`,
       `Operating System: ${supportInfo.os}`,
       `Application Architecture: ${supportInfo.architecture}`,
       `Runtime: ${runtimeLabel}`,
+      ...(packageManagerDisplay ? [`Package Manager: ${packageManagerDisplay}`] : []),
       ...(conptyDisplay ? [`Local Terminal ConPTY: ${conptyDisplay}`] : []),
     ].join("\n");
     try {
@@ -128,8 +128,9 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
   const architectureDisplay =
     supportInfo?.architecture ?? (supportInfoFailed ? t("about.unknown") : t("common.loading"));
   const runtimeDisplay = supportInfo
-    ? packageManagerDisplay ??
-      (supportInfo.runtime === "portable" ? t("about.portable") : t("about.installed"))
+    ? supportInfo.runtime === "portable"
+      ? t("about.portable")
+      : t("about.installed")
     : supportInfoFailed
       ? t("about.unknown")
       : t("common.loading");
@@ -139,6 +140,7 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
     [t("about.operatingSystem"), osDisplay],
     [t("about.architecture"), architectureDisplay],
     [t("about.runtime"), runtimeDisplay],
+    ...(packageManagerDisplay ? [[t("about.packageManager"), packageManagerDisplay]] : []),
     ...(conptyDisplay ? [[t("about.conpty"), conptyDisplay]] : []),
   ];
 

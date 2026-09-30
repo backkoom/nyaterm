@@ -15,6 +15,7 @@
     "installed": "설치 버전",
     "issues": "이슈",
     "operatingSystem": "운영 체제",
+    "packageManager": "패키지 관리자",
     "portable": "포터블 버전",
     "runtime": "실행 환경",
     "supportInfo": "지원 정보",

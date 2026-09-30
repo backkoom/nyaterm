@@ -756,7 +756,14 @@ export default function Header({
 }: HeaderProps) {
   const [appWindow] = useState(() => getCurrentWindow());
   const { themeName, setTheme, themeNames, terminalThemeName, setTerminalTheme } = useTheme();
-  const { updateAppSettings, updateUi, appSettings, tabs, runtimeInfo } = useApp();
+  const {
+    updateAppSettings,
+    updateUi,
+    appSettings,
+    tabs,
+    runtimeInfo,
+    runtimeInfoLoaded,
+  } = useApp();
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
@@ -1242,7 +1249,7 @@ export default function Header({
         icon: "menu_book",
         action: () => openUrl(`${packageJson.docspage}`),
       },
-      ...(runtimeInfo.packageManager
+      ...(!runtimeInfoLoaded || runtimeInfo.packageManager
         ? []
         : [
             {
