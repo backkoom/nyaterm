@@ -79,6 +79,7 @@ export const DEFAULT_CLOUD_SYNC_STATUS: CloudSyncStatus = {
   provider: "webdav",
   state: "idle",
   message: "",
+  error_code: null,
   current_operation: null,
   last_checked_at_ms: null,
   last_synced_at_ms: null,
@@ -238,7 +239,18 @@ export function isRemoteInconsistentConflict(conflict?: CloudConflictPreview | n
   return conflict?.kind === "remote_inconsistent";
 }
 
-/** Detect gist capacity / silent-reject failures that can self-heal via prune + push. */
+/** Providers that keep every sync object in one gist-style, file-count limited list. */
+export function isGistCloudProvider(provider?: string | null) {
+  return provider === "gitee_snippet" || provider === "github_gist";
+}
+
+/** `CloudSyncStatus.error_code` published when the remote gist is full. */
+export const GIST_CAPACITY_ERROR_CODE = "gist_capacity";
+
+/**
+ * Fallback for statuses that predate `error_code` (or a failure path that did not
+ * set one). New checks must key off the code, never off this prose match.
+ */
 export function isGistCapacitySyncFailure(message?: string | null) {
   if (!message) {
     return false;
@@ -248,4 +260,16 @@ export function isGistCapacitySyncFailure(message?: string | null) {
     message.includes("rejected file") ||
     message.includes("gist may be at file capacity")
   );
+}
+
+/** Capacity recovery only applies to gist providers: other backends fail for other reasons. */
+export function needsGistCapacityRecovery(
+  provider?: string | null,
+  message?: string | null,
+  errorCode?: string | null,
+) {
+  if (!isGistCloudProvider(provider)) {
+    return false;
+  }
+  return errorCode === GIST_CAPACITY_ERROR_CODE || isGistCapacitySyncFailure(message);
 }

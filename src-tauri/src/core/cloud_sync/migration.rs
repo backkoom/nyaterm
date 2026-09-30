@@ -1,6 +1,7 @@
 use crate::core::portable_snapshot::PortableSnapshot;
 use crate::error::{AppError, AppResult, CloudSyncError};
 
+use super::gc::prune_gist_snapshots_best_effort;
 use super::operator::CloudRemote;
 use super::protocol::{
     commit_sync_pointer, pointer_from_snapshot, read_current_sync_snapshot_compat,
@@ -95,6 +96,7 @@ pub(super) async fn migrate_legacy_snapshot(
     pointer: &RemoteSyncPointer,
     snapshot: &PortableSnapshot,
 ) -> AppResult<()> {
+    prune_gist_snapshots_best_effort(remote, remote_root, Some(pointer)).await;
     upload_sync_snapshot(remote, remote_root, snapshot).await?;
     verify_uploaded_sync_snapshot(remote, remote_root, pointer).await?;
     Ok(())
@@ -110,6 +112,8 @@ pub(super) async fn recover_current_remote_snapshot(
         ));
     };
     let pointer = pointer_from_snapshot(&snapshot);
+    // Recovery rewrites a snapshot file, which needs a free slot on gists.
+    prune_gist_snapshots_best_effort(remote, remote_root, Some(&pointer)).await;
     upload_sync_snapshot(remote, remote_root, &snapshot).await?;
     verify_uploaded_sync_snapshot(remote, remote_root, &pointer).await?;
     commit_sync_pointer(remote, remote_root, &pointer).await?;

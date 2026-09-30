@@ -1986,6 +1986,8 @@ export interface CloudSyncStatus {
   provider: string;
   state: string;
   message: string;
+  /** Stable machine-readable code for failures the UI reacts to. */
+  error_code?: string | null;
   current_operation?: string | null;
   last_checked_at_ms?: number | null;
   last_synced_at_ms?: number | null;

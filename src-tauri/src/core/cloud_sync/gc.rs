@@ -12,8 +12,9 @@ use super::remote::{
 
 pub(super) const SYNC_SNAPSHOT_KEEP_RECENT: usize = 5;
 pub(super) const SYNC_SNAPSHOT_GC_GRACE_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
-/// Gitee gist hard limit is 10 files; keep headroom for the next upload.
-pub(super) const GIST_REMOTE_MAX_FILES: usize = 10;
+/// Fixed sync documents that always occupy a gist slot: `sync/latest.redb` and
+/// `sync/current.redb.enc`.
+const GIST_FIXED_FILE_COUNT: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SnapshotGcEntry {
@@ -58,68 +59,115 @@ pub(super) async fn cleanup_sync_snapshots(
 
 /// Free gist capacity before uploading a new snapshot file.
 ///
-/// Keeps at most `keep_recent - 1` snapshots so the upcoming upload stays within
-/// `keep_recent`, and deletes additional oldest snapshots when total gist files
-/// would exceed `GIST_REMOTE_MAX_FILES - 1`.
+/// Only runs for backends with a hard file-count limit, and only when the
+/// upcoming upload would exceed it. Reading every snapshot to rank generations is
+/// expensive, so the common case stops after a single cheap remote file count.
 pub(super) async fn prune_gist_snapshots_before_upload(
     remote: &CloudRemote,
     remote_root: &str,
     latest: Option<&RemoteSyncPointer>,
 ) -> AppResult<()> {
-    let total_files = remote.list_files("").await?.len();
+    let Some(capacity_limit) = remote.file_capacity_limit() else {
+        // No hard limit: retention is handled by `cleanup_sync_snapshots`.
+        return Ok(());
+    };
+    let Some(total_files) = remote.gist_file_count().await? else {
+        return Ok(());
+    };
+
+    let projected_total = total_files.saturating_add(1);
+    if projected_total <= capacity_limit {
+        return Ok(());
+    }
+
+    tracing::info!(
+        total_files,
+        capacity_limit,
+        "Gist is at capacity; pruning snapshots before upload"
+    );
     let snapshots = collect_snapshots(remote, remote_root).await?;
-    let keep_before_upload = SYNC_SNAPSHOT_KEEP_RECENT.saturating_sub(1);
-    let mut paths = plan_snapshot_gc(
-        snapshots.clone(),
+    let paths = plan_gist_capacity_prune(
+        &snapshots,
+        total_files,
+        capacity_limit,
         latest.map(|pointer| pointer.revision_id.as_str()),
-        current_time_ms(),
-        keep_before_upload,
-        Duration::from_secs(0),
     );
 
-    let projected_total = total_files.saturating_sub(paths.len()).saturating_add(1);
-    if projected_total > GIST_REMOTE_MAX_FILES {
-        let extra_needed = projected_total - GIST_REMOTE_MAX_FILES;
-        let mut protected: HashSet<String> = HashSet::new();
-        if let Some(latest) = latest {
-            protected.insert(latest.revision_id.clone());
+    let needed = projected_total - capacity_limit;
+    let unmanaged_files = total_files.saturating_sub(snapshots.len());
+    if unmanaged_files > GIST_FIXED_FILE_COUNT {
+        if paths.len() < needed {
+            tracing::warn!(
+                total_files,
+                unmanaged_files,
+                freed = paths.len(),
+                needed,
+                "Gist holds files outside the current sync root; the snapshot prune cannot free enough capacity"
+            );
+        } else {
+            tracing::info!(
+                total_files,
+                unmanaged_files,
+                freed = paths.len(),
+                "Gist holds files outside the current sync root; that capacity cannot be reclaimed"
+            );
         }
-        let mut candidates = snapshots;
-        candidates.sort_by_key(|snapshot| snapshot.created_at_ms);
-        let mut extras = Vec::new();
-        for snapshot in candidates {
-            if extras.len() >= extra_needed {
-                break;
-            }
-            if !snapshot.deletable {
-                // Capacity prune: drop unreadable orphans too when over the hard limit.
-                if snapshot.revision_id.is_empty() || !protected.contains(&snapshot.revision_id) {
-                    if !paths.contains(&snapshot.path) {
-                        extras.push(snapshot.path);
-                    }
-                }
-                continue;
-            }
-            if protected.contains(&snapshot.revision_id) {
-                continue;
-            }
-            if paths.contains(&snapshot.path) {
-                continue;
-            }
-            extras.push(snapshot.path);
-        }
-        paths.extend(extras);
     }
 
-    if !paths.is_empty() {
-        tracing::info!(
-            delete_count = paths.len(),
-            total_files,
-            "Pruning gist snapshots before upload"
-        );
-    }
     delete_snapshot_paths(remote, paths).await;
     Ok(())
+}
+
+/// Best-effort capacity pruning for gist remotes.
+///
+/// Inspecting the remote can fail on its own (network, quota on reads). That must
+/// never block the upload that follows, so failures are only logged.
+pub(super) async fn prune_gist_snapshots_best_effort(
+    remote: &CloudRemote,
+    remote_root: &str,
+    latest: Option<&RemoteSyncPointer>,
+) {
+    if !remote.is_gist_backend() {
+        return;
+    }
+
+    if let Err(error) = prune_gist_snapshots_before_upload(remote, remote_root, latest).await {
+        tracing::warn!(
+            error = %error,
+            "Gist snapshot pruning did not complete; continuing with upload"
+        );
+    }
+}
+
+/// Pure planning half of [`prune_gist_snapshots_before_upload`].
+///
+/// Returns the snapshot files to delete so that `total_files + 1` fits into
+/// `capacity_limit`. Oldest generations go first (unreadable entries carry
+/// `created_at_ms == 0`, so they are reclaimed before readable history), and the
+/// latest pointer target is never touched.
+pub(super) fn plan_gist_capacity_prune(
+    snapshots: &[SnapshotGcEntry],
+    total_files: usize,
+    capacity_limit: usize,
+    latest_revision: Option<&str>,
+) -> Vec<String> {
+    let projected_total = total_files.saturating_add(1);
+    if projected_total <= capacity_limit {
+        return Vec::new();
+    }
+    let needed = projected_total - capacity_limit;
+
+    let mut candidates: Vec<&SnapshotGcEntry> = snapshots
+        .iter()
+        .filter(|snapshot| Some(snapshot.revision_id.as_str()) != latest_revision)
+        .collect();
+    candidates.sort_by_key(|snapshot| snapshot.created_at_ms);
+
+    candidates
+        .into_iter()
+        .take(needed)
+        .map(|snapshot| snapshot.path.clone())
+        .collect()
 }
 
 async fn delete_snapshot_paths(remote: &CloudRemote, paths: Vec<String>) {
@@ -213,6 +261,26 @@ async fn read_snapshot_for_gc(
     Ok((snapshot.created_at_ms, snapshot.payload_hash))
 }
 
+/// Revisions that must survive any cleanup: the latest pointer target plus the
+/// most recent `keep_recent` generations.
+pub(super) fn protected_revision_ids(
+    snapshots: &[SnapshotGcEntry],
+    latest_revision: Option<&str>,
+    keep_recent: usize,
+) -> HashSet<String> {
+    let mut protected: HashSet<String> = HashSet::new();
+    if let Some(latest_revision) = latest_revision {
+        protected.insert(latest_revision.to_string());
+    }
+
+    let mut by_age: Vec<&SnapshotGcEntry> = snapshots.iter().collect();
+    by_age.sort_by_key(|snapshot| snapshot.created_at_ms);
+    for snapshot in by_age.into_iter().rev().take(keep_recent) {
+        protected.insert(snapshot.revision_id.clone());
+    }
+    protected
+}
+
 pub(super) fn plan_snapshot_gc(
     mut snapshots: Vec<SnapshotGcEntry>,
     latest_revision: Option<&str>,
@@ -220,17 +288,10 @@ pub(super) fn plan_snapshot_gc(
     keep_recent: usize,
     grace_period: Duration,
 ) -> Vec<String> {
-    let mut protected: HashSet<String> = HashSet::new();
-    if let Some(latest_revision) = latest_revision {
-        protected.insert(latest_revision.to_string());
-    }
-
-    snapshots.sort_by_key(|snapshot| snapshot.created_at_ms);
-    for snapshot in snapshots.iter().rev().take(keep_recent) {
-        protected.insert(snapshot.revision_id.clone());
-    }
+    let protected = protected_revision_ids(&snapshots, latest_revision, keep_recent);
 
     let grace_ms = u64::try_from(grace_period.as_millis()).unwrap_or(u64::MAX);
+    snapshots.sort_by_key(|snapshot| snapshot.created_at_ms);
     snapshots
         .into_iter()
         .filter(|snapshot| snapshot.deletable)
@@ -250,6 +311,7 @@ fn snapshot_revision_from_path(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::operator::MemoryRemote;
     use super::*;
 
     fn entry(revision: &str, created_at_ms: u64) -> SnapshotGcEntry {
@@ -312,6 +374,175 @@ mod tests {
         );
 
         assert_eq!(delete, vec!["nyaterm/sync/snapshots/r1.redb.enc"]);
+    }
+
+    fn full_gist_snapshots() -> Vec<SnapshotGcEntry> {
+        (1..=8)
+            .map(|index| entry(&format!("r{index}"), index))
+            .collect()
+    }
+
+    #[test]
+    fn gist_capacity_prune_frees_exactly_the_needed_slot() {
+        // latest + current + 8 snapshots = 10 files, so the next upload needs one
+        // slot freed.
+        let delete = plan_gist_capacity_prune(&full_gist_snapshots(), 10, 10, Some("r8"));
+
+        assert_eq!(
+            delete,
+            vec!["nyaterm/sync/snapshots/r1.redb.enc".to_string()]
+        );
+    }
+
+    #[test]
+    fn gist_capacity_prune_is_a_no_op_when_there_is_room() {
+        let delete = plan_gist_capacity_prune(&full_gist_snapshots(), 7, 10, Some("r8"));
+
+        assert!(delete.is_empty());
+    }
+
+    #[test]
+    fn gist_capacity_prune_frees_as_many_slots_as_needed() {
+        // 12 files against a limit of 10: the upload needs three slots, oldest first.
+        let delete = plan_gist_capacity_prune(&full_gist_snapshots(), 12, 10, Some("r8"));
+
+        assert_eq!(
+            delete,
+            vec![
+                "nyaterm/sync/snapshots/r1.redb.enc".to_string(),
+                "nyaterm/sync/snapshots/r2.redb.enc".to_string(),
+                "nyaterm/sync/snapshots/r3.redb.enc".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn gist_capacity_prune_never_drops_the_latest_pointer_snapshot() {
+        // r1 is both the oldest and the pointer target: r2 goes instead.
+        let delete = plan_gist_capacity_prune(&full_gist_snapshots(), 10, 10, Some("r1"));
+
+        assert_eq!(
+            delete,
+            vec!["nyaterm/sync/snapshots/r2.redb.enc".to_string()]
+        );
+    }
+
+    #[test]
+    fn gist_capacity_prune_drops_unreadable_orphans_first() {
+        let mut snapshots = vec![
+            SnapshotGcEntry {
+                path: "nyaterm/sync/snapshots/broken.redb.enc".to_string(),
+                revision_id: "broken".to_string(),
+                created_at_ms: 0,
+                deletable: false,
+            },
+            SnapshotGcEntry {
+                path: "nyaterm/sync/snapshots/.redb.enc".to_string(),
+                revision_id: String::new(),
+                created_at_ms: 0,
+                deletable: false,
+            },
+        ];
+        snapshots.extend(full_gist_snapshots());
+
+        // Two slots needed: the orphans go first, no readable generation is lost.
+        let delete = plan_gist_capacity_prune(&snapshots, 11, 10, Some("r8"));
+
+        assert_eq!(
+            delete,
+            vec![
+                "nyaterm/sync/snapshots/broken.redb.enc".to_string(),
+                "nyaterm/sync/snapshots/.redb.enc".to_string(),
+            ]
+        );
+    }
+
+    const SNAPSHOT_LIST_PREFIX: &str = "nyaterm/sync/snapshots/";
+
+    /// A gist holding a single managed file; tests set the capacity limit they
+    /// need explicitly.
+    fn gist_remote_with_one_file(mark_gist_backend: bool) -> (MemoryRemote, CloudRemote) {
+        let memory = MemoryRemote::with_files(std::collections::HashMap::from([(
+            "nyaterm/sync/latest.redb".to_string(),
+            vec![1u8],
+        )]));
+        if mark_gist_backend {
+            memory.mark_gist_backend();
+        }
+        let remote = CloudRemote::Memory(memory.clone());
+        (memory, remote)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gist_prune_skips_the_remote_without_a_capacity_limit() {
+        let (memory, remote) = gist_remote_with_one_file(true);
+        memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
+
+        // No limit yet: the prune must not read a single snapshot.
+        prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+            .await
+            .expect("nothing to prune without a capacity limit");
+
+        memory.set_file_capacity_limit(1);
+        assert!(
+            prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+                .await
+                .is_err(),
+            "the pending injected failure proves the first call never listed snapshots"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gist_prune_stops_after_the_cheap_count_when_there_is_room() {
+        let (memory, remote) = gist_remote_with_one_file(true);
+        memory.set_file_capacity_limit(10);
+        memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
+
+        prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+            .await
+            .expect("one file is far below the limit");
+
+        memory.set_file_capacity_limit(1);
+        assert!(
+            prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+                .await
+                .is_err(),
+            "the pending injected failure proves the first call never listed snapshots"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gist_best_effort_prune_swallows_remote_failures() {
+        let (memory, remote) = gist_remote_with_one_file(true);
+        memory.set_file_capacity_limit(1);
+        memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
+
+        prune_gist_snapshots_best_effort(&remote, "nyaterm", None).await;
+
+        memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
+        assert!(
+            prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+                .await
+                .is_err(),
+            "the injected list failure must be real"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gist_best_effort_prune_skips_non_gist_backends() {
+        let (memory, remote) = gist_remote_with_one_file(false);
+        memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
+
+        // A non-gist backend must not even talk to the remote here.
+        prune_gist_snapshots_best_effort(&remote, "nyaterm", None).await;
+
+        memory.set_file_capacity_limit(1);
+        assert!(
+            prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+                .await
+                .is_err(),
+            "the pending injected failure proves the best-effort call stayed local"
+        );
     }
 
     #[test]

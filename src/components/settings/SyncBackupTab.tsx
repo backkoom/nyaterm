@@ -15,8 +15,8 @@ import {
   formatCloudProvider,
   formatTimestamp,
   getCloudSyncValidationErrors,
-  isGistCapacitySyncFailure,
   isRemoteInconsistentConflict,
+  needsGistCapacityRecovery,
   secretInputValue,
   secretPlaceholder,
   shortValue,
@@ -124,7 +124,8 @@ export function SyncBackupTab({ onNavigateSecurity }: SyncBackupTabProps) {
   const isBusy = loading || isSaving || runningAction !== null;
   const isRemoteInconsistent = isRemoteInconsistentConflict(status.conflict);
   const showGistCapacityRecovery =
-    status.state === "failed" && isGistCapacitySyncFailure(status.message);
+    status.state === "failed" &&
+    needsGistCapacityRecovery(status.provider, status.message, status.error_code);
 
   const updateCloudSync = useCallback(
     (patch: Partial<CloudSyncSettings>) => {
@@ -1075,10 +1076,8 @@ export function SyncBackupTab({ onNavigateSecurity }: SyncBackupTabProps) {
           {showGistCapacityRecovery ? (
             <Button
               onClick={() =>
-                void runAction(
-                  "prune-retry-push",
-                  t("settings.syncPruneAndRetrySuccess"),
-                  () => invoke("sync_push_now"),
+                void runAction("prune-retry-push", t("settings.syncPruneAndRetrySuccess"), () =>
+                  invoke("sync_push_now"),
                 )
               }
               disabled={isBusy || !canRunEnabledActions}

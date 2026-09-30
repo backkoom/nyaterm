@@ -264,7 +264,9 @@ mod tests {
     use crate::error::{AppError, CloudSyncError};
     use crate::utils::crypto::set_master_password;
 
-    use super::super::migration::{RemoteSnapshotResolution, resolve_remote_snapshot};
+    use super::super::migration::{
+        RemoteSnapshotResolution, recover_current_remote_snapshot, resolve_remote_snapshot,
+    };
     use super::super::operator::MemoryRemote;
     use super::super::remote::{load_sync_pointer, remote_path};
     use super::*;
@@ -521,6 +523,82 @@ mod tests {
         set_master_password(None);
     }
 
+    fn encrypted_snapshot_file(snapshot: &PortableSnapshot) -> Vec<u8> {
+        encrypt_snapshot_bytes(&encode_portable_snapshot(snapshot).expect("encode snapshot"))
+            .expect("encrypt snapshot")
+    }
+
+    /// A gist at its file limit: latest pointer + current snapshot + 8 generations.
+    /// The fake remote silently drops new files from then on, like Gitee does.
+    fn full_gist_remote(with_capacity_handling: bool) -> (MemoryRemote, CloudRemote) {
+        let mut files = HashMap::new();
+        for index in 1..=8u64 {
+            let revision = format!("r{index}");
+            files.insert(
+                sync_snapshot_path("nyaterm", &revision),
+                encrypted_snapshot_file(&sample_snapshot(&revision, index)),
+            );
+        }
+        files.insert(
+            remote_path("nyaterm", SYNC_CURRENT_FILE),
+            encrypted_snapshot_file(&sample_snapshot("r-new", 100)),
+        );
+
+        let memory = MemoryRemote::with_files(files);
+        if with_capacity_handling {
+            memory.mark_gist_backend();
+            memory.set_file_capacity_limit(10);
+        }
+        memory.drop_new_writes_when_file_count_reaches(10);
+        let remote = CloudRemote::Memory(memory.clone());
+        (memory, remote)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn recovery_fails_on_a_full_gist_without_capacity_handling() {
+        let _guard = MASTER_PASSWORD_TEST_LOCK.lock().expect("lock password");
+        set_master_password(Some("secret".to_string()));
+        let (memory, remote) = full_gist_remote(false);
+        let latest = pointer_from_snapshot(&sample_snapshot("r8", 8));
+        commit_sync_pointer(&remote, "nyaterm", &latest)
+            .await
+            .expect("seed pointer");
+        assert_eq!(memory.file_count(), 10);
+
+        let result = recover_current_remote_snapshot(&remote, "nyaterm").await;
+
+        assert!(matches!(
+            result,
+            Err(AppError::CloudSync(CloudSyncError::SnapshotNotAccepted { revision }))
+                if revision == "r-new"
+        ));
+        set_master_password(None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn recovery_prunes_a_full_gist_before_uploading() {
+        let _guard = MASTER_PASSWORD_TEST_LOCK.lock().expect("lock password");
+        set_master_password(Some("secret".to_string()));
+        let (memory, remote) = full_gist_remote(true);
+        let latest = pointer_from_snapshot(&sample_snapshot("r8", 8));
+        commit_sync_pointer(&remote, "nyaterm", &latest)
+            .await
+            .expect("seed pointer");
+        assert_eq!(memory.file_count(), 10);
+
+        let recovered = recover_current_remote_snapshot(&remote, "nyaterm")
+            .await
+            .expect("recover from a full gist");
+
+        assert_eq!(recovered.revision_id, "r-new");
+        assert!(memory.file_count() <= 10);
+        let pointer = load_sync_pointer(&remote, "nyaterm")
+            .await
+            .expect("load pointer")
+            .expect("pointer");
+        assert_eq!(pointer.revision_id, "r-new");
+        set_master_password(None);
+    }
     #[tokio::test(flavor = "current_thread")]
     async fn pointer_write_failure_keeps_old_revision_readable() {
         let _guard = MASTER_PASSWORD_TEST_LOCK.lock().expect("lock password");

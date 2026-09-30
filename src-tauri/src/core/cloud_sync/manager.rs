@@ -16,7 +16,7 @@ use crate::error::{AppError, AppResult, CloudSyncError};
 use super::crypto::require_master_password;
 use super::gc::{
     SYNC_SNAPSHOT_GC_GRACE_PERIOD, cleanup_sync_snapshots, is_gist_provider,
-    prune_gist_snapshots_before_upload,
+    prune_gist_snapshots_best_effort,
 };
 use super::history_log::{log_history_entry, read_cloud_sync_history_from_logs};
 use super::migration::{
@@ -964,13 +964,12 @@ impl CloudSyncManager {
         let pointer = pointer_from_snapshot(&envelope);
         let gist_backend = is_gist_provider(&settings.provider);
         if gist_backend {
-            trace_cloud_sync_step(trigger, "prune_gist_snapshots_before_upload", async {
-                prune_gist_snapshots_before_upload(&remote, &settings.remote_root, latest.as_ref())
-                    .await
-            })
-            .await?;
+            prune_gist_snapshots_step(trigger, &remote, &settings.remote_root, latest.as_ref())
+                .await;
         }
 
+        // Gist snippets silently drop a new file once they are at capacity, so a
+        // failed upload/verification is retried once after freeing capacity.
         let mut upload_attempts = 0;
         loop {
             upload_attempts += 1;
@@ -993,12 +992,13 @@ impl CloudSyncManager {
                         attempt = upload_attempts,
                         "Gist upload rejected; pruning and retrying once"
                     );
-                    prune_gist_snapshots_before_upload(
+                    prune_gist_snapshots_step(
+                        trigger,
                         &remote,
                         &settings.remote_root,
                         latest.as_ref(),
                     )
-                    .await?;
+                    .await;
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -1015,8 +1015,10 @@ impl CloudSyncManager {
                         && upload_attempts < 2
                         && matches!(
                             &error,
-                            AppError::CloudSync(CloudSyncError::SnapshotNotAccepted { .. })
-                                | AppError::CloudSync(CloudSyncError::RemoteFileRejected { .. })
+                            AppError::CloudSync(
+                                CloudSyncError::SnapshotNotAccepted { .. }
+                                    | CloudSyncError::RemoteFileRejected { .. }
+                            )
                         ) =>
                 {
                     tracing::warn!(
@@ -1024,12 +1026,13 @@ impl CloudSyncManager {
                         attempt = upload_attempts,
                         "Gist upload verify failed; pruning and retrying once"
                     );
-                    prune_gist_snapshots_before_upload(
+                    prune_gist_snapshots_step(
+                        trigger,
                         &remote,
                         &settings.remote_root,
                         latest.as_ref(),
                     )
-                    .await?;
+                    .await;
                 }
                 Err(error) => return Err(error),
             }
@@ -1503,6 +1506,7 @@ impl CloudSyncManager {
 
         let provider = self.settings.lock().await.provider.clone();
         let message = error.to_string();
+        let error_code = cloud_sync_failure_code(&provider, error);
 
         self.append_history(CloudSyncHistoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1516,7 +1520,14 @@ impl CloudSyncManager {
             message: message.clone(),
         })
         .await;
-        self.set_status("failed", message, None, None).await;
+        self.set_status_with_code(
+            "failed",
+            message,
+            None,
+            None,
+            error_code.map(str::to_string),
+        )
+        .await;
         self.record_automatic_retry_failure(trigger, error).await;
     }
 
@@ -1642,6 +1653,18 @@ impl CloudSyncManager {
         current_operation: Option<String>,
         conflict: Option<CloudConflictPreview>,
     ) {
+        self.set_status_with_code(state_value, message, current_operation, conflict, None)
+            .await;
+    }
+
+    async fn set_status_with_code(
+        &self,
+        state_value: &str,
+        message: String,
+        current_operation: Option<String>,
+        conflict: Option<CloudConflictPreview>,
+        error_code: Option<String>,
+    ) {
         let app = self.app().ok();
         let settings = self.settings.lock().await.clone();
         let state = self.state.lock().await.clone();
@@ -1650,6 +1673,7 @@ impl CloudSyncManager {
             provider: settings.provider.clone(),
             state: state_value.to_string(),
             message,
+            error_code,
             current_operation,
             last_checked_at_ms: state.last_checked_at_ms,
             last_synced_at_ms: state.last_synced_at_ms,
@@ -1671,6 +1695,7 @@ impl CloudSyncManager {
             status.provider = provider;
             status.state = if enabled { "idle" } else { "disabled" }.to_string();
             status.message.clear();
+            status.error_code = None;
             status.current_operation = None;
             status.conflict = None;
             status.clone()
@@ -1748,6 +1773,21 @@ where
         ),
     }
     result
+}
+
+/// Free gist capacity before an upload. Remote inspection can fail on its own, so
+/// this is best-effort: it is traced, but it never fails the push.
+async fn prune_gist_snapshots_step(
+    trigger: &str,
+    remote: &super::operator::CloudRemote,
+    remote_root: &str,
+    latest: Option<&RemoteSyncPointer>,
+) {
+    let _ = trace_cloud_sync_step(trigger, "prune_gist_snapshots_before_upload", async {
+        prune_gist_snapshots_best_effort(remote, remote_root, latest).await;
+        Ok::<(), AppError>(())
+    })
+    .await;
 }
 
 fn decide_remote_check(
@@ -1900,6 +1940,26 @@ fn is_non_retryable_automatic_error(error: &AppError) -> bool {
         _ => false,
     }
 }
+
+/// Machine-readable code for failures the UI offers a recovery action for.
+///
+/// The frontend must not parse prose error text: keeping the code here means
+/// rewording a message can never silently disable the recovery button.
+fn cloud_sync_failure_code(provider: &str, error: &AppError) -> Option<&'static str> {
+    if !is_gist_provider(provider) {
+        return None;
+    }
+
+    match error {
+        AppError::CloudSync(
+            CloudSyncError::SnapshotNotAccepted { .. } | CloudSyncError::RemoteFileRejected { .. },
+        ) => Some(GIST_CAPACITY_ERROR_CODE),
+        _ => None,
+    }
+}
+
+/// `CloudSyncStatus.error_code` value for "the gist is full".
+pub(super) const GIST_CAPACITY_ERROR_CODE: &str = "gist_capacity";
 
 fn should_record_startup_check_failure(error: &AppError) -> bool {
     !matches!(error, AppError::Io(_))
@@ -2211,6 +2271,70 @@ mod tests {
         assert!(is_automatic_trigger("auto_pull_remote"));
         assert!(!is_automatic_trigger("manual_push"));
         assert!(!is_automatic_trigger("manual_test_connection"));
+    }
+
+    #[test]
+    fn gist_capacity_failure_code_is_limited_to_gist_providers() {
+        let capacity_error = AppError::CloudSync(CloudSyncError::SnapshotNotAccepted {
+            revision: "r1".to_string(),
+        });
+
+        assert_eq!(
+            cloud_sync_failure_code("gitee_snippet", &capacity_error),
+            Some(GIST_CAPACITY_ERROR_CODE)
+        );
+        assert_eq!(
+            cloud_sync_failure_code("github_gist", &capacity_error),
+            Some(GIST_CAPACITY_ERROR_CODE)
+        );
+        assert_eq!(cloud_sync_failure_code("webdav", &capacity_error), None);
+        assert_eq!(
+            cloud_sync_failure_code(
+                "gitee_snippet",
+                &AppError::CloudSync(CloudSyncError::ConcurrentUpdate {
+                    expected_revision: None,
+                    actual_revision: None,
+                })
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn record_failure_publishes_the_gist_capacity_code() {
+        let manager = CloudSyncManager::new();
+        manager.settings.lock().await.provider = "gitee_snippet".to_string();
+
+        manager
+            .record_failure(
+                "sync",
+                "manual_push",
+                &AppError::CloudSync(CloudSyncError::RemoteFileRejected {
+                    filename: "nyaterm-x.blob".to_string(),
+                }),
+            )
+            .await;
+
+        let status = manager.status.lock().await.clone();
+        assert_eq!(status.state, "failed");
+        assert_eq!(status.error_code.as_deref(), Some(GIST_CAPACITY_ERROR_CODE));
+    }
+
+    #[tokio::test]
+    async fn record_failure_leaves_the_code_empty_for_unrelated_errors() {
+        let manager = CloudSyncManager::new();
+
+        manager
+            .record_failure(
+                "sync",
+                "manual_push",
+                &AppError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")),
+            )
+            .await;
+
+        let status = manager.status.lock().await.clone();
+        assert_eq!(status.state, "failed");
+        assert!(status.error_code.is_none());
     }
 
     #[tokio::test]
