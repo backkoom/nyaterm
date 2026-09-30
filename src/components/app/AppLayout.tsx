@@ -21,6 +21,8 @@ import type { OtpRequest } from "@/components/dialog/connections/OtpDialog";
 import { OtpDialog } from "@/components/dialog/connections/OtpDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import { RdpCertificateVerifyDialog } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
+import type { VncServerKeyVerifyRequest } from "@/components/dialog/connections/VncServerKeyVerifyDialog";
+import { VncServerKeyVerifyDialog } from "@/components/dialog/connections/VncServerKeyVerifyDialog";
 import type { SshAuthRequest } from "@/components/dialog/connections/SshAuthDialog";
 import { SshAuthDialog } from "@/components/dialog/connections/SshAuthDialog";
 import type { SshAgentAuthRequest } from "@/components/dialog/connections/SshAgentAuthDialog";
@@ -166,6 +168,8 @@ interface AppLayoutProps {
     onHostKeyVerifyDone: (requestId: string) => void;
     rdpCertificateVerifyRequest: RdpCertificateVerifyRequest | null;
     onRdpCertificateVerifyDone: (requestId: string) => void;
+    vncServerKeyVerifyRequest: VncServerKeyVerifyRequest | null;
+    onVncServerKeyVerifyDone: (requestId: string) => void;
     modalChildWindowCount: number;
     locked: boolean;
     hasMasterPassword: boolean;
@@ -679,6 +683,10 @@ export default function AppLayout({
         <RdpCertificateVerifyDialog
           request={dialogs.rdpCertificateVerifyRequest}
           onDone={dialogs.onRdpCertificateVerifyDone}
+        />
+        <VncServerKeyVerifyDialog
+          request={dialogs.vncServerKeyVerifyRequest}
+          onDone={dialogs.onVncServerKeyVerifyDone}
         />
         <TransferDuplicateDialog />
 

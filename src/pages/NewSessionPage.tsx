@@ -196,6 +196,7 @@ export default function NewSessionPage() {
   const [rdpPort, setRdpPort] = useState(3389);
   const [vncPort, setVncPort] = useState(5900);
   const [username, setUsername] = useState("root");
+  const [vncUsername, setVncUsername] = useState("");
   const [rdpDomain, setRdpDomain] = useState("");
   const [authType, setAuthType] = useState<SshAuthMode>("password");
   const [accountId, setAccountId] = useState("");
@@ -436,6 +437,7 @@ export default function NewSessionPage() {
         } else if (found.type === "vnc") {
           setHost(found.host || "");
           setVncPort(found.port || 5900);
+          setVncUsername(found.username || "");
           setPasswordId(found.auth?.password_id || "");
           setHasPassword(found.auth?.has_password || false);
           setVncSecurityMode(found.security?.mode ?? "auto");
@@ -493,6 +495,7 @@ export default function NewSessionPage() {
     setRdpPort(3389);
     setVncPort(5900);
     setUsername(currentTab === "rdp" ? DEFAULT_RDP_USERNAME : "root");
+    setVncUsername("");
     setRdpDomain("");
     setAuthType("password");
     setAccountId("");
@@ -1188,6 +1191,7 @@ export default function NewSessionPage() {
           ? {
               host: normalizedHost,
               port: vncPort,
+              username: vncUsername,
               auth,
               network,
               security: { mode: vncSecurityMode },
@@ -1818,6 +1822,8 @@ export default function NewSessionPage() {
               setHost={setHost}
               port={vncPort}
               setPort={setVncPort}
+              username={vncUsername}
+              setUsername={setVncUsername}
               passwordId={passwordId}
               setPasswordId={setPasswordId}
               password={password}

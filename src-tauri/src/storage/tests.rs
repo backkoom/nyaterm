@@ -492,3 +492,30 @@ fn known_hosts_management_clear_removes_ssh_records_without_touching_rdp() {
     );
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn vnc_known_hosts_distinguish_unknown_match_and_changed_keys() {
+    let (dir, storage) = test_storage("vnc-known-hosts");
+    assert_eq!(
+        storage
+            .check_vnc_known_host("pi.local", 5900, "SHA256:first")
+            .expect("check unknown"),
+        KnownHostCheck::UnknownHost
+    );
+    storage
+        .upsert_vnc_known_host("pi.local", 5900, "SHA256:first")
+        .expect("save fingerprint");
+    assert_eq!(
+        storage
+            .check_vnc_known_host("PI.LOCAL", 5900, "sha256:FIRST")
+            .expect("check match"),
+        KnownHostCheck::Match
+    );
+    assert_eq!(
+        storage
+            .check_vnc_known_host("pi.local", 5900, "SHA256:changed")
+            .expect("check changed"),
+        KnownHostCheck::HostSeen
+    );
+    let _ = fs::remove_dir_all(dir);
+}

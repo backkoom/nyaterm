@@ -899,6 +899,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             config: ConnectionType::Vnc {
                 host: "example.com".to_string(),
                 port: 5900,
+                username: String::new(),
                 security: VncSecuritySettings::default(),
                 display: VncDisplaySettings::default(),
                 clipboard: VncClipboardSettings::default(),

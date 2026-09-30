@@ -13,6 +13,7 @@ mod sessions;
 mod settings_impl;
 mod tables;
 mod util;
+mod vnc_known_hosts;
 
 #[cfg(test)]
 mod tests;
@@ -26,7 +27,7 @@ pub use tables::{
     IDX_CONNECTIONS_BY_GROUP_TABLE, IDX_CONNECTIONS_BY_LAST_USED_TABLE,
     IDX_CONNECTIONS_BY_PROTOCOL_TABLE, KNOWN_HOSTS_TABLE, META_TABLE, NOTE_FOLDERS_TABLE,
     NOTES_TABLE, OTP_ACCOUNTS_TABLE, PROXIES_TABLE, RDP_KNOWN_HOSTS_TABLE, SETTINGS_TABLE,
-    TUNNELS_TABLE,
+    TUNNELS_TABLE, VNC_KNOWN_HOSTS_TABLE,
 };
 
 use crate::error::{AppError, AppResult};
@@ -339,6 +340,22 @@ pub(crate) fn upsert_rdp_known_host(
     certificate: RdpCertificateMetadata,
 ) -> AppResult<()> {
     storage()?.upsert_rdp_known_host(host, port, sha256_fingerprint, certificate)
+}
+
+pub(crate) fn check_vnc_known_host(
+    host: &str,
+    port: u16,
+    sha256_fingerprint: &str,
+) -> AppResult<KnownHostCheck> {
+    storage()?.check_vnc_known_host(host, port, sha256_fingerprint)
+}
+
+pub(crate) fn upsert_vnc_known_host(
+    host: &str,
+    port: u16,
+    sha256_fingerprint: &str,
+) -> AppResult<()> {
+    storage()?.upsert_vnc_known_host(host, port, sha256_fingerprint)
 }
 
 pub(crate) fn load_master_key_token() -> AppResult<Option<String>> {

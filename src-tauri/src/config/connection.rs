@@ -724,6 +724,8 @@ pub enum ConnectionType {
         #[serde(default = "default_vnc_port")]
         port: u16,
         #[serde(default)]
+        username: String,
+        #[serde(default)]
         security: VncSecuritySettings,
         #[serde(default)]
         display: VncDisplaySettings,
@@ -2721,6 +2723,7 @@ mod tests {
 
         let ConnectionType::Vnc {
             port,
+            username,
             security,
             display,
             clipboard,
@@ -2734,6 +2737,7 @@ mod tests {
         };
 
         assert_eq!(port, 5900);
+        assert!(username.is_empty());
         assert_eq!(security.mode, "auto");
         assert_eq!(display.scale_mode, "fit");
         assert!(clipboard.enabled);

@@ -9,6 +9,7 @@ const {
   invokeMock,
   localTerminalMock,
   rdpFormMock,
+  vncFormMock,
   serialFormMock,
   sshFormMock,
   telnetFormMock,
@@ -19,6 +20,7 @@ const {
   invokeMock: vi.fn(),
   localTerminalMock: vi.fn(),
   rdpFormMock: vi.fn(),
+  vncFormMock: vi.fn(),
   serialFormMock: vi.fn(),
   sshFormMock: vi.fn(),
   telnetFormMock: vi.fn(),
@@ -127,7 +129,12 @@ vi.mock("@/components/sessions/TelnetForm", () => ({
     );
   },
 }));
-vi.mock("@/components/sessions/VncForm", () => ({ VncForm: () => null }));
+vi.mock("@/components/sessions/VncForm", () => ({
+  VncForm: (props: Record<string, unknown>) => {
+    vncFormMock(props);
+    return null;
+  },
+}));
 vi.mock("@/components/sessions/RdpForm", () => ({
   RdpForm: (props: Record<string, unknown>) => {
     rdpFormMock(props);
@@ -230,6 +237,22 @@ const serialConnection: SavedConnection = {
   modem_upload_protocol: "ymodem",
 };
 
+const vncConnection: SavedConnection = {
+  id: "vnc-1",
+  name: "Raspberry Pi",
+  type: "vnc",
+  host: "pi.local",
+  port: 5900,
+  username: "pi",
+  auth: { mode: "password", has_password: true },
+  security: { mode: "auto" },
+  display: { scale_mode: "fit" },
+  clipboard: { enabled: true },
+  reconnect: { enabled: true, max_attempts: 5 },
+  shared: true,
+  view_only: false,
+};
+
 describe("NewSessionPage", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", `/?edit=${rdpConnection.id}`);
@@ -269,6 +292,7 @@ describe("NewSessionPage", () => {
     });
     localTerminalMock.mockReset();
     rdpFormMock.mockReset();
+    vncFormMock.mockReset();
     serialFormMock.mockReset();
     sshFormMock.mockReset();
     telnetFormMock.mockReset();
@@ -567,5 +591,28 @@ describe("NewSessionPage", () => {
 
     expect(invokeMock).not.toHaveBeenCalledWith("save_connection", expect.anything());
     expect(closeMock).not.toHaveBeenCalled();
+  });
+  it("restores and saves the optional VNC username", async () => {
+    window.history.replaceState({}, "", `/?edit=${vncConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(vncFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ username: "pi", securityMode: "auto" }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            type: "vnc",
+            username: "pi",
+          }),
+        }),
+      );
+    });
   });
 });

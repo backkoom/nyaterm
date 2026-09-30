@@ -61,6 +61,15 @@ pub async fn vnc_reconnect(
 }
 
 #[tauri::command]
+pub async fn respond_vnc_server_key(
+    state: tauri::State<'_, Arc<VncSessionManager>>,
+    request_id: String,
+    accepted: bool,
+) -> AppResult<()> {
+    state.respond_server_key(&request_id, accepted).await
+}
+
+#[tauri::command]
 pub async fn close_vnc_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<VncSessionManager>>,
