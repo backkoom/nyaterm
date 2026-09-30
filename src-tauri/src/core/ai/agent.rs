@@ -27,9 +27,11 @@ use crate::core::ssh::SshConnectionHandles;
 use crate::error::{AppError, AppResult};
 use crate::utils::process::hide_window;
 
-use super::history::{append_ai_audit, append_message, save_user_message};
+use super::history::{append_ai_audit, append_message, load_history, save_user_message};
 use super::model::{ResolvedAiModel, build_chat_options, build_client, resolve_request_model};
-use super::parser::{extract_json_object, parse_model_output, trim_string_to_option};
+use super::parser::{
+    extract_json_object, extract_text_from_assistant, parse_model_output, trim_string_to_option,
+};
 use super::prompt::{
     agent_execution_disabled_message, agent_max_steps_message, agent_send_only_observation,
     agent_system_prompt, build_agent_failed_message, build_agent_prompt,
@@ -42,6 +44,44 @@ use super::types::{
     AgentStepStatus, AiChatRequest, AiMessage, AiMessageRole, AiStreamEventPayload,
     AiTerminalTarget, AppendAiAuditRequest, CommandObservation, now_rfc3339, uuid,
 };
+
+fn build_initial_agent_conversation(
+    request: &AiChatRequest,
+    settings: &AiSettings,
+    prior_messages: &[AiMessage],
+) -> Vec<ChatMessage> {
+    let mut conversation = vec![ChatMessage::system(agent_system_prompt(
+        &request.options.language,
+    ))];
+
+    if let Some(session_id) = request.session_id.as_deref() {
+        let history_messages: Vec<_> = prior_messages
+            .iter()
+            .filter(|message| {
+                message.session_id == session_id
+                    && matches!(message.role, AiMessageRole::User | AiMessageRole::Assistant)
+            })
+            .collect();
+        let skip = history_messages
+            .len()
+            .saturating_sub(request.options.history_turns as usize);
+        for message in history_messages.into_iter().skip(skip) {
+            match message.role {
+                AiMessageRole::User => conversation.push(ChatMessage::user(&message.content)),
+                AiMessageRole::Assistant => {
+                    let content = extract_text_from_assistant(&message.content);
+                    if !content.is_empty() {
+                        conversation.push(ChatMessage::assistant(content));
+                    }
+                }
+                AiMessageRole::System => {}
+            }
+        }
+    }
+
+    conversation.push(ChatMessage::user(build_agent_prompt(request, settings)));
+    conversation
+}
 
 // ---------------------------------------------------------------------------
 // Agent approval
@@ -1212,6 +1252,100 @@ fn parse_legacy_agent_step_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use genai::chat::ChatRole;
+
+    fn agent_request(session_id: Option<&str>, history_turns: u16) -> AiChatRequest {
+        serde_json::from_value(json!({
+            "sessionId": session_id,
+            "action": "generate_command",
+            "userInput": "current task",
+            "options": { "historyTurns": history_turns }
+        }))
+        .unwrap()
+    }
+
+    fn history_message(session_id: &str, role: AiMessageRole, content: &str) -> AiMessage {
+        AiMessage {
+            id: format!("msg-{}", uuid()),
+            session_id: session_id.to_string(),
+            role,
+            content: content.to_string(),
+            created_at: now_rfc3339(),
+            reasoning_content: None,
+            command_cards: vec![],
+        }
+    }
+
+    #[test]
+    fn agent_conversation_restores_previous_turn_once() {
+        let request = agent_request(Some("s1"), 20);
+        let history = vec![
+            history_message("s1", AiMessageRole::User, "previous task"),
+            history_message("s1", AiMessageRole::Assistant, "previous answer"),
+        ];
+
+        let conversation =
+            build_initial_agent_conversation(&request, &AiSettings::default(), &history);
+
+        assert_eq!(conversation.len(), 4);
+        assert_eq!(conversation[0].role, ChatRole::System);
+        assert_eq!(conversation[1].role, ChatRole::User);
+        assert_eq!(conversation[1].content.first_text(), Some("previous task"));
+        assert_eq!(conversation[2].role, ChatRole::Assistant);
+        assert_eq!(
+            conversation[2].content.first_text(),
+            Some("previous answer")
+        );
+        assert_eq!(conversation[3].role, ChatRole::User);
+        assert!(
+            conversation[3]
+                .content
+                .first_text()
+                .unwrap()
+                .contains("current task")
+        );
+        assert_eq!(
+            conversation
+                .iter()
+                .filter(|message| message
+                    .content
+                    .first_text()
+                    .is_some_and(|text| text.contains("current task")))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn agent_conversation_limits_history_to_same_session() {
+        let request = agent_request(Some("s1"), 2);
+        let history = vec![
+            history_message("s1", AiMessageRole::User, "old task"),
+            history_message("s1", AiMessageRole::Assistant, "old answer"),
+            history_message("s2", AiMessageRole::User, "other session"),
+            history_message("s1", AiMessageRole::User, "recent task"),
+            history_message("s1", AiMessageRole::Assistant, "recent answer"),
+        ];
+
+        let conversation =
+            build_initial_agent_conversation(&request, &AiSettings::default(), &history);
+
+        assert_eq!(conversation.len(), 4);
+        assert_eq!(conversation[1].content.first_text(), Some("recent task"));
+        assert_eq!(conversation[2].content.first_text(), Some("recent answer"));
+    }
+
+    #[test]
+    fn agent_conversation_omits_history_for_new_or_disabled_session() {
+        let history = vec![history_message("s1", AiMessageRole::User, "old task")];
+        for request in [agent_request(None, 20), agent_request(Some("s1"), 0)] {
+            let conversation =
+                build_initial_agent_conversation(&request, &AiSettings::default(), &history);
+            assert_eq!(conversation.len(), 2);
+            assert_eq!(conversation[0].role, ChatRole::System);
+            assert_eq!(conversation[1].role, ChatRole::User);
+        }
+    }
 
     fn parsed_response(risk: Option<RiskLevel>) -> AgentLlmResponse {
         AgentLlmResponse {
@@ -1549,6 +1683,24 @@ pub(super) async fn run_agent_stream(
         request.user_input = redact_sensitive_text(&request.user_input);
     }
 
+    // Snapshot history before persisting this turn so its user message is not replayed twice.
+    let prior_messages = if request.options.history_turns > 0 {
+        match load_history(&app) {
+            Ok(history) => history.messages,
+            Err(error) => {
+                tracing::warn!(
+                    stream_id = %stream_id,
+                    session_id = %session_id,
+                    error = %error,
+                    "Failed to load agent conversation history"
+                );
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     if settings.record_history {
         if let Err(error) = save_user_message(&app, &session_id, &request) {
             tracing::warn!(
@@ -1596,11 +1748,7 @@ pub(super) async fn run_agent_stream(
         "AI agent stream resolved configuration"
     );
 
-    let mut conversation = vec![ChatMessage::system(agent_system_prompt(
-        &request.options.language,
-    ))];
-    let initial_prompt = build_agent_prompt(&request, &settings);
-    conversation.push(ChatMessage::user(initial_prompt));
+    let mut conversation = build_initial_agent_conversation(&request, &settings, &prior_messages);
 
     let mut final_answer: Option<String> = None;
     let mut all_steps: Vec<AgentStepPayload> = Vec::new();
