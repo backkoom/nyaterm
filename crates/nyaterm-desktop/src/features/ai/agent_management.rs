@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -10,6 +11,7 @@ use serde_json::{Value, json};
 
 use super::helper_resolver::resolve_codex_executable;
 use super::helper_resolver::resolve_mcp_helper;
+use crate::thread_owner::spawn_joinable;
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(in crate::features) struct AgentManagementView {
@@ -72,6 +74,7 @@ pub(in crate::features) struct AgentManagementState {
     view: AgentManagementView,
     commands: Option<mpsc::Sender<AgentCommand>>,
     events: Option<UnboundedReceiver<AgentEvent>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl AgentManagementState {
@@ -80,6 +83,7 @@ impl AgentManagementState {
             view: AgentManagementView::default(),
             commands: None,
             events: None,
+            worker: None,
         }
     }
 
@@ -95,16 +99,18 @@ impl AgentManagementState {
         if self.commands.is_none() {
             let (command_tx, command_rx) = mpsc::channel();
             let (event_tx, event_rx) = unbounded();
-            if std::thread::Builder::new()
-                .name("nyaterm-agent-settings".to_string())
-                .spawn(move || run_agent_worker(command_rx, event_tx))
-                .is_err()
-            {
-                self.view.error = Some("Failed to start the agent settings worker".to_string());
-                return false;
-            }
+            let worker = match spawn_joinable("nyaterm-agent-settings", move || {
+                run_agent_worker(command_rx, event_tx)
+            }) {
+                Ok(worker) => worker,
+                Err(_) => {
+                    self.view.error = Some("Failed to start the agent settings worker".to_string());
+                    return false;
+                }
+            };
             self.commands = Some(command_tx);
             self.events = Some(event_rx);
+            self.worker = Some(worker);
         }
         self.view.pending = true;
         self.view.error = None;
@@ -117,7 +123,7 @@ impl AgentManagementState {
         } else {
             self.view.pending = false;
             self.view.error = Some("Agent settings worker stopped".to_string());
-            self.commands = None;
+            self.stop_worker();
             false
         }
     }
@@ -203,6 +209,19 @@ impl AgentManagementState {
         self.view.auth_url = None;
         self.view.verification_url = None;
         self.view.user_code = None;
+    }
+
+    fn stop_worker(&mut self) {
+        self.commands.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for AgentManagementState {
+    fn drop(&mut self) {
+        self.stop_worker();
     }
 }
 
@@ -381,6 +400,7 @@ struct CodexAccountClient {
     lines: mpsc::Receiver<String>,
     next_id: u64,
     account_update: Option<Value>,
+    reader: Option<JoinHandle<()>>,
 }
 
 impl CodexAccountClient {
@@ -402,21 +422,19 @@ impl CodexAccountClient {
         let writer = BufWriter::new(child.stdin.take().ok_or("Codex stdin unavailable")?);
         let stdout = child.stdout.take().ok_or("Codex stdout unavailable")?;
         let (tx, lines) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("nyaterm-codex-account-reader".to_string())
-            .spawn(move || {
-                for line in BufReader::new(stdout).lines() {
-                    match line {
-                        Ok(line) => {
-                            if tx.send(line).is_err() {
-                                break;
-                            }
+        let reader = spawn_joinable("nyaterm-codex-account-reader", move || {
+            for line in BufReader::new(stdout).lines() {
+                match line {
+                    Ok(line) => {
+                        if tx.send(line).is_err() {
+                            break;
                         }
-                        Err(_) => break,
                     }
+                    Err(_) => break,
                 }
-            })
-            .map_err(|error| error.to_string())?;
+            }
+        })
+        .map_err(|error| error.to_string())?;
         let mut client = Self {
             path,
             child,
@@ -424,6 +442,7 @@ impl CodexAccountClient {
             lines,
             next_id: 1,
             account_update: None,
+            reader: Some(reader),
         };
         client.send(&codex_initialize_request(1, env!("CARGO_PKG_VERSION")))?;
         client.wait_response(1)?;
@@ -520,6 +539,9 @@ impl Drop for CodexAccountClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
 }
 
