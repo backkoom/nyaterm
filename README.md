@@ -100,7 +100,7 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 
 - SSH, Local Terminal, Telnet, Serial, RDP, and VNC session support
 - Multi-tab workspace with horizontal and vertical pane splits, tab drag docking, and layout restoration
-- RDP and VNC remote desktop panes; VNC currently supports direct TCP, None / classic VNC Auth, Raw / ZRLE / Tight / Tight JPEG framebuffer updates, window scaling, bounded reconnects, and text clipboard exchange for Latin-1 text
+- RDP and VNC remote desktop panes; VNC supports direct TCP, None / classic VNC Auth, RA2_256 in Auto mode with server-key TOFU verification, Raw / ZRLE / Tight / Tight JPEG framebuffer updates, window scaling, bounded reconnects, and text clipboard exchange for Latin-1 text
 - Saved connections with folders, icons, metadata, duplication, keyboard copy, reconnect, and import flows
 - Command Palette and session quick switcher for finding actions, open sessions, saved connections, and new-session entry points
 - Main-window `Background Image` customization with `cover` / `contain` / `stretch` / `tile` sizing and adjustable `Background Content Opacity`

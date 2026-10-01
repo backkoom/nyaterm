@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setOwnerMainWindowLabel } from "./windowManager";
 import type { SavedConnection, TerminalSessionPane } from "@/types/global";
 import { createSessionForConnection, createSessionForPane } from "./appSessionFactory";
 
@@ -61,4 +62,35 @@ describe("SSH runtime mode creation", () => {
       recordingScopeId: "pane-local",
     });
   });
+});
+
+describe("VNC owner window routing", () => {
+  beforeEach(() => {
+    invokeMock.mockReset().mockResolvedValue("vnc-session");
+  });
+
+  it.each(["main", "main-second"])(
+    "passes owner %s through creation and pane recreation",
+    async (owner) => {
+      setOwnerMainWindowLabel(owner);
+      await createSessionForConnection(
+        { id: "pi", type: "vnc" },
+        "create-request",
+      );
+      await createSessionForPane(
+        { id: "pane", connectionId: "pi", type: "VNC" },
+        "recreate-request",
+      );
+      expect(invokeMock).toHaveBeenNthCalledWith(1, "create_vnc_session", {
+        connectionId: "pi",
+        createRequestId: "create-request",
+        ownerWindowLabel: owner,
+      });
+      expect(invokeMock).toHaveBeenNthCalledWith(2, "create_vnc_session", {
+        connectionId: "pi",
+        createRequestId: "recreate-request",
+        ownerWindowLabel: owner,
+      });
+    },
+  );
 });

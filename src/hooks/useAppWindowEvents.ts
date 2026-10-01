@@ -3,6 +3,7 @@ import { type Dispatch, type SetStateAction, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import type { HostKeyVerifyRequest } from "@/components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "@/components/dialog/connections/OtpDialog";
+import type { VncServerKeyVerifyRequest } from "@/components/dialog/connections/VncServerKeyVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import type { SshAgentAuthRequest } from "@/components/dialog/connections/SshAgentAuthDialog";
 import type { SshAuthRequest } from "@/components/dialog/connections/SshAuthDialog";
@@ -25,6 +26,7 @@ interface AppWindowEventsOptions
     > {
   setTerminalWindows: Dispatch<SetStateAction<TerminalWindowNode | null>>;
   setDockerSudoPasswordRequest: Dispatch<SetStateAction<DockerSudoPasswordRequest | null>>;
+  setVncServerKeyRequests: Dispatch<SetStateAction<VncServerKeyVerifyRequest[]>>;
   setRdpCertificateRequests: Dispatch<SetStateAction<RdpCertificateVerifyRequest[]>>;
   handleConnectAfterEdit: (payload: SessionConnectAfterEditPayload) => Promise<void>;
   handleOpenPanel: (panelId: "syncBackupHistory") => void;
@@ -38,6 +40,7 @@ export function useAppWindowEvents({
   removeSecurityPrompt,
   setDockerSudoPasswordRequest,
   setRdpCertificateRequests,
+  setVncServerKeyRequests,
   handleConnectAfterEdit,
   handleOpenPanel,
 }: AppWindowEventsOptions) {
@@ -177,6 +180,24 @@ export function useAppWindowEvents({
     );
 
     unsubs.push(
+      listen<{ requestId: string }>("vnc-server-key-verify-resolved", (event) => {
+        setVncServerKeyRequests((current) =>
+          current.filter((item) => item.requestId !== event.payload.requestId),
+        );
+      }),
+    );
+
+    unsubs.push(
+      listen<VncServerKeyVerifyRequest>("vnc-server-key-verify", (event) => {
+        if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
+        setVncServerKeyRequests((current) => {
+          if (current.some((item) => item.requestId === event.payload.requestId)) return current;
+          return [...current, event.payload];
+        });
+      }),
+    );
+
+    unsubs.push(
       listen<{
         requestId: string;
         sessionId: string;
@@ -218,6 +239,7 @@ export function useAppWindowEvents({
     removeSecurityPrompt,
     setDockerSudoPasswordRequest,
     setRdpCertificateRequests,
+    setVncServerKeyRequests,
     handleConnectAfterEdit,
   ]);
 

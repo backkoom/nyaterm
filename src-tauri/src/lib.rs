@@ -236,6 +236,7 @@ pub fn run() {
             cmd::vnc::vnc_input_batch,
             cmd::vnc::vnc_set_clipboard_text,
             cmd::vnc::vnc_reconnect,
+            cmd::vnc::respond_vnc_server_key,
             cmd::vnc::close_vnc_session,
             cmd::session::cancel_session_creation,
             cmd::session::list_serial_ports,

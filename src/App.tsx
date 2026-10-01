@@ -7,6 +7,7 @@ import AppPanelContent from "./components/app/AppPanelContent";
 import ActivityBarResetDialog from "./components/dialog/app/ActivityBarResetDialog";
 import AppOverlayDialogs from "./components/dialog/app/AppOverlayDialogs";
 import { McpApprovalHost } from "./components/dialog/app/McpApprovalHost";
+import type { VncServerKeyVerifyRequest } from "./components/dialog/connections/VncServerKeyVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "./components/dialog/connections/RdpCertificateVerifyDialog";
 import type { DockerSudoPasswordRequest } from "./components/dialog/docker/DockerSudoPasswordDialog";
 import type { QuickSwitcherSession } from "./components/dialog/terminal/SessionQuickSwitcherDialog";
@@ -312,6 +313,7 @@ function App() {
   const [rdpCertificateRequests, setRdpCertificateRequests] = useState<
     RdpCertificateVerifyRequest[]
   >([]);
+  const [vncServerKeyRequests, setVncServerKeyRequests] = useState<VncServerKeyVerifyRequest[]>([]);
   const modalChildWindowCount = useModalChildWindows();
 
   // Idle auto-lock
@@ -486,6 +488,7 @@ function App() {
     removeSecurityPrompt,
     setDockerSudoPasswordRequest,
     setRdpCertificateRequests,
+    setVncServerKeyRequests,
     handleConnectAfterEdit,
     handleOpenPanel,
   });
@@ -2953,7 +2956,8 @@ function App() {
         Boolean(activeOtpRequest) ||
         Boolean(activeSshAuthRequest) ||
         Boolean(dockerSudoPasswordRequest) ||
-        rdpCertificateRequests.length > 0
+        rdpCertificateRequests.length > 0 ||
+        vncServerKeyRequests.length > 0
       ) {
         return;
       }
@@ -2989,6 +2993,7 @@ function App() {
     pendingFileDocumentClose,
     postLoginConfirm,
     rdpCertificateRequests.length,
+    vncServerKeyRequests.length,
     showAbout,
     showActivityBarResetConfirm,
     showQuitConfirm,
@@ -3367,6 +3372,11 @@ function App() {
           rdpCertificateVerifyRequest: rdpCertificateRequests[0] ?? null,
           onRdpCertificateVerifyDone: (requestId) =>
             setRdpCertificateRequests((current) =>
+              current.filter((item) => item.requestId !== requestId),
+            ),
+          vncServerKeyVerifyRequest: vncServerKeyRequests[0] ?? null,
+          onVncServerKeyVerifyDone: (requestId) =>
+            setVncServerKeyRequests((current) =>
               current.filter((item) => item.requestId !== requestId),
             ),
           modalChildWindowCount,

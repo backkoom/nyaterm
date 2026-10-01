@@ -3,6 +3,7 @@ import { emit } from "@tauri-apps/api/event";
 import { assertMatchingTemporaryConfig } from "@/lib/appWorkspace";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import { getOwnerMainWindowLabel } from "@/lib/windowManager";
 import { logger } from "@/lib/logger";
 import {
   buildTerminalCommandInput,
@@ -126,6 +127,7 @@ export async function createSessionForConnection(
       });
     case "vnc":
       return invoke<string>("create_vnc_session", {
+        ownerWindowLabel: getOwnerMainWindowLabel(),
         connectionId: connection.id,
         createRequestId,
       });
@@ -259,6 +261,7 @@ export function createSessionForPane(
     case "VNC":
       if (!pane.connectionId) throw new Error("Missing VNC connection id");
       return invoke<string>("create_vnc_session", {
+        ownerWindowLabel: getOwnerMainWindowLabel(),
         connectionId: pane.connectionId,
         createRequestId,
       });

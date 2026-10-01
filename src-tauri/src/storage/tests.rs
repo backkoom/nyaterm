@@ -492,3 +492,73 @@ fn known_hosts_management_clear_removes_ssh_records_without_touching_rdp() {
     );
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn vnc_known_hosts_distinguish_unknown_match_and_changed_keys() {
+    let (dir, storage) = test_storage("vnc-known-hosts");
+    assert_eq!(
+        storage
+            .check_vnc_known_host("pi.local", 5900, "SHA256:first")
+            .expect("check unknown"),
+        KnownHostCheck::UnknownHost
+    );
+    storage
+        .upsert_vnc_known_host("pi.local", 5900, "SHA256:first")
+        .expect("save fingerprint");
+    assert_eq!(
+        storage
+            .check_vnc_known_host("PI.LOCAL", 5900, "sha256:FIRST")
+            .expect("check match"),
+        KnownHostCheck::Match
+    );
+    assert_eq!(
+        storage
+            .check_vnc_known_host("pi.local", 5900, "SHA256:changed")
+            .expect("check changed"),
+        KnownHostCheck::HostSeen
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn existing_v3_storage_creates_vnc_table_and_preserves_local_trust_on_reopen() {
+    let (dir, storage) = test_storage("vnc-v3-reopen");
+    storage
+        .upsert_rdp_known_host("rdp.local", 3389, "old", RdpCertificateMetadata::default())
+        .unwrap();
+    let txn = storage.db.begin_write().unwrap();
+    txn.delete_table(VNC_KNOWN_HOSTS_TABLE).unwrap();
+    txn.commit().unwrap();
+    drop(storage);
+    let storage = Storage::open(&dir).unwrap();
+    assert_eq!(storage.get_schema_version().unwrap(), 3);
+    storage
+        .upsert_vnc_known_host("pi.local", 5900, "SHA256:key")
+        .unwrap();
+    storage
+        .replace_known_hosts_export("other.local ssh-rsa AAAA\n")
+        .unwrap();
+    storage.clear_known_hosts().unwrap();
+    drop(storage);
+    let storage = Storage::open(&dir).unwrap();
+    assert_eq!(
+        storage
+            .check_vnc_known_host("pi.local", 5900, "SHA256:key")
+            .unwrap(),
+        KnownHostCheck::Match
+    );
+    assert_eq!(
+        storage
+            .check_vnc_known_host("pi.local", 5901, "SHA256:key")
+            .unwrap(),
+        KnownHostCheck::UnknownHost
+    );
+    assert_eq!(
+        storage
+            .check_rdp_known_host("rdp.local", 3389, "old")
+            .unwrap(),
+        KnownHostCheck::Match
+    );
+    drop(storage);
+    fs::remove_dir_all(dir).unwrap();
+}
