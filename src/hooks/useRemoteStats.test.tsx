@@ -29,6 +29,84 @@ afterEach(() => {
 });
 
 describe("useRemoteStats session ownership", () => {
+  it("restores each session's cached snapshot while immediately fetching fresh stats", async () => {
+    const initialA = remoteStats("Initial A", "aggregate");
+    const initialB = remoteStats("Initial B", "aggregate");
+    const refreshedA = remoteStats("Refreshed A", "aggregate");
+    const refreshA = deferred<RemoteStats>();
+    const refreshB = deferred<RemoteStats>();
+    mocks.invoke
+      .mockResolvedValueOnce(initialA)
+      .mockResolvedValueOnce(initialB)
+      .mockReturnValueOnce(refreshA.promise)
+      .mockReturnValueOnce(refreshB.promise);
+
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useRemoteStats(sessionId, true, 60),
+      { initialProps: { sessionId: "session-a" } },
+    );
+    await waitFor(() => expect(result.current.stats).toBe(initialA));
+    rerender({ sessionId: "session-b" });
+    await waitFor(() => expect(result.current.stats).toBe(initialB));
+
+    rerender({ sessionId: "session-a" });
+    expect(result.current.sessionId).toBe("session-a");
+    expect(result.current.stats).toBe(initialA);
+    expect(result.current.isManualRefreshing).toBe(false);
+    expect(mocks.invoke).toHaveBeenNthCalledWith(3, "get_remote_stats", {
+      sessionId: "session-a",
+    });
+
+    await act(async () => refreshA.resolve(refreshedA));
+    expect(result.current.stats).toBe(refreshedA);
+
+    rerender({ sessionId: "session-b" });
+    expect(result.current.sessionId).toBe("session-b");
+    expect(result.current.stats).toBe(initialB);
+    expect(mocks.invoke).toHaveBeenNthCalledWith(4, "get_remote_stats", {
+      sessionId: "session-b",
+    });
+    await act(async () => refreshB.resolve(remoteStats("Refreshed B", "aggregate")));
+    expect(result.current.stats?.system.os).toBe("Refreshed B");
+  });
+
+  it("polls only the active session and hides cached stats while monitoring is disabled", async () => {
+    vi.useFakeTimers();
+    const statsA = remoteStats("Session A", "aggregate");
+    mocks.invoke.mockImplementation((_command: string, args: { sessionId: string }) =>
+      Promise.resolve(
+        args.sessionId === "session-a" ? statsA : remoteStats("Session B", "aggregate"),
+      ),
+    );
+    const { result, rerender } = renderHook(
+      ({ sessionId, enabled }) => useRemoteStats(sessionId, enabled, 3),
+      { initialProps: { sessionId: "session-a", enabled: true } },
+    );
+    await act(async () => Promise.resolve());
+    rerender({ sessionId: "session-b", enabled: true });
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(mocks.invoke.mock.calls.map(([, args]) => args.sessionId)).toEqual([
+      "session-a",
+      "session-b",
+      "session-b",
+      "session-b",
+      "session-b",
+    ]);
+
+    rerender({ sessionId: "session-a", enabled: false });
+    expect(result.current.sessionId).toBeNull();
+    expect(result.current.stats).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(mocks.invoke).toHaveBeenCalledTimes(5);
+
+    const refreshA = deferred<RemoteStats>();
+    mocks.invoke.mockReturnValueOnce(refreshA.promise);
+    rerender({ sessionId: "session-a", enabled: true });
+    expect(result.current.stats).toBe(statsA);
+    expect(mocks.invoke).toHaveBeenCalledTimes(6);
+    await act(async () => refreshA.resolve(remoteStats("Refreshed A", "aggregate")));
+  });
+
   it("hides session A stats immediately while session B is pending", async () => {
     const sessionB = deferred<RemoteStats>();
     mocks.invoke.mockImplementation((_command: string, args: { sessionId: string }) =>
@@ -111,7 +189,10 @@ describe("useRemoteStats session ownership", () => {
         : Promise.reject(new Error(`failure-${calls}`));
     });
 
-    const { result } = renderHook(() => useRemoteStats("session-a", true, 60));
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useRemoteStats(sessionId, true, 60),
+      { initialProps: { sessionId: "session-a" } },
+    );
     await waitFor(() => expect(result.current.stats?.system.os).toBe("Ubuntu"));
 
     for (let failure = 1; failure <= 3; failure += 1) {
@@ -125,6 +206,10 @@ describe("useRemoteStats session ownership", () => {
         expect(result.current.stats).toBeNull();
       }
     }
+
+    rerender({ sessionId: "session-b" });
+    rerender({ sessionId: "session-a" });
+    expect(result.current.stats).toBeNull();
   });
 
   it("rejects stale responses and warmup timers across a rapid A to B to A switch", async () => {
@@ -156,13 +241,15 @@ describe("useRemoteStats session ownership", () => {
 
   it("does not let an old manual refresh completion clear the new session state", async () => {
     const oldManualRefresh = deferred<RemoteStats>();
+    const returningRefresh = deferred<RemoteStats>();
     let sessionACalls = 0;
     mocks.invoke.mockImplementation((_command: string, args: { sessionId: string }) => {
       if (args.sessionId === "session-a") {
         sessionACalls += 1;
-        return sessionACalls === 1
-          ? Promise.resolve(remoteStats("Initial A", "aggregate"))
-          : oldManualRefresh.promise;
+        if (sessionACalls === 1) {
+          return Promise.resolve(remoteStats("Initial A", "aggregate"));
+        }
+        return sessionACalls === 2 ? oldManualRefresh.promise : returningRefresh.promise;
       }
       return Promise.resolve(remoteStats("Session B", "aggregate"));
     });
@@ -183,6 +270,12 @@ describe("useRemoteStats session ownership", () => {
     expect(result.current.sessionId).toBe("session-b");
     expect(result.current.stats?.system.os).toBe("Session B");
     expect(result.current.isManualRefreshing).toBe(false);
+
+    rerender({ sessionId: "session-a" });
+    expect(result.current.stats?.system.os).toBe("Initial A");
+    expect(result.current.isManualRefreshing).toBe(false);
+    await act(async () => returningRefresh.resolve(remoteStats("Fresh A", "aggregate")));
+    expect(result.current.stats?.system.os).toBe("Fresh A");
   });
 });
 

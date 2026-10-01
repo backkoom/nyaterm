@@ -25,6 +25,7 @@ export function useRemoteStats(
   intervalSeconds: number,
 ): RemoteStatsState {
   const [state, setState] = useState<OwnedRemoteStatsState | null>(null);
+  const statsCacheRef = useRef(new Map<string, RemoteStats>());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const warmupRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const warmupRetrySessionRef = useRef<string | null>(null);
@@ -59,6 +60,7 @@ export function useRemoteStats(
         const data = await invoke<RemoteStats>("get_remote_stats", { sessionId });
         if (!isCurrentRequest(sessionId, generation)) return null;
 
+        statsCacheRef.current.set(sessionId, data);
         setState((current) => ({
           sessionId,
           stats: data,
@@ -88,6 +90,7 @@ export function useRemoteStats(
 
         failCountRef.current += 1;
         const clearStats = failCountRef.current >= MAX_CONSECUTIVE_FAILURES;
+        if (clearStats) statsCacheRef.current.delete(sessionId);
         setState((current) => ({
           sessionId,
           stats: clearStats || current?.sessionId !== sessionId ? null : current.stats,
@@ -140,7 +143,7 @@ export function useRemoteStats(
 
     setState({
       sessionId: requestedSessionId,
-      stats: null,
+      stats: statsCacheRef.current.get(requestedSessionId) ?? null,
       error: false,
       isManualRefreshing: false,
     });
@@ -165,10 +168,13 @@ export function useRemoteStats(
   }, [fetchStats, pollIntervalMs, requestedSessionId]);
 
   const visibleState = state?.sessionId === requestedSessionId ? state : null;
+  const cachedStats = requestedSessionId
+    ? (statsCacheRef.current.get(requestedSessionId) ?? null)
+    : null;
 
   return {
-    sessionId: visibleState?.sessionId ?? null,
-    stats: visibleState?.stats ?? null,
+    sessionId: requestedSessionId,
+    stats: visibleState ? visibleState.stats : cachedStats,
     error: visibleState?.error ?? false,
     isManualRefreshing: visibleState?.isManualRefreshing ?? false,
     refresh,
