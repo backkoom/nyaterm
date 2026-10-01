@@ -180,6 +180,14 @@ export function useAppWindowEvents({
     );
 
     unsubs.push(
+      listen<{ requestId: string }>("vnc-server-key-verify-resolved", (event) => {
+        setVncServerKeyRequests((current) =>
+          current.filter((item) => item.requestId !== event.payload.requestId),
+        );
+      }),
+    );
+
+    unsubs.push(
       listen<VncServerKeyVerifyRequest>("vnc-server-key-verify", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
         setVncServerKeyRequests((current) => {
@@ -231,7 +239,7 @@ export function useAppWindowEvents({
     removeSecurityPrompt,
     setDockerSudoPasswordRequest,
     setRdpCertificateRequests,
-  setVncServerKeyRequests,
+    setVncServerKeyRequests,
     handleConnectAfterEdit,
   ]);
 

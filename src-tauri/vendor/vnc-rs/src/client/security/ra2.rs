@@ -71,18 +71,18 @@ pub(crate) async fn authenticate<S>(
     verifier: ServerKeyVerifier,
     limits: VncLimits,
     version: VncVersion,
-) -> Result<Ra2Stream<S>, VncError>
+) -> Result<(Ra2Stream<S>, VncServerKey), VncError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     validate_credentials(&username, &password)?;
 
     let (server_public_key, server_wire) = read_public_key(&mut stream, &limits).await?;
-    verifier(VncServerKey {
+    let server_key = VncServerKey {
         bits: u32::try_from(server_public_key.n().bits()).unwrap_or(u32::MAX),
         encoded: server_wire.clone(),
-    })
-    .await?;
+    };
+    verifier(server_key.clone()).await?;
 
     let mut rng = OsRng;
     let client_private_key = RsaPrivateKey::new(&mut rng, CLIENT_RSA_BITS)
@@ -104,11 +104,14 @@ where
     let server_random = client_private_key
         .decrypt(Pkcs1v15Encrypt, &encrypted_server_random)
         .map_err(|_| VncError::Ra2Crypto("failed to decrypt server random"))?;
-    if server_random.len() != RA2_RANDOM_BYTES {
+    // The published RFB extension describes 16-byte randoms. TigerVNC
+    // RA2_256 uses 32 bytes (AES key size / 8); mirror the server length
+    // to interoperate with both without relaxing RSA or record verification.
+    if !matches!(server_random.len(), RA2_RANDOM_BYTES | 32) {
         return Err(VncError::InvalidRa2RandomLength(server_random.len()));
     }
 
-    let mut client_random = [0_u8; RA2_RANDOM_BYTES];
+    let mut client_random = vec![0_u8; server_random.len()];
     rng.fill_bytes(&mut client_random);
     let encrypted_client_random = server_public_key
         .encrypt(&mut rng, Pkcs1v15Encrypt, &client_random)
@@ -157,7 +160,7 @@ where
 
     let result = encrypted.read_u32().await?;
     match result {
-        0 => Ok(encrypted),
+        0 => Ok((encrypted, server_key)),
         1 => {
             if version == VncVersion::RFB38 {
                 let reason = read_security_failure(&mut encrypted, &limits).await?;
@@ -196,11 +199,22 @@ where
     stream.read_exact(&mut modulus).await?;
     stream.read_exact(&mut exponent).await?;
 
-    let public_key = RsaPublicKey::new(
+    let public_key = RsaPublicKey::new_with_max_size(
         BigUint::from_bytes_be(&modulus),
         BigUint::from_bytes_be(&exponent),
+        usize::try_from(limits.max_ra2_key_bits)
+            .map_err(|_| VncError::IntegerOverflow("RA2 maximum key length"))?,
     )
     .map_err(|_| VncError::InvalidRa2PublicKey)?;
+
+    let actual_bits = u32::try_from(public_key.n().bits()).unwrap_or(u32::MAX);
+    if actual_bits < limits.min_ra2_key_bits || actual_bits > limits.max_ra2_key_bits {
+        return Err(VncError::InvalidRa2KeyLength {
+            actual: actual_bits,
+            min: limits.min_ra2_key_bits,
+            max: limits.max_ra2_key_bits,
+        });
+    }
 
     let mut wire = Vec::with_capacity(4 + key_bytes * 2);
     wire.extend_from_slice(&bits.to_be_bytes());
@@ -544,22 +558,43 @@ fn increment_counter(counter: &mut [u8; 16]) {
 }
 
 #[cfg(test)]
-async fn establish_test_encryption<S>(
-    mut stream: S,
+pub(crate) async fn establish_test_encryption<S>(
+    stream: S,
     limits: VncLimits,
     corrupt_server_hash: bool,
 ) -> Ra2Stream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    establish_test_encryption_with_params(
+        stream,
+        limits,
+        corrupt_server_hash,
+        CLIENT_RSA_BITS,
+        RA2_RANDOM_BYTES,
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn establish_test_encryption_with_params<S>(
+    mut stream: S,
+    limits: VncLimits,
+    corrupt_server_hash: bool,
+    key_bits: usize,
+    random_bytes: usize,
+) -> Ra2Stream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut rng = OsRng;
-    let server_private_key = RsaPrivateKey::new(&mut rng, CLIENT_RSA_BITS).unwrap();
+    let server_private_key = RsaPrivateKey::new(&mut rng, key_bits).unwrap();
     let server_public_key = RsaPublicKey::from(&server_private_key);
     let server_wire = encode_public_key(&server_public_key).unwrap();
     stream.write_all(&server_wire).await.unwrap();
 
     let (client_public_key, client_wire) = read_public_key(&mut stream, &limits).await.unwrap();
-    let server_random = [0x31_u8; RA2_RANDOM_BYTES];
+    let server_random = vec![0x31_u8; random_bytes];
     let encrypted_server_random = client_public_key
         .encrypt(&mut rng, Pkcs1v15Encrypt, &server_random)
         .unwrap();
@@ -578,7 +613,7 @@ where
     let client_random = server_private_key
         .decrypt(Pkcs1v15Encrypt, &encrypted_client_random)
         .unwrap();
-    assert_eq!(client_random.len(), RA2_RANDOM_BYTES);
+    assert_eq!(client_random.len(), random_bytes);
 
     let client_session_key = sha256_concat(&server_random, &client_random);
     let server_session_key = sha256_concat(&client_random, &server_random);
@@ -749,6 +784,97 @@ mod tests {
                 max: 8_192
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn configured_8192_bit_public_key_limit_is_honored() {
+        // Public-key parsing needs a modulus and exponent, not private primes.
+        // RsaPublicKey::new defaults to 4096 bits; RA2 allows up to 8192.
+        let mut wire = 8192_u32.to_be_bytes().to_vec();
+        wire.extend_from_slice(&[0xff; 1024]);
+        wire.resize(4 + 2048 - 3, 0);
+        wire.extend_from_slice(&[1, 0, 1]);
+        let (key, encoded) = read_public_key(&mut wire.as_slice(), &VncLimits::default())
+            .await
+            .unwrap();
+        assert_eq!(key.n().bits(), 8192);
+        assert_eq!(encoded, wire);
+    }
+
+    #[tokio::test]
+    async fn rejects_rsa_modulus_smaller_than_advertised_policy() {
+        let key = RsaPrivateKey::new(&mut OsRng, 512).unwrap();
+        let mut wire = 1024_u32.to_be_bytes().to_vec();
+        wire.resize(4 + 128 - key.n().to_bytes_be().len(), 0);
+        wire.extend(key.n().to_bytes_be());
+        wire.resize(4 + 256 - key.e().to_bytes_be().len(), 0);
+        wire.extend(key.e().to_bytes_be());
+        let error = read_public_key(&mut wire.as_slice(), &VncLimits::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            VncError::InvalidRa2KeyLength { actual: 512, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn supports_1024_bit_keys_and_tigervnc_256_bit_randoms() {
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let limits = VncLimits::default();
+        let server_task = tokio::spawn(async move {
+            let mut encrypted =
+                establish_test_encryption_with_params(server, limits, false, 1024, 32).await;
+            encrypted.write_u8(2).await.unwrap();
+            assert_eq!(encrypted.read_u8().await.unwrap(), 0);
+            assert_eq!(encrypted.read_u8().await.unwrap(), 9);
+            let mut password = [0; 9];
+            encrypted.read_exact(&mut password).await.unwrap();
+            assert_eq!(&password, b"raspberry");
+            encrypted.write_u32(0).await.unwrap();
+            encrypted.flush().await.unwrap();
+        });
+        let verifier: ServerKeyVerifier = Arc::new(|key| {
+            Box::pin(async move {
+                assert_eq!(key.bits(), 1024);
+                Ok(())
+            })
+        });
+        assert!(authenticate(
+            client,
+            String::new(),
+            "raspberry".into(),
+            verifier,
+            limits,
+            VncVersion::RFB38
+        )
+        .await
+        .is_ok());
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_truncated_records_and_oversized_record_headers() {
+        for bytes in [vec![0], vec![0, 3, 1, 2], vec![0, 65]] {
+            let (mut writer, input) = tokio::io::duplex(128);
+            writer.write_all(&bytes).await.unwrap();
+            drop(writer);
+            let mut reader = Ra2Stream::new(input, [1; 32], [2; 32], 64).unwrap();
+            let mut output = [0; 3];
+            let error = reader.read_exact(&mut output).await.unwrap_err();
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData
+            ));
+        }
+    }
+
+    #[test]
+    fn message_counter_is_little_endian_and_carries() {
+        let mut counter = [0; 16];
+        counter[0] = 255;
+        increment_counter(&mut counter);
+        assert_eq!(&counter[..3], &[0, 1, 0]);
     }
 
     #[tokio::test]

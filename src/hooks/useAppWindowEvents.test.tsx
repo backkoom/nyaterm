@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { StrictMode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { VncServerKeyVerifyRequest } from "@/components/dialog/connections/VncServerKeyVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import { createTerminalWindowLeaf, type TerminalWindowNode } from "@/lib/tabWindows";
 import { setOwnerMainWindowLabel } from "@/lib/windowManager";
@@ -32,6 +33,7 @@ function eventOptions(): Parameters<typeof useAppWindowEvents>[0] {
     removeSecurityPrompt: vi.fn(),
     setDockerSudoPasswordRequest: vi.fn(),
     setRdpCertificateRequests: vi.fn(),
+    setVncServerKeyRequests: vi.fn(),
     handleConnectAfterEdit: vi.fn().mockResolvedValue(undefined),
     handleOpenPanel: vi.fn(),
   };
@@ -114,6 +116,7 @@ describe("useAppWindowEvents", () => {
     "docker-sudo-password-request",
     "host-key-verify",
     "rdp-certificate-verify",
+    "vnc-server-key-verify",
     "transfer-duplicate-request",
     "session-connect-after-edit",
   ])("ignores %s addressed to another window", async (name) => {
@@ -122,6 +125,7 @@ describe("useAppWindowEvents", () => {
     expect(options.addTab).not.toHaveBeenCalled();
     expect(options.queueSecurityPrompt).not.toHaveBeenCalled();
     expect(options.setDockerSudoPasswordRequest).not.toHaveBeenCalled();
+    expect(options.setVncServerKeyRequests).not.toHaveBeenCalled();
     expect(options.handleConnectAfterEdit).not.toHaveBeenCalled();
     expect(mocks.focusTerminalSession).not.toHaveBeenCalled();
     expect(mocks.setBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
@@ -149,6 +153,39 @@ describe("useAppWindowEvents", () => {
     const { options } = renderEvents();
     await receive(name, { requestId: "auth-1", targetWindowLabel: "main-other" });
     expect(options.removeSecurityPrompt).toHaveBeenCalledExactlyOnceWith("auth-1");
+  });
+
+  it("routes VNC prompts to the owner, deduplicates, and removes resolved requests", async () => {
+    const options = eventOptions();
+    let requests: VncServerKeyVerifyRequest[] = [];
+    options.setVncServerKeyRequests = vi.fn((update) => {
+      requests = typeof update === "function" ? update(requests) : update;
+    });
+    renderEvents(options);
+    const first: VncServerKeyVerifyRequest = {
+      requestId: "vnc-1",
+      targetWindowLabel: "main-test",
+      sessionId: "session-1",
+      host: "pi.local",
+      port: 5900,
+      fingerprint: "key",
+      keyBits: 1024,
+      knownHostStatus: "unknown",
+    };
+    const second = { requestId: "vnc-2", targetWindowLabel: "main-test" };
+    await receive("vnc-server-key-verify", {
+      ...first,
+      targetWindowLabel: "main-other",
+    });
+    expect(requests).toEqual([]);
+    await receive("vnc-server-key-verify", first);
+    await receive("vnc-server-key-verify", first);
+    await receive("vnc-server-key-verify", second);
+    expect(requests).toEqual([first, second]);
+    await receive("vnc-server-key-verify-resolved", { requestId: "vnc-1" });
+    expect(requests).toEqual([second]);
+    await receive("vnc-server-key-verify-resolved", { requestId: "vnc-2" });
+    expect(requests).toEqual([]);
   });
 
   it("reloads settings through the existing command", async () => {
@@ -254,7 +291,7 @@ describe("useAppWindowEvents", () => {
     );
     const options = eventOptions();
     const { unmount } = renderHook(() => useAppWindowEvents(options), { wrapper: StrictMode });
-    expect(registrations).toHaveLength(30);
+    expect(registrations).toHaveLength(34);
     unmount();
     await act(async () => {
       for (const registration of registrations) registration.resolve(registration.dispose);

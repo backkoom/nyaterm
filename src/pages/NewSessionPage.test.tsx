@@ -272,6 +272,7 @@ describe("NewSessionPage", () => {
           return Promise.resolve([account]);
         case "get_saved_connections":
           return Promise.resolve([
+            vncConnection,
             rdpConnection,
             serialConnection,
             jumpHost,

@@ -685,6 +685,7 @@ export default function AppLayout({
           onDone={dialogs.onRdpCertificateVerifyDone}
         />
         <VncServerKeyVerifyDialog
+          key={dialogs.vncServerKeyVerifyRequest?.requestId ?? "no-vnc-prompt"}
           request={dialogs.vncServerKeyVerifyRequest}
           onDone={dialogs.onVncServerKeyVerifyDone}
         />

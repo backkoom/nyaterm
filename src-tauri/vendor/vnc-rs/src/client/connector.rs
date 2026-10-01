@@ -183,7 +183,7 @@ where
                             let username = connector.username.take().unwrap_or_default();
                             ra2::validate_credentials(&username, &credential)?;
                             SecurityType::write(&selected, &mut connector.stream).await?;
-                            let stream = ra2::authenticate(
+                            let (stream, server_key) = ra2::authenticate(
                                 connector.stream,
                                 username,
                                 credential,
@@ -192,14 +192,18 @@ where
                                 connector.rfb_version,
                             )
                             .await?;
-                            VncClient::new(
+                            let client = VncClient::new(
                                 stream,
                                 connector.allow_shared,
                                 connector.pixel_format,
                                 connector.encodings,
                                 connector.limits,
                             )
-                            .await?
+                            .await?;
+                            if let Some(notify) = connector.server_key_authenticated {
+                                notify(server_key);
+                            }
+                            client
                         }
                         _ => return Err(VncError::UnsupportedSecurityType),
                     };
@@ -231,6 +235,7 @@ where
     credentials_available: bool,
     username: Option<String>,
     server_key_verifier: Option<ServerKeyVerifier>,
+    server_key_authenticated: Option<Arc<dyn Fn(VncServerKey) + Send + Sync>>,
     security_policy: VncSecurityPolicy,
     rfb_version: VncVersion,
     allow_shared: bool,
@@ -278,6 +283,7 @@ where
             credentials_available: false,
             username: None,
             server_key_verifier: None,
+            server_key_authenticated: None,
             security_policy: VncSecurityPolicy::Auto,
             allow_shared: true,
             rfb_version: VncVersion::RFB38,
@@ -348,6 +354,18 @@ where
         Fut: Future<Output = Result<(), VncError>> + Send + 'static,
     {
         self.server_key_verifier = Some(Arc::new(move |key| Box::pin(verifier(key))));
+        self
+    }
+
+    /// Notify the application after server-key confirmation, authenticated
+    /// ServerHash, SecurityResult, and RFB initialization have all succeeded.
+    /// This callback has no storage policy; applications must still guard
+    /// cancellation and connection ownership before committing trust.
+    pub fn set_server_key_authenticated<V>(mut self, notify: V) -> Self
+    where
+        V: Fn(VncServerKey) + Send + Sync + 'static,
+    {
+        self.server_key_authenticated = Some(Arc::new(notify));
         self
     }
 
@@ -694,6 +712,8 @@ mod tests {
             write_server_init(&mut encrypted).await;
         });
 
+        let notification_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let notified = notification_count.clone();
         let state = VncConnector::new(client)
             .set_auth_method(async { Ok("raspberry".to_owned()) })
             .set_credentials_available(true)
@@ -703,6 +723,10 @@ mod tests {
                 assert!(!key.encoded().is_empty());
                 Ok(())
             })
+            .set_server_key_authenticated(move |key| {
+                assert!(!key.encoded().is_empty());
+                notified.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
             .set_security_policy(VncSecurityPolicy::Auto)
             .add_encoding(VncEncoding::Raw)
             .build()
@@ -710,6 +734,10 @@ mod tests {
             .try_start()
             .await
             .unwrap();
+        assert_eq!(
+            notification_count.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         state.finish().unwrap().close().await.unwrap();
         server_task.await.unwrap();
     }
@@ -725,6 +753,144 @@ mod tests {
     async fn ra2_256_auto_prefers_encrypted_auth_and_supports_both_subtypes() {
         run_ra2_handshake(1, "pi").await;
         run_ra2_handshake(2, "").await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_or_timed_out_accepted_handshake_never_notifies_trust() {
+        use rsa::traits::PublicKeyParts;
+        for timeout_case in [false, true] {
+            let (client, mut server) = tokio::io::duplex(16 * 1024);
+            let (exchanged, exchange_ready) = tokio::sync::oneshot::channel();
+            let server_task = tokio::spawn(async move {
+                let key = rsa::RsaPrivateKey::new(&mut rand::rngs::OsRng, 1024).unwrap();
+                server.write_all(b"RFB 003.008\n").await.unwrap();
+                let mut version = [0; 12];
+                server.read_exact(&mut version).await.unwrap();
+                server.write_all(&[1, 129]).await.unwrap();
+                assert_eq!(server.read_u8().await.unwrap(), 129);
+                server.write_u32(1024).await.unwrap();
+                server.write_all(&key.n().to_bytes_be()).await.unwrap();
+                let mut exponent = vec![0; 128 - key.e().to_bytes_be().len()];
+                exponent.extend(key.e().to_bytes_be());
+                server.write_all(&exponent).await.unwrap();
+                let client_bits = server.read_u32().await.unwrap();
+                let mut client_key = vec![0; (client_bits as usize).div_ceil(8) * 2];
+                server.read_exact(&mut client_key).await.unwrap();
+                // Confirmation succeeded and key exchange started, but the
+                // cryptographic server identity has not yet been authenticated.
+                exchanged.send(()).unwrap();
+                std::future::pending::<()>().await;
+            });
+            let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let notification = notified.clone();
+            let mut handshake = tokio::spawn(async move {
+                VncConnector::new(client)
+                    .set_auth_method(async { Ok("raspberry".into()) })
+                    .set_server_key_verifier(|_| async { Ok(()) })
+                    .set_server_key_authenticated(move |_| {
+                        notification.store(true, std::sync::atomic::Ordering::SeqCst);
+                    })
+                    .add_encoding(VncEncoding::Raw)
+                    .build()
+                    .unwrap()
+                    .try_start()
+                    .await
+            });
+            exchange_ready.await.unwrap();
+            if timeout_case {
+                assert!(
+                    tokio::time::timeout(std::time::Duration::from_millis(10), &mut handshake)
+                        .await
+                        .is_err()
+                );
+            }
+            handshake.abort();
+            assert!(matches!(handshake.await, Err(error) if error.is_cancelled()));
+            assert!(!notified.load(std::sync::atomic::Ordering::SeqCst));
+            server_task.abort();
+            let _ = server_task.await;
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_ra2_handshakes_never_notify_authenticated_key() {
+        for outcome in [
+            "reject",
+            "hash-mismatch",
+            "transport-error",
+            "security-failure",
+            "truncated-init",
+        ] {
+            let (client, mut server) = tokio::io::duplex(16 * 1024);
+            let server_task = tokio::spawn(async move {
+                server.write_all(b"RFB 003.008\n").await.unwrap();
+                let mut version = [0; 12];
+                server.read_exact(&mut version).await.unwrap();
+                server.write_all(&[1, 129]).await.unwrap();
+                assert_eq!(server.read_u8().await.unwrap(), 129);
+                if outcome == "reject" {
+                    let key = rsa::RsaPrivateKey::new(&mut rand::rngs::OsRng, 1024).unwrap();
+                    use rsa::traits::PublicKeyParts;
+                    server.write_u32(1024).await.unwrap();
+                    server.write_all(&key.n().to_bytes_be()).await.unwrap();
+                    let mut exponent = vec![0; 128 - key.e().to_bytes_be().len()];
+                    exponent.extend(key.e().to_bytes_be());
+                    server.write_all(&exponent).await.unwrap();
+                    return;
+                }
+                let mut encrypted = ra2::establish_test_encryption(
+                    server,
+                    VncLimits::default(),
+                    outcome == "hash-mismatch",
+                )
+                .await;
+                if matches!(outcome, "hash-mismatch" | "transport-error") {
+                    encrypted.flush().await.unwrap();
+                    return;
+                }
+                encrypted.write_u8(2).await.unwrap();
+                assert_eq!(encrypted.read_u8().await.unwrap(), 0);
+                let len = encrypted.read_u8().await.unwrap();
+                let mut password = vec![0; usize::from(len)];
+                encrypted.read_exact(&mut password).await.unwrap();
+                if outcome == "security-failure" {
+                    encrypted.write_u32(1).await.unwrap();
+                    encrypted.write_u32(6).await.unwrap();
+                    encrypted.write_all(b"denied").await.unwrap();
+                } else {
+                    encrypted.write_u32(0).await.unwrap();
+                    encrypted.flush().await.unwrap();
+                    let _shared = encrypted.read_u8().await.unwrap();
+                    encrypted.write_u16(2).await.unwrap();
+                }
+                encrypted.flush().await.unwrap();
+            });
+            let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let notification = notified.clone();
+            let result = VncConnector::new(client)
+                .set_auth_method(async { Ok("raspberry".into()) })
+                .set_server_key_verifier(move |_| async move {
+                    if outcome == "reject" {
+                        Err(VncError::Ra2ServerKeyRejected("rejected".into()))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .set_server_key_authenticated(move |_| {
+                    notification.store(true, std::sync::atomic::Ordering::SeqCst);
+                })
+                .add_encoding(VncEncoding::Raw)
+                .build()
+                .unwrap()
+                .try_start()
+                .await;
+            assert!(result.is_err(), "{outcome}");
+            assert!(
+                !notified.load(std::sync::atomic::Ordering::SeqCst),
+                "{outcome}"
+            );
+            server_task.await.unwrap();
+        }
     }
 
     #[tokio::test]

@@ -30,7 +30,7 @@ const MAX_PENDING_FRAMES: usize = 2;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const RA2_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(75);
-const SERVER_KEY_PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
+const SERVER_KEY_PROMPT_TIMEOUT: Duration = Duration::from_mins(1);
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const UPDATE_REQUEST_INTERVAL: Duration = Duration::from_millis(16);
@@ -77,6 +77,7 @@ pub struct VncServerKeyVerifyEvent {
     pub fingerprint: String,
     pub key_bits: u32,
     pub known_host_status: String,
+    pub target_window_label: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +118,7 @@ struct VncServerKeyPending {
 
 #[derive(Debug, Clone)]
 pub struct VncConnectConfig {
+    pub owner_window_label: String,
     pub session_id: String,
     pub connection_id: String,
     pub name: String,
@@ -222,6 +224,7 @@ pub struct VncSession {
     cancel_sender: Mutex<Option<watch::Sender<bool>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     close_requested: AtomicBool,
+    trust_commit_guard: std::sync::Mutex<()>,
     pending_server_keys: Arc<Mutex<HashMap<String, VncServerKeyPending>>>,
 }
 
@@ -243,6 +246,11 @@ impl VncSessionManager {
         app: AppHandle,
         config: VncConnectConfig,
     ) -> AppResult<String> {
+        if !crate::window_state::is_main_window_label(&config.owner_window_label) {
+            return Err(AppError::Config(
+                "VNC session requires an owner main window".into(),
+            ));
+        }
         let session_id = config.session_id.clone();
         let session = Arc::new(VncSession {
             config,
@@ -259,6 +267,7 @@ impl VncSessionManager {
             cancel_sender: Mutex::new(None),
             worker: Mutex::new(None),
             close_requested: AtomicBool::new(false),
+            trust_commit_guard: std::sync::Mutex::new(()),
             pending_server_keys: self.pending_server_keys.clone(),
         });
         self.sessions
@@ -338,9 +347,10 @@ impl VncSessionManager {
 
     pub async fn reconnect(self: &Arc<Self>, app: AppHandle, session_id: &str) -> AppResult<()> {
         let session = self.get(session_id).await?;
-        self.cancel_pending_server_keys_for_session(session_id)
-            .await;
+        invalidate_vnc_generation(&session, false);
         stop_worker(&session).await;
+        self.cancel_pending_server_keys_for_session(app.clone(), session_id)
+            .await;
         session.close_requested.store(false, Ordering::Release);
         *session.framebuffer.lock().await = None;
         session.pending_frames.lock().await.clear();
@@ -354,10 +364,10 @@ impl VncSessionManager {
         let Some(session) = self.sessions.lock().await.remove(session_id) else {
             return Ok(());
         };
-        session.close_requested.store(true, Ordering::Release);
-        self.cancel_pending_server_keys_for_session(session_id)
-            .await;
+        invalidate_vnc_generation(&session, true);
         stop_worker(&session).await;
+        self.cancel_pending_server_keys_for_session(app.clone(), session_id)
+            .await;
         session.frame_attach_id.fetch_add(1, Ordering::AcqRel);
         *session.frame_channel.lock().await = None;
         session.pending_frames.lock().await.clear();
@@ -374,8 +384,9 @@ impl VncSessionManager {
                 "No pending VNC server key request with id '{request_id}'"
             )));
         };
-        if let Ok(session) = self.get(&pending.session_id).await
-            && session.generation.load(Ordering::Acquire) != pending.generation
+        let session = self.get(&pending.session_id).await?;
+        if session.generation.load(Ordering::Acquire) != pending.generation
+            || session.close_requested.load(Ordering::Acquire)
         {
             return Ok(());
         }
@@ -383,17 +394,20 @@ impl VncSessionManager {
         Ok(())
     }
 
-    async fn cancel_pending_server_keys_for_session(&self, session_id: &str) {
+    async fn cancel_pending_server_keys_for_session(&self, app: AppHandle, session_id: &str) {
         let mut pending = self.pending_server_keys.lock().await;
         let request_ids = pending
             .iter()
-            .filter_map(|(request_id, request)| {
-                (request.session_id == session_id).then(|| request_id.clone())
-            })
+            .filter(|(_, request)| request.session_id == session_id)
+            .map(|(request_id, _)| request_id.clone())
             .collect::<Vec<_>>();
         for request_id in request_ids {
             if let Some(request) = pending.remove(&request_id) {
                 let _ = request.responder.send(false);
+                let _ = app.emit(
+                    "vnc-server-key-verify-resolved",
+                    serde_json::json!({"requestId": request_id}),
+                );
             }
         }
     }
@@ -515,7 +529,7 @@ async fn run_protocol_generation(
             host,
             port,
             session.config.network.as_ref(),
-            None,
+            Some(session.config.owner_window_label.clone()),
         )) => {
             result.map_err(|_| (VncErrorKind::Transport, "VNC connection timed out".to_string(), true))?
                 .map_err(|error| (VncErrorKind::Transport, format!("Unable to connect to the VNC server: {error}"), true))?
@@ -559,6 +573,8 @@ async fn run_protocol_generation(
     } else {
         HANDSHAKE_TIMEOUT
     };
+    let authenticated_key = Arc::new(std::sync::Mutex::new(None::<String>));
+    let notified_key = authenticated_key.clone();
     let verifier_app = app.clone();
     let verifier_session = session.clone();
     let state = VncConnector::new(stream)
@@ -570,6 +586,10 @@ async fn run_protocol_generation(
             let session = verifier_session.clone();
             async move { verify_vnc_server_key(&app, &session, generation, &server_key).await }
         })
+        .set_server_key_authenticated(move |key| {
+            *notified_key.lock().expect("VNC authenticated key lock") =
+                Some(vnc_key_fingerprint(&key));
+        })
         .set_security_policy(security_policy(&session.config.security_mode))
         .set_pixel_format(PixelFormat::rgba())
         .set_limits(limits)
@@ -580,8 +600,17 @@ async fn run_protocol_generation(
         .allow_shared(session.config.shared)
         .build()
         .map_err(classify_vnc_error)?;
-    let client = timeout(handshake_timeout, state.try_start())
-        .await
+    let handshake_result = tokio::select! {
+        biased;
+        changed = cancel_rx.changed() => { let _ = changed; None },
+        result = timeout(handshake_timeout, state.try_start()) => { Some(result) },
+    };
+    // Also clean up a prompt if the outer handshake timeout dropped its future.
+    resolve_vnc_prompts(app, session, generation).await;
+    let Some(handshake_result) = handshake_result else {
+        return Ok(());
+    };
+    let client = handshake_result
         .map_err(|_| {
             (
                 VncErrorKind::Transport,
@@ -591,6 +620,39 @@ async fn run_protocol_generation(
         })?
         .and_then(|state| state.finish())
         .map_err(classify_vnc_error)?;
+    {
+        // Serialize the trust write with close/reconnect invalidation. No await
+        // separates the final generation/cancellation check from the storage write.
+        let _guard = session
+            .trust_commit_guard
+            .lock()
+            .expect("VNC trust commit lock");
+        let fingerprint = authenticated_key
+            .lock()
+            .expect("VNC authenticated key lock");
+        commit_vnc_trust(
+            fingerprint.as_deref(),
+            generation,
+            session.generation.load(Ordering::Acquire),
+            session.close_requested.load(Ordering::Acquire) || *cancel_rx.borrow(),
+            |fingerprint| {
+                if crate::storage::check_vnc_known_host(
+                    &session.config.host,
+                    session.config.port,
+                    fingerprint,
+                )? != crate::storage::KnownHostCheck::Match
+                {
+                    crate::storage::upsert_vnc_known_host(
+                        &session.config.host,
+                        session.config.port,
+                        fingerprint,
+                    )?;
+                }
+                Ok(())
+            },
+        )
+        .map_err(|error| (VncErrorKind::Internal, error.to_string(), false))?;
+    }
 
     set_state(session, VncSessionState::Negotiating, None, None).await;
     emit_state(app, session, VncSessionState::Negotiating, None, None);
@@ -655,32 +717,108 @@ fn security_policy(mode: &str) -> VncSecurityPolicy {
     }
 }
 
+fn vnc_key_fingerprint(key: &VncServerKey) -> String {
+    format!("SHA256:{}", hex::encode(Sha256::digest(key.encoded())))
+}
+
+fn invalidate_vnc_generation(session: &VncSession, closing: bool) {
+    let _guard = session
+        .trust_commit_guard
+        .lock()
+        .expect("VNC trust commit lock");
+    session.generation.fetch_add(1, Ordering::AcqRel);
+    if closing {
+        session.close_requested.store(true, Ordering::Release);
+    }
+}
+
+fn commit_vnc_trust(
+    fingerprint: Option<&str>,
+    generation: u64,
+    current_generation: u64,
+    cancelled: bool,
+    save: impl FnOnce(&str) -> AppResult<()>,
+) -> AppResult<()> {
+    if generation == current_generation
+        && !cancelled
+        && let Some(fingerprint) = fingerprint
+    {
+        save(fingerprint)?;
+    }
+    Ok(())
+}
+
+async fn resolve_vnc_prompts(app: &AppHandle, session: &VncSession, generation: u64) {
+    let mut pending = session.pending_server_keys.lock().await;
+    let ids: Vec<_> = pending
+        .iter()
+        .filter(|(_, request)| {
+            request.session_id == session.config.session_id && request.generation == generation
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in ids {
+        pending.remove(&id);
+        let _ = app.emit(
+            "vnc-server-key-verify-resolved",
+            serde_json::json!({"requestId": id}),
+        );
+    }
+}
+
 async fn verify_vnc_server_key(
     app: &AppHandle,
     session: &Arc<VncSession>,
     generation: u64,
     server_key: &VncServerKey,
 ) -> Result<(), VncError> {
-    if session.generation.load(Ordering::Acquire) != generation {
+    if session.generation.load(Ordering::Acquire) != generation
+        || session.close_requested.load(Ordering::Acquire)
+    {
         return Err(VncError::Ra2ServerKeyRejected(
             "stale VNC connection generation".to_string(),
         ));
     }
 
-    let fingerprint = format!(
-        "SHA256:{}",
-        hex::encode(Sha256::digest(server_key.encoded()))
-    );
+    let fingerprint = vnc_key_fingerprint(server_key);
     let known_host_status = crate::storage::check_vnc_known_host(
         &session.config.host,
         session.config.port,
         &fingerprint,
     )
     .map_err(|error| VncError::Ra2ServerKeyRejected(error.to_string()))?;
+    confirm_vnc_trust(
+        known_host_status,
+        prompt_vnc_server_key(
+            app,
+            session,
+            generation,
+            server_key,
+            fingerprint,
+            known_host_status,
+        ),
+    )
+    .await
+}
+
+async fn confirm_vnc_trust(
+    known_host_status: crate::storage::KnownHostCheck,
+    prompt: impl std::future::Future<Output = Result<(), VncError>>,
+) -> Result<(), VncError> {
     if known_host_status == crate::storage::KnownHostCheck::Match {
         return Ok(());
     }
+    prompt.await
+}
 
+async fn prompt_vnc_server_key(
+    app: &AppHandle,
+    session: &Arc<VncSession>,
+    generation: u64,
+    server_key: &VncServerKey,
+    fingerprint: String,
+    known_host_status: crate::storage::KnownHostCheck,
+) -> Result<(), VncError> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
     session.pending_server_keys.lock().await.insert(
@@ -696,8 +834,9 @@ async fn verify_vnc_server_key(
         session_id: session.config.session_id.clone(),
         host: session.config.host.clone(),
         port: session.config.port,
-        fingerprint: fingerprint.clone(),
+        fingerprint,
         key_bits: server_key.bits(),
+        target_window_label: session.config.owner_window_label.clone(),
         known_host_status: match known_host_status {
             crate::storage::KnownHostCheck::Match => "match",
             crate::storage::KnownHostCheck::HostSeen => "changed",
@@ -705,18 +844,27 @@ async fn verify_vnc_server_key(
         }
         .to_string(),
     };
-    let _ = app.emit("vnc-server-key-verify", payload);
+    app.emit_to(
+        &session.config.owner_window_label,
+        "vnc-server-key-verify",
+        payload,
+    )
+    .map_err(|error| VncError::Ra2ServerKeyRejected(error.to_string()))?;
 
-    let accepted = match timeout(SERVER_KEY_PROMPT_TIMEOUT, rx).await {
-        Ok(Ok(accepted)) => accepted,
-        _ => {
-            session.pending_server_keys.lock().await.remove(&request_id);
-            return Err(VncError::Ra2ServerKeyRejected(
-                "verification timed out".to_string(),
-            ));
-        }
+    let response = timeout(SERVER_KEY_PROMPT_TIMEOUT, rx).await;
+    session.pending_server_keys.lock().await.remove(&request_id);
+    let _ = app.emit(
+        "vnc-server-key-verify-resolved",
+        serde_json::json!({"requestId": request_id}),
+    );
+    let Ok(Ok(accepted)) = response else {
+        return Err(VncError::Ra2ServerKeyRejected(
+            "verification timed out".to_string(),
+        ));
     };
-    if session.generation.load(Ordering::Acquire) != generation {
+    if session.generation.load(Ordering::Acquire) != generation
+        || session.close_requested.load(Ordering::Acquire)
+    {
         return Err(VncError::Ra2ServerKeyRejected(
             "stale VNC connection generation".to_string(),
         ));
@@ -726,8 +874,6 @@ async fn verify_vnc_server_key(
             "user rejected the server key".to_string(),
         ));
     }
-    crate::storage::upsert_vnc_known_host(&session.config.host, session.config.port, &fingerprint)
-        .map_err(|error| VncError::Ra2ServerKeyRejected(error.to_string()))?;
     Ok(())
 }
 
@@ -1134,7 +1280,11 @@ fn validate_rectangle(rect: Rect, desktop_width: u16, desktop_height: u16) -> Ap
     Ok(())
 }
 
-pub fn load_saved_vnc_config(app: &AppHandle, connection_id: &str) -> AppResult<VncConnectConfig> {
+pub fn load_saved_vnc_config(
+    app: &AppHandle,
+    connection_id: &str,
+    owner_window_label: String,
+) -> AppResult<VncConnectConfig> {
     let connection = config::load_connection_by_id(app, connection_id)?;
     let network = connection.network.clone();
     let password = resolve_vnc_password(app, connection.auth.as_ref())?;
@@ -1169,6 +1319,7 @@ pub fn load_saved_vnc_config(app: &AppHandle, connection_id: &str) -> AppResult<
     }
 
     Ok(VncConnectConfig {
+        owner_window_label,
         session_id: uuid::Uuid::new_v4().to_string(),
         connection_id: connection_id.to_string(),
         name: connection.name,
@@ -1253,6 +1404,164 @@ mod tests {
         assert_eq!(reconnect_delay(100), Duration::from_secs(30));
     }
 
+    #[tokio::test]
+    async fn vnc_tofu_commits_only_confirmed_successful_current_handshakes() {
+        use crate::storage::{KnownHostCheck, Storage};
+        for (name, old_key, accepted, authenticated, current_generation, cancelled, expected) in [
+            (
+                "unknown-success",
+                None,
+                true,
+                true,
+                1,
+                false,
+                KnownHostCheck::Match,
+            ),
+            (
+                "unknown-reject",
+                None,
+                false,
+                false,
+                1,
+                false,
+                KnownHostCheck::UnknownHost,
+            ),
+            (
+                "hash-mismatch",
+                None,
+                true,
+                false,
+                1,
+                false,
+                KnownHostCheck::UnknownHost,
+            ),
+            (
+                "transport-error",
+                None,
+                true,
+                false,
+                1,
+                false,
+                KnownHostCheck::UnknownHost,
+            ),
+            (
+                "timeout",
+                None,
+                true,
+                false,
+                1,
+                false,
+                KnownHostCheck::UnknownHost,
+            ),
+            (
+                "changed-success",
+                Some("SHA256:old"),
+                true,
+                true,
+                1,
+                false,
+                KnownHostCheck::Match,
+            ),
+            (
+                "changed-reject",
+                Some("SHA256:old"),
+                false,
+                false,
+                1,
+                false,
+                KnownHostCheck::HostSeen,
+            ),
+            (
+                "stale-generation",
+                None,
+                true,
+                true,
+                2,
+                false,
+                KnownHostCheck::UnknownHost,
+            ),
+            (
+                "cancelled",
+                None,
+                true,
+                true,
+                1,
+                true,
+                KnownHostCheck::UnknownHost,
+            ),
+        ] {
+            let dir =
+                std::env::temp_dir().join(format!("vnc-tofu-{name}-{}", uuid::Uuid::new_v4()));
+            let storage = Storage::open(&dir).unwrap();
+            if let Some(old_key) = old_key {
+                storage
+                    .upsert_vnc_known_host("pi.local", 5900, old_key)
+                    .unwrap();
+            }
+            let status = storage
+                .check_vnc_known_host("pi.local", 5900, "SHA256:new")
+                .unwrap();
+            let confirmed = confirm_vnc_trust(status, async {
+                if accepted {
+                    Ok(())
+                } else {
+                    Err(VncError::Ra2ServerKeyRejected("rejected".into()))
+                }
+            })
+            .await
+            .is_ok();
+            let candidate = (confirmed && authenticated).then_some("SHA256:new");
+            commit_vnc_trust(candidate, 1, current_generation, cancelled, |fingerprint| {
+                storage.upsert_vnc_known_host("pi.local", 5900, fingerprint)
+            })
+            .unwrap();
+            assert_eq!(
+                storage
+                    .check_vnc_known_host("pi.local", 5900, "SHA256:new")
+                    .unwrap(),
+                expected,
+                "{name}"
+            );
+            if old_key.is_some() && expected != KnownHostCheck::Match {
+                assert_eq!(
+                    storage
+                        .check_vnc_known_host("pi.local", 5900, "SHA256:old")
+                        .unwrap(),
+                    KnownHostCheck::Match
+                );
+            }
+            drop(storage);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn matching_vnc_key_does_not_poll_user_confirmation() {
+        confirm_vnc_trust(crate::storage::KnownHostCheck::Match, async {
+            panic!("matching key must never prompt");
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn vnc_verification_payload_routes_to_its_session_owner() {
+        let payload = VncServerKeyVerifyEvent {
+            request_id: "request".into(),
+            session_id: "session".into(),
+            host: "pi.local".into(),
+            port: 5900,
+            fingerprint: "key".into(),
+            key_bits: 1024,
+            known_host_status: "unknown".into(),
+            target_window_label: "main-second".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(payload).unwrap()["targetWindowLabel"],
+            "main-second"
+        );
+    }
+
     #[test]
     fn security_mode_maps_to_fail_closed_policy() {
         assert_eq!(security_policy("none"), VncSecurityPolicy::NoneOnly);
@@ -1263,6 +1572,7 @@ mod tests {
     #[test]
     fn connect_target_preserves_ipv6_literals_without_host_port_concatenation() {
         let config = VncConnectConfig {
+            owner_window_label: "main-test".into(),
             session_id: "vnc-test".to_string(),
             connection_id: "connection-test".to_string(),
             name: "IPv6 VNC".to_string(),
@@ -1287,6 +1597,7 @@ mod tests {
     async fn pending_frame_queue_keeps_latest_frames_under_pressure() {
         let session = Arc::new(VncSession {
             config: VncConnectConfig {
+                owner_window_label: "main-test".into(),
                 session_id: "vnc-test".to_string(),
                 connection_id: "connection-test".to_string(),
                 name: "Test VNC".to_string(),
@@ -1316,6 +1627,7 @@ mod tests {
             cancel_sender: Mutex::new(None),
             worker: Mutex::new(None),
             close_requested: AtomicBool::new(false),
+            trust_commit_guard: std::sync::Mutex::new(()),
             pending_server_keys: Arc::new(Mutex::new(HashMap::new())),
         });
 

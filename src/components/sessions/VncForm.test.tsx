@@ -67,6 +67,15 @@ describe("VncForm", () => {
     expect(screen.getByText("dialog.vncPasswordLimit")).not.toBeNull();
   });
 
+  it("disables the username in None mode and hides authentication hints", () => {
+    render(<VncForm {...props()} securityMode="none" />);
+    expect((screen.getByDisplayValue("pi") as HTMLInputElement).disabled).toBe(
+      true,
+    );
+    expect(screen.queryByText("dialog.vncUsernameHint")).toBeNull();
+    expect(screen.queryByText("dialog.vncPasswordLimit")).toBeNull();
+  });
+
   it("allows switching to saved password selection", () => {
     render(<VncForm {...props()} />);
     fireEvent.click(screen.getByText("dialog.savedPassword"));

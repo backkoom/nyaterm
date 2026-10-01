@@ -1175,6 +1175,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 return;
               }
               tasks.push(invoke<string>("create_vnc_session", {
+                ownerWindowLabel: getOwnerMainWindowLabel(),
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
