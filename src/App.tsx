@@ -3419,8 +3419,13 @@ function App() {
     activeStatsSessionId,
     activeRemoteStatsEnabled,
     uiConfig.remote_stats_interval ?? 3,
+    liveSessionIds,
   );
-  const networkHistoryStore = useNetworkHistory(remoteStats.sessionId, remoteStats.stats);
+  const networkHistoryStore = useNetworkHistory(
+    remoteStats.sessionId,
+    remoteStats.stats,
+    liveSessionIds,
+  );
 
   const handleOpenDirectoryInNewTerminal = useCallback(
     (sessionId: string, path: string) => {

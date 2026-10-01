@@ -29,6 +29,76 @@ afterEach(() => {
 });
 
 describe("useRemoteStats session ownership", () => {
+  it("evicts closed sessions while preserving live caches without restarting their polling", async () => {
+    const statsA = remoteStats("Session A", "aggregate");
+    const statsB = remoteStats("Session B", "aggregate");
+    const refreshA = deferred<RemoteStats>();
+    const refreshB = deferred<RemoteStats>();
+    mocks.invoke
+      .mockResolvedValueOnce(statsA)
+      .mockResolvedValueOnce(statsB)
+      .mockReturnValueOnce(refreshA.promise)
+      .mockReturnValueOnce(refreshB.promise);
+    const allSessions = new Set(["session-a", "session-b"]);
+    const { result, rerender } = renderHook(
+      ({ sessionId, liveSessionIds }) => useRemoteStats(sessionId, true, 60, liveSessionIds),
+      {
+        initialProps: {
+          sessionId: "session-a",
+          liveSessionIds: allSessions as ReadonlySet<string> | null,
+        },
+      },
+    );
+    await waitFor(() => expect(result.current.stats).toBe(statsA));
+    rerender({ sessionId: "session-b", liveSessionIds: allSessions });
+    await waitFor(() => expect(result.current.stats).toBe(statsB));
+
+    // An unknown list must not evict caches; removing A must not restart B's polling.
+    rerender({ sessionId: "session-b", liveSessionIds: null });
+    rerender({ sessionId: "session-b", liveSessionIds: new Set(["session-b"]) });
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(result.current.stats).toBe(statsB);
+
+    rerender({ sessionId: "session-a", liveSessionIds: allSessions });
+    expect(result.current.stats).toBeNull();
+    rerender({ sessionId: "session-b", liveSessionIds: allSessions });
+    expect(result.current.stats).toBe(statsB);
+    await act(async () => refreshA.resolve(remoteStats("Stale A", "aggregate")));
+    await act(async () => refreshB.resolve(remoteStats("Fresh B", "aggregate")));
+  });
+
+  it("stops monitoring a closed active session and ignores its pending response", async () => {
+    vi.useFakeTimers();
+    const pendingRefresh = deferred<RemoteStats>();
+    const reopenedRefresh = deferred<RemoteStats>();
+    mocks.invoke
+      .mockResolvedValueOnce(remoteStats("Session A", "aggregate"))
+      .mockReturnValueOnce(pendingRefresh.promise)
+      .mockReturnValueOnce(reopenedRefresh.promise);
+    const liveSessions = new Set(["session-a"]);
+    const { result, rerender } = renderHook(
+      ({ liveSessionIds }) => useRemoteStats("session-a", true, 3, liveSessionIds),
+      { initialProps: { liveSessionIds: liveSessions } },
+    );
+    await act(async () => Promise.resolve());
+    act(() => result.current.refresh());
+    expect(result.current.isManualRefreshing).toBe(true);
+
+    rerender({ liveSessionIds: new Set<string>() });
+    expect(result.current.sessionId).toBeNull();
+    expect(result.current.stats).toBeNull();
+    expect(result.current.isManualRefreshing).toBe(false);
+    act(() => result.current.refresh());
+    await act(async () => pendingRefresh.resolve(remoteStats("Closed A", "warming_up")));
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+
+    rerender({ liveSessionIds: liveSessions });
+    expect(result.current.stats).toBeNull();
+    await act(async () => reopenedRefresh.resolve(remoteStats("Fresh A", "aggregate")));
+    expect(result.current.stats?.system.os).toBe("Fresh A");
+  });
+
   it("restores each session's cached snapshot while immediately fetching fresh stats", async () => {
     const initialA = remoteStats("Initial A", "aggregate");
     const initialB = remoteStats("Initial B", "aggregate");

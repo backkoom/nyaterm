@@ -23,6 +23,7 @@ export function useRemoteStats(
   activeSessionId: string | null,
   enabled: boolean,
   intervalSeconds: number,
+  liveSessionIds: ReadonlySet<string> | null = null,
 ): RemoteStatsState {
   const [state, setState] = useState<OwnedRemoteStatsState | null>(null);
   const statsCacheRef = useRef(new Map<string, RemoteStats>());
@@ -34,7 +35,10 @@ export function useRemoteStats(
   const fetchingGenerationRef = useRef<number | null>(null);
   const failCountRef = useRef(0);
   const pollIntervalMs = Math.max(1, intervalSeconds) * 1000;
-  const requestedSessionId = enabled ? activeSessionId : null;
+  const requestedSessionId =
+    enabled && activeSessionId && (liveSessionIds === null || liveSessionIds.has(activeSessionId))
+      ? activeSessionId
+      : null;
 
   // Let async completions see a session switch before the corresponding effect flushes.
   activeSessionRef.current = requestedSessionId;
@@ -116,6 +120,14 @@ export function useRemoteStats(
     if (!requestedSessionId) return;
     void fetchStats(requestedSessionId, generationRef.current, true);
   }, [fetchStats, requestedSessionId]);
+
+  useEffect(() => {
+    // A null list means session discovery has not completed yet.
+    if (liveSessionIds === null) return;
+    for (const sessionId of statsCacheRef.current.keys()) {
+      if (!liveSessionIds.has(sessionId)) statsCacheRef.current.delete(sessionId);
+    }
+  }, [liveSessionIds]);
 
   useEffect(() => {
     const generation = generationRef.current + 1;
