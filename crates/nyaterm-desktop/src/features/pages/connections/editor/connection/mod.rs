@@ -3175,6 +3175,70 @@ mod tests {
     }
 
     #[gpui::test]
+    fn serial_custom_baud_accepts_pointer_focus_and_keyboard_edits(cx: &mut TestAppContext) {
+        let test_dir = TestConfigDir::new("nyaterm-serial-custom-baud-input");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
+
+        for (id, seed) in [(None, "115200"), (Some("saved-serial"), "76800")] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    let mut draft = editor(None, None);
+                    draft.id = id.map(ToOwned::to_owned);
+                    draft.kind = ConnectionKindTab::Serial;
+                    draft.baud_rate = seed.to_string();
+                    app.connection_state.begin_editor(draft);
+                    app.connection_state.build_editor_fields(cx);
+                    app.set_connection_editor_baud_popover_open(true, cx);
+                    cx.notify();
+                });
+            });
+            for _ in 0..3 {
+                draw_editor(&app, vcx);
+            }
+            let bounds = vcx
+                .debug_bounds("connection-editor-custom-baud")
+                .expect("custom baud input should render");
+
+            let input = vcx.update(|_, cx| {
+                app.read(cx).connection_state.editor_number_fields()
+                    [&ConnectionEditorField::BaudRate]
+                    .clone()
+            });
+            assert!(
+                input.read_with(vcx, |input, _| input.component_state().is_some()),
+                "the popup must render the numeric input entity"
+            );
+            assert_eq!(input.read_with(vcx, |input, cx| input.value(cx)), seed);
+            assert!(bounds.size.width > px(0.));
+            assert!(bounds.size.height >= px(32.));
+            vcx.simulate_click(bounds.center(), Modifiers::default());
+            draw_editor(&app, vcx);
+            assert!(vcx.update(|window, cx| {
+                input.read(cx).component_focus_handle(cx).is_focused(window)
+            }));
+            vcx.simulate_keystrokes("ctrl-a 2 5 0 0 0 0");
+            draw_editor(&app, vcx);
+            assert_eq!(input.read_with(vcx, |input, cx| input.value(cx)), "250000");
+            assert!(vcx.update(|_, cx| {
+                let state = &app.read(cx).connection_state;
+                assert_eq!(state.active_editor_draft().unwrap().baud_rate, "250000");
+                state.editor_baud_popover_is_open()
+            }));
+
+            let apply = vcx
+                .debug_bounds("connection-editor-apply-custom-baud")
+                .expect("apply custom baud button should render");
+            vcx.simulate_click(apply.center(), Modifiers::default());
+            draw_editor(&app, vcx);
+            assert!(vcx.update(|_, cx| {
+                let state = &app.read(cx).connection_state;
+                assert_eq!(state.active_editor_draft().unwrap().baud_rate, "250000");
+                !state.editor_baud_popover_is_open()
+            }));
+        }
+    }
+
+    #[gpui::test]
     fn connection_editor_icon_picker_scrolls_custom_icons_without_moving_actions(
         cx: &mut TestAppContext,
     ) {
