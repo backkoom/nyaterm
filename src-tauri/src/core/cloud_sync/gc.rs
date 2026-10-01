@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::error::AppResult;
 
 use super::operator::CloudRemote;
-use super::protocol::sync_snapshot_file;
+use super::protocol::{sync_snapshot_file, sync_snapshot_path};
 use super::remote::{
     RemoteSyncPointer, SYNC_SNAPSHOTS_DIR, current_time_ms, is_legacy_sync_snapshot_path,
     load_sync_pointer, remote_path,
@@ -57,7 +57,7 @@ pub(super) async fn cleanup_sync_snapshots(
     delete_snapshot_paths(remote, paths).await;
 }
 
-/// Free gist capacity before uploading a new snapshot file.
+/// Free gist capacity for the target snapshot upload.
 ///
 /// Only runs for backends with a hard file-count limit, and only when the
 /// upcoming upload would exceed it. Reading every snapshot to rank generations is
@@ -66,6 +66,7 @@ pub(super) async fn prune_gist_snapshots_before_upload(
     remote: &CloudRemote,
     remote_root: &str,
     latest: Option<&RemoteSyncPointer>,
+    target_revision: &str,
 ) -> AppResult<()> {
     let Some(capacity_limit) = remote.file_capacity_limit() else {
         // No hard limit: retention is handled by `cleanup_sync_snapshots`.
@@ -75,7 +76,14 @@ pub(super) async fn prune_gist_snapshots_before_upload(
         return Ok(());
     };
 
-    let projected_total = total_files.saturating_add(1);
+    // Below capacity, even a new file fits without further remote inspection.
+    if total_files.saturating_add(1) <= capacity_limit {
+        return Ok(());
+    }
+    let target_exists = remote
+        .exists(&sync_snapshot_path(remote_root, target_revision))
+        .await?;
+    let projected_total = total_files.saturating_add(usize::from(!target_exists));
     if projected_total <= capacity_limit {
         return Ok(());
     }
@@ -91,14 +99,19 @@ pub(super) async fn prune_gist_snapshots_before_upload(
     // If the head cannot be read, return without deleting anything; the best-effort
     // wrapper still allows the upload to continue.
     let current_latest = load_sync_pointer(remote, remote_root).await?;
-    let protected_revisions = [latest, current_latest.as_ref()]
-        .into_iter()
-        .flatten()
-        .map(|pointer| pointer.revision_id.as_str())
-        .collect();
+    let protected_revisions = [
+        Some(target_revision),
+        latest.map(|pointer| pointer.revision_id.as_str()),
+        current_latest
+            .as_ref()
+            .map(|pointer| pointer.revision_id.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     let paths = plan_gist_capacity_prune(
         &snapshots,
-        total_files,
+        projected_total,
         capacity_limit,
         &protected_revisions,
     );
@@ -136,12 +149,15 @@ pub(super) async fn prune_gist_snapshots_best_effort(
     remote: &CloudRemote,
     remote_root: &str,
     latest: Option<&RemoteSyncPointer>,
+    target_revision: &str,
 ) {
     if !remote.is_gist_backend() {
         return;
     }
 
-    if let Err(error) = prune_gist_snapshots_before_upload(remote, remote_root, latest).await {
+    if let Err(error) =
+        prune_gist_snapshots_before_upload(remote, remote_root, latest, target_revision).await
+    {
         tracing::warn!(
             error = %error,
             "Gist snapshot pruning did not complete; continuing with upload"
@@ -154,13 +170,13 @@ pub(super) async fn prune_gist_snapshots_best_effort(
 /// Returns safely deletable snapshot files, oldest first, to make room for the
 /// upload. Unreadable snapshots and protected pointer targets are never touched,
 /// even when too few safe candidates remain to meet `capacity_limit`.
+/// The projected file count grows only when the target snapshot is missing.
 pub(super) fn plan_gist_capacity_prune(
     snapshots: &[SnapshotGcEntry],
-    total_files: usize,
+    projected_total: usize,
     capacity_limit: usize,
     protected_revisions: &HashSet<&str>,
 ) -> Vec<String> {
-    let projected_total = total_files.saturating_add(1);
     if projected_total <= capacity_limit {
         return Vec::new();
     }
@@ -397,7 +413,7 @@ mod tests {
         // latest + current + 8 snapshots = 10 files, so the next upload needs one
         // slot freed.
         let delete =
-            plan_gist_capacity_prune(&full_gist_snapshots(), 10, 10, &HashSet::from(["r8"]));
+            plan_gist_capacity_prune(&full_gist_snapshots(), 11, 10, &HashSet::from(["r8"]));
 
         assert_eq!(
             delete,
@@ -408,7 +424,7 @@ mod tests {
     #[test]
     fn gist_capacity_prune_is_a_no_op_when_there_is_room() {
         let delete =
-            plan_gist_capacity_prune(&full_gist_snapshots(), 7, 10, &HashSet::from(["r8"]));
+            plan_gist_capacity_prune(&full_gist_snapshots(), 8, 10, &HashSet::from(["r8"]));
 
         assert!(delete.is_empty());
     }
@@ -417,7 +433,7 @@ mod tests {
     fn gist_capacity_prune_frees_as_many_slots_as_needed() {
         // 12 files against a limit of 10: the upload needs three slots, oldest first.
         let delete =
-            plan_gist_capacity_prune(&full_gist_snapshots(), 12, 10, &HashSet::from(["r8"]));
+            plan_gist_capacity_prune(&full_gist_snapshots(), 13, 10, &HashSet::from(["r8"]));
 
         assert_eq!(
             delete,
@@ -433,7 +449,7 @@ mod tests {
     fn gist_capacity_prune_never_drops_the_latest_pointer_snapshot() {
         // r1 is both the oldest and the pointer target: r2 goes instead.
         let delete =
-            plan_gist_capacity_prune(&full_gist_snapshots(), 10, 10, &HashSet::from(["r1"]));
+            plan_gist_capacity_prune(&full_gist_snapshots(), 11, 10, &HashSet::from(["r1"]));
 
         assert_eq!(
             delete,
@@ -460,7 +476,7 @@ mod tests {
         snapshots.extend(full_gist_snapshots());
 
         // The oldest safe generation goes first, despite the orphans' zero timestamps.
-        let delete = plan_gist_capacity_prune(&snapshots, 10, 10, &HashSet::from(["r8"]));
+        let delete = plan_gist_capacity_prune(&snapshots, 11, 10, &HashSet::from(["r8"]));
 
         assert_eq!(delete, vec!["nyaterm/sync/snapshots/r1.redb.enc"]);
     }
@@ -472,7 +488,7 @@ mod tests {
             snapshot.deletable = snapshot.revision_id == "r8";
         }
 
-        let delete = plan_gist_capacity_prune(&snapshots, 10, 10, &HashSet::from(["r8"]));
+        let delete = plan_gist_capacity_prune(&snapshots, 11, 10, &HashSet::from(["r8"]));
 
         assert!(delete.is_empty());
     }
@@ -493,7 +509,7 @@ mod tests {
         ];
 
         // Four slots needed, but only three candidates are safe to delete.
-        let delete = plan_gist_capacity_prune(&snapshots, 13, 10, &HashSet::from(["latest"]));
+        let delete = plan_gist_capacity_prune(&snapshots, 14, 10, &HashSet::from(["latest"]));
 
         assert_eq!(
             delete,
@@ -517,7 +533,7 @@ mod tests {
         ];
 
         // Three slots needed, but both the expected and current head must survive.
-        let delete = plan_gist_capacity_prune(&snapshots, 12, 10, &HashSet::from(["r8", "r9"]));
+        let delete = plan_gist_capacity_prune(&snapshots, 13, 10, &HashSet::from(["r8", "r9"]));
 
         assert_eq!(
             delete,
@@ -548,13 +564,13 @@ mod tests {
         memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
 
         // No limit yet: the prune must not read a single snapshot.
-        prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+        prune_gist_snapshots_before_upload(&remote, "nyaterm", None, "new")
             .await
             .expect("nothing to prune without a capacity limit");
 
         memory.set_file_capacity_limit(1);
         assert!(
-            prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+            prune_gist_snapshots_before_upload(&remote, "nyaterm", None, "new")
                 .await
                 .is_err(),
             "the pending injected failure proves the first call never listed snapshots"
@@ -567,17 +583,40 @@ mod tests {
         memory.set_file_capacity_limit(10);
         memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
 
-        prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+        prune_gist_snapshots_before_upload(&remote, "nyaterm", None, "new")
             .await
             .expect("one file is far below the limit");
 
         memory.set_file_capacity_limit(1);
         assert!(
-            prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+            prune_gist_snapshots_before_upload(&remote, "nyaterm", None, "new")
                 .await
                 .is_err(),
             "the pending injected failure proves the first call never listed snapshots"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gist_prune_skips_snapshot_reads_when_overwriting_at_capacity() {
+        let (memory, remote) = gist_remote_with_one_file(true);
+        let target = sync_snapshot_path("nyaterm", "existing");
+        remote
+            .write(&target, vec![1u8])
+            .await
+            .expect("seed corrupt target");
+        memory.set_file_capacity_limit(2);
+        memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
+
+        prune_gist_snapshots_before_upload(&remote, "nyaterm", None, "existing")
+            .await
+            .expect("overwriting an existing target requires no slot or snapshot reads");
+
+        assert_eq!(memory.file_count(), 2);
+        assert_eq!(memory.file(&target), Some(vec![1u8]));
+        let error = prune_gist_snapshots_before_upload(&remote, "nyaterm", None, "new")
+            .await
+            .expect_err("a missing target must still try to prune");
+        assert!(error.to_string().contains("injected memory list failure"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -586,11 +625,11 @@ mod tests {
         memory.set_file_capacity_limit(1);
         memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
 
-        prune_gist_snapshots_best_effort(&remote, "nyaterm", None).await;
+        prune_gist_snapshots_best_effort(&remote, "nyaterm", None, "new").await;
 
         memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
         assert!(
-            prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+            prune_gist_snapshots_before_upload(&remote, "nyaterm", None, "new")
                 .await
                 .is_err(),
             "the injected list failure must be real"
@@ -603,11 +642,11 @@ mod tests {
         memory.fail_next_list_containing(SNAPSHOT_LIST_PREFIX);
 
         // A non-gist backend must not even talk to the remote here.
-        prune_gist_snapshots_best_effort(&remote, "nyaterm", None).await;
+        prune_gist_snapshots_best_effort(&remote, "nyaterm", None, "new").await;
 
         memory.set_file_capacity_limit(1);
         assert!(
-            prune_gist_snapshots_before_upload(&remote, "nyaterm", None)
+            prune_gist_snapshots_before_upload(&remote, "nyaterm", None, "new")
                 .await
                 .is_err(),
             "the pending injected failure proves the best-effort call stayed local"

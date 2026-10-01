@@ -964,8 +964,14 @@ impl CloudSyncManager {
         let pointer = pointer_from_snapshot(&envelope);
         let gist_backend = is_gist_provider(&settings.provider);
         if gist_backend {
-            prune_gist_snapshots_step(trigger, &remote, &settings.remote_root, latest.as_ref())
-                .await;
+            prune_gist_snapshots_step(
+                trigger,
+                &remote,
+                &settings.remote_root,
+                latest.as_ref(),
+                &envelope.revision_id,
+            )
+            .await;
         }
 
         // Gist snippets silently drop a new file once they are at capacity, so a
@@ -997,6 +1003,7 @@ impl CloudSyncManager {
                         &remote,
                         &settings.remote_root,
                         latest.as_ref(),
+                        &envelope.revision_id,
                     )
                     .await;
                     continue;
@@ -1031,6 +1038,7 @@ impl CloudSyncManager {
                         &remote,
                         &settings.remote_root,
                         latest.as_ref(),
+                        &envelope.revision_id,
                     )
                     .await;
                 }
@@ -1765,9 +1773,10 @@ async fn prune_gist_snapshots_step(
     remote: &super::operator::CloudRemote,
     remote_root: &str,
     latest: Option<&RemoteSyncPointer>,
+    target_revision: &str,
 ) {
     let _ = trace_cloud_sync_step(trigger, "prune_gist_snapshots_before_upload", async {
-        prune_gist_snapshots_best_effort(remote, remote_root, latest).await;
+        prune_gist_snapshots_best_effort(remote, remote_root, latest, target_revision).await;
         Ok::<(), AppError>(())
     })
     .await;

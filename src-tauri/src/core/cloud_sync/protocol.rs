@@ -577,22 +577,37 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn recovery_prunes_a_full_gist_before_uploading() {
+    async fn recovery_frees_one_slot_for_missing_candidate_snapshot() {
         let _guard = MASTER_PASSWORD_TEST_LOCK.lock().expect("lock password");
         set_master_password(Some("secret".to_string()));
         let (memory, remote) = full_gist_remote(true);
-        let latest = pointer_from_snapshot(&sample_snapshot("r8", 8));
+        let latest = pointer_from_snapshot(&sample_snapshot("r1", 1));
         commit_sync_pointer(&remote, "nyaterm", &latest)
             .await
             .expect("seed pointer");
         assert_eq!(memory.file_count(), 10);
+
+        assert!(
+            memory
+                .file(&sync_snapshot_path("nyaterm", "r-new"))
+                .is_none()
+        );
 
         let recovered = recover_current_remote_snapshot(&remote, "nyaterm")
             .await
             .expect("recover from a full gist");
 
         assert_eq!(recovered.revision_id, "r-new");
-        assert!(memory.file_count() <= 10);
+        assert_eq!(memory.file_count(), 10);
+        assert!(memory.file(&sync_snapshot_path("nyaterm", "r1")).is_some());
+        assert!(memory.file(&sync_snapshot_path("nyaterm", "r2")).is_none());
+        for index in 3..=8 {
+            assert!(
+                memory
+                    .file(&sync_snapshot_path("nyaterm", &format!("r{index}")))
+                    .is_some()
+            );
+        }
         let pointer = load_sync_pointer(&remote, "nyaterm")
             .await
             .expect("load pointer")
@@ -625,7 +640,7 @@ mod tests {
             .expect("commit competing head");
         assert_eq!(memory.file_count(), 10);
 
-        prune_gist_snapshots_best_effort(&remote, "nyaterm", Some(&expected)).await;
+        prune_gist_snapshots_best_effort(&remote, "nyaterm", Some(&expected), "r10").await;
 
         assert!(memory.file(&sync_snapshot_path("nyaterm", "r2")).is_none());
         read_snapshot_for_pointer(&remote, "nyaterm", &expected)
@@ -659,7 +674,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn recovery_prune_keeps_candidate_and_current_head_when_upload_fails() {
+    async fn recovery_overwrite_failure_preserves_all_snapshots_at_capacity() {
         let _guard = MASTER_PASSWORD_TEST_LOCK.lock().expect("lock password");
         set_master_password(Some("secret".to_string()));
         let (memory, remote) = full_gist_remote(true);
@@ -673,15 +688,24 @@ mod tests {
             .await
             .expect("seed current head");
         assert_eq!(memory.file_count(), 10);
+        let snapshots_before: Vec<_> = (1..=8)
+            .map(|index| {
+                let path = sync_snapshot_path("nyaterm", &format!("r{index}"));
+                let content = memory.file(&path).expect("existing snapshot");
+                (path, content)
+            })
+            .collect();
         memory.fail_next_write_containing("snapshots/r1");
 
-        assert!(
-            recover_current_remote_snapshot(&remote, "nyaterm")
-                .await
-                .is_err()
-        );
+        assert!(matches!(
+            recover_current_remote_snapshot(&remote, "nyaterm").await,
+            Err(AppError::Io(_))
+        ));
 
-        assert!(memory.file(&sync_snapshot_path("nyaterm", "r3")).is_none());
+        assert_eq!(memory.file_count(), 10);
+        for (path, content) in snapshots_before {
+            assert_eq!(memory.file(&path), Some(content), "{path}");
+        }
         read_snapshot_for_pointer(&remote, "nyaterm", &candidate_pointer)
             .await
             .expect("recovery candidate survives pruning");
@@ -693,6 +717,57 @@ mod tests {
             .expect("load latest")
             .expect("latest");
         assert_eq!(latest.revision_id, "r2");
+        set_master_password(None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn migration_prunes_only_when_target_snapshot_is_missing() {
+        let _guard = MASTER_PASSWORD_TEST_LOCK.lock().expect("lock password");
+        set_master_password(Some("secret".to_string()));
+        for target_exists in [true, false] {
+            let (memory, remote) = full_gist_remote(true);
+            let revision = if target_exists { "r1" } else { "r-missing" };
+            let snapshot = sample_snapshot(revision, 100);
+            let pointer = pointer_from_snapshot(&snapshot);
+            write_current_sync_snapshot_compat(&remote, "nyaterm", &snapshot)
+                .await
+                .expect("seed compatible current snapshot");
+            commit_sync_pointer(&remote, "nyaterm", &pointer)
+                .await
+                .expect("seed pointer");
+            if target_exists {
+                write_raw_snapshot_file(&remote, "nyaterm", revision, b"corrupt snapshot".to_vec())
+                    .await;
+            }
+            assert_eq!(memory.file_count(), 10);
+            let history_before: Vec<_> = (2..=8)
+                .map(|index| {
+                    let path = sync_snapshot_path("nyaterm", &format!("r{index}"));
+                    let content = memory.file(&path).expect("existing history");
+                    (path, content)
+                })
+                .collect();
+
+            let resolution = resolve_remote_snapshot(&remote, "nyaterm", &pointer)
+                .await
+                .expect("migrate snapshot at capacity");
+
+            assert!(matches!(
+                resolution,
+                RemoteSnapshotResolution::LegacyMigrated(_)
+            ));
+            assert_eq!(memory.file_count(), 10);
+            for (path, content) in history_before {
+                assert_eq!(memory.file(&path), Some(content), "{path}");
+            }
+            assert_eq!(
+                memory.file(&sync_snapshot_path("nyaterm", "r1")).is_some(),
+                target_exists
+            );
+            read_snapshot_for_pointer(&remote, "nyaterm", &pointer)
+                .await
+                .expect("migrated snapshot is readable");
+        }
         set_master_password(None);
     }
 
@@ -710,7 +785,7 @@ mod tests {
             .await
             .expect("seed unreadable current head");
 
-        prune_gist_snapshots_best_effort(&remote, "nyaterm", Some(&expected)).await;
+        prune_gist_snapshots_best_effort(&remote, "nyaterm", Some(&expected), "r-new").await;
 
         assert_eq!(memory.file_count(), 10);
         for index in 1..=8 {
