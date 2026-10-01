@@ -122,6 +122,10 @@ export function getOwnerMainWindowLabel() {
   return ownerMainWindowLabel;
 }
 
+export function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
+  return !targetWindowLabel || targetWindowLabel === getOwnerMainWindowLabel();
+}
+
 export function isPrimaryMainWindow() {
   return ownerMainWindowLabel === MAIN_WINDOW_LABEL;
 }
