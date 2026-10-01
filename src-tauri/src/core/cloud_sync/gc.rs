@@ -7,7 +7,7 @@ use super::operator::CloudRemote;
 use super::protocol::sync_snapshot_file;
 use super::remote::{
     RemoteSyncPointer, SYNC_SNAPSHOTS_DIR, current_time_ms, is_legacy_sync_snapshot_path,
-    remote_path,
+    load_sync_pointer, remote_path,
 };
 
 pub(super) const SYNC_SNAPSHOT_KEEP_RECENT: usize = 5;
@@ -86,11 +86,21 @@ pub(super) async fn prune_gist_snapshots_before_upload(
         "Gist is at capacity; pruning snapshots before upload"
     );
     let snapshots = collect_snapshots(remote, remote_root).await?;
+    // Snapshot reads can take time. Refresh the remote head before planning any
+    // deletes, while also retaining the caller's expected head or recovery candidate.
+    // If the head cannot be read, return without deleting anything; the best-effort
+    // wrapper still allows the upload to continue.
+    let current_latest = load_sync_pointer(remote, remote_root).await?;
+    let protected_revisions = [latest, current_latest.as_ref()]
+        .into_iter()
+        .flatten()
+        .map(|pointer| pointer.revision_id.as_str())
+        .collect();
     let paths = plan_gist_capacity_prune(
         &snapshots,
         total_files,
         capacity_limit,
-        latest.map(|pointer| pointer.revision_id.as_str()),
+        &protected_revisions,
     );
 
     let needed = projected_total - capacity_limit;
@@ -142,13 +152,13 @@ pub(super) async fn prune_gist_snapshots_best_effort(
 /// Pure planning half of [`prune_gist_snapshots_before_upload`].
 ///
 /// Returns safely deletable snapshot files, oldest first, to make room for the
-/// upload. Unreadable snapshots and the latest pointer target are never touched,
+/// upload. Unreadable snapshots and protected pointer targets are never touched,
 /// even when too few safe candidates remain to meet `capacity_limit`.
 pub(super) fn plan_gist_capacity_prune(
     snapshots: &[SnapshotGcEntry],
     total_files: usize,
     capacity_limit: usize,
-    latest_revision: Option<&str>,
+    protected_revisions: &HashSet<&str>,
 ) -> Vec<String> {
     let projected_total = total_files.saturating_add(1);
     if projected_total <= capacity_limit {
@@ -159,7 +169,7 @@ pub(super) fn plan_gist_capacity_prune(
     let mut candidates: Vec<&SnapshotGcEntry> = snapshots
         .iter()
         .filter(|snapshot| snapshot.deletable)
-        .filter(|snapshot| Some(snapshot.revision_id.as_str()) != latest_revision)
+        .filter(|snapshot| !protected_revisions.contains(snapshot.revision_id.as_str()))
         .collect();
     candidates.sort_by_key(|snapshot| snapshot.created_at_ms);
 
@@ -386,7 +396,8 @@ mod tests {
     fn gist_capacity_prune_frees_exactly_the_needed_slot() {
         // latest + current + 8 snapshots = 10 files, so the next upload needs one
         // slot freed.
-        let delete = plan_gist_capacity_prune(&full_gist_snapshots(), 10, 10, Some("r8"));
+        let delete =
+            plan_gist_capacity_prune(&full_gist_snapshots(), 10, 10, &HashSet::from(["r8"]));
 
         assert_eq!(
             delete,
@@ -396,7 +407,8 @@ mod tests {
 
     #[test]
     fn gist_capacity_prune_is_a_no_op_when_there_is_room() {
-        let delete = plan_gist_capacity_prune(&full_gist_snapshots(), 7, 10, Some("r8"));
+        let delete =
+            plan_gist_capacity_prune(&full_gist_snapshots(), 7, 10, &HashSet::from(["r8"]));
 
         assert!(delete.is_empty());
     }
@@ -404,7 +416,8 @@ mod tests {
     #[test]
     fn gist_capacity_prune_frees_as_many_slots_as_needed() {
         // 12 files against a limit of 10: the upload needs three slots, oldest first.
-        let delete = plan_gist_capacity_prune(&full_gist_snapshots(), 12, 10, Some("r8"));
+        let delete =
+            plan_gist_capacity_prune(&full_gist_snapshots(), 12, 10, &HashSet::from(["r8"]));
 
         assert_eq!(
             delete,
@@ -419,7 +432,8 @@ mod tests {
     #[test]
     fn gist_capacity_prune_never_drops_the_latest_pointer_snapshot() {
         // r1 is both the oldest and the pointer target: r2 goes instead.
-        let delete = plan_gist_capacity_prune(&full_gist_snapshots(), 10, 10, Some("r1"));
+        let delete =
+            plan_gist_capacity_prune(&full_gist_snapshots(), 10, 10, &HashSet::from(["r1"]));
 
         assert_eq!(
             delete,
@@ -446,7 +460,7 @@ mod tests {
         snapshots.extend(full_gist_snapshots());
 
         // The oldest safe generation goes first, despite the orphans' zero timestamps.
-        let delete = plan_gist_capacity_prune(&snapshots, 10, 10, Some("r8"));
+        let delete = plan_gist_capacity_prune(&snapshots, 10, 10, &HashSet::from(["r8"]));
 
         assert_eq!(delete, vec!["nyaterm/sync/snapshots/r1.redb.enc"]);
     }
@@ -458,7 +472,7 @@ mod tests {
             snapshot.deletable = snapshot.revision_id == "r8";
         }
 
-        let delete = plan_gist_capacity_prune(&snapshots, 10, 10, Some("r8"));
+        let delete = plan_gist_capacity_prune(&snapshots, 10, 10, &HashSet::from(["r8"]));
 
         assert!(delete.is_empty());
     }
@@ -479,7 +493,7 @@ mod tests {
         ];
 
         // Four slots needed, but only three candidates are safe to delete.
-        let delete = plan_gist_capacity_prune(&snapshots, 13, 10, Some("latest"));
+        let delete = plan_gist_capacity_prune(&snapshots, 13, 10, &HashSet::from(["latest"]));
 
         assert_eq!(
             delete,
@@ -492,6 +506,27 @@ mod tests {
     }
 
     const SNAPSHOT_LIST_PREFIX: &str = "nyaterm/sync/snapshots/";
+
+    #[test]
+    fn gist_capacity_prune_protects_both_heads_when_safe_candidates_are_insufficient() {
+        let snapshots = vec![
+            entry("r9", 1),
+            entry("r8", 8),
+            entry("r7", 7),
+            entry("r6", 6),
+        ];
+
+        // Three slots needed, but both the expected and current head must survive.
+        let delete = plan_gist_capacity_prune(&snapshots, 12, 10, &HashSet::from(["r8", "r9"]));
+
+        assert_eq!(
+            delete,
+            vec![
+                "nyaterm/sync/snapshots/r6.redb.enc",
+                "nyaterm/sync/snapshots/r7.redb.enc",
+            ]
+        );
+    }
 
     /// A gist holding a single managed file; tests set the capacity limit they
     /// need explicitly.
