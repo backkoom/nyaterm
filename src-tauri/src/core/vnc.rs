@@ -573,6 +573,8 @@ async fn run_protocol_generation(
     } else {
         HANDSHAKE_TIMEOUT
     };
+    let trust_candidate = Arc::new(std::sync::Mutex::new(None::<String>));
+    let verifier_trust_candidate = trust_candidate.clone();
     let authenticated_key = Arc::new(std::sync::Mutex::new(None::<String>));
     let notified_key = authenticated_key.clone();
     let verifier_app = app.clone();
@@ -584,7 +586,15 @@ async fn run_protocol_generation(
         .set_server_key_verifier(move |server_key| {
             let app = verifier_app.clone();
             let session = verifier_session.clone();
-            async move { verify_vnc_server_key(&app, &session, generation, &server_key).await }
+            let trust_candidate = verifier_trust_candidate.clone();
+            async move {
+                if let Some(fingerprint) =
+                    verify_vnc_server_key(&app, &session, generation, &server_key).await?
+                {
+                    *trust_candidate.lock().expect("VNC trust candidate lock") = Some(fingerprint);
+                }
+                Ok(())
+            }
         })
         .set_server_key_authenticated(move |key| {
             *notified_key.lock().expect("VNC authenticated key lock") =
@@ -627,28 +637,22 @@ async fn run_protocol_generation(
             .trust_commit_guard
             .lock()
             .expect("VNC trust commit lock");
-        let fingerprint = authenticated_key
+        let trust_candidate = trust_candidate.lock().expect("VNC trust candidate lock");
+        let authenticated_key = authenticated_key
             .lock()
             .expect("VNC authenticated key lock");
         commit_vnc_trust(
-            fingerprint.as_deref(),
+            trust_candidate.as_deref(),
+            authenticated_key.as_deref(),
             generation,
             session.generation.load(Ordering::Acquire),
             session.close_requested.load(Ordering::Acquire) || *cancel_rx.borrow(),
             |fingerprint| {
-                if crate::storage::check_vnc_known_host(
+                crate::storage::upsert_vnc_known_host(
                     &session.config.host,
                     session.config.port,
                     fingerprint,
-                )? != crate::storage::KnownHostCheck::Match
-                {
-                    crate::storage::upsert_vnc_known_host(
-                        &session.config.host,
-                        session.config.port,
-                        fingerprint,
-                    )?;
-                }
-                Ok(())
+                )
             },
         )
         .map_err(|error| (VncErrorKind::Internal, error.to_string(), false))?;
@@ -733,7 +737,8 @@ fn invalidate_vnc_generation(session: &VncSession, closing: bool) {
 }
 
 fn commit_vnc_trust(
-    fingerprint: Option<&str>,
+    trust_candidate: Option<&str>,
+    authenticated_key: Option<&str>,
     generation: u64,
     current_generation: u64,
     cancelled: bool,
@@ -741,9 +746,11 @@ fn commit_vnc_trust(
 ) -> AppResult<()> {
     if generation == current_generation
         && !cancelled
-        && let Some(fingerprint) = fingerprint
+        && let (Some(trust_candidate), Some(authenticated_key)) =
+            (trust_candidate, authenticated_key)
+        && trust_candidate == authenticated_key
     {
-        save(fingerprint)?;
+        save(trust_candidate)?;
     }
     Ok(())
 }
@@ -771,7 +778,7 @@ async fn verify_vnc_server_key(
     session: &Arc<VncSession>,
     generation: u64,
     server_key: &VncServerKey,
-) -> Result<(), VncError> {
+) -> Result<Option<String>, VncError> {
     if session.generation.load(Ordering::Acquire) != generation
         || session.close_requested.load(Ordering::Acquire)
     {
@@ -787,28 +794,30 @@ async fn verify_vnc_server_key(
         &fingerprint,
     )
     .map_err(|error| VncError::Ra2ServerKeyRejected(error.to_string()))?;
-    confirm_vnc_trust(
+    let confirmed_new_trust = confirm_vnc_trust(
         known_host_status,
         prompt_vnc_server_key(
             app,
             session,
             generation,
             server_key,
-            fingerprint,
+            fingerprint.clone(),
             known_host_status,
         ),
     )
-    .await
+    .await?;
+    Ok(confirmed_new_trust.then_some(fingerprint))
 }
 
 async fn confirm_vnc_trust(
     known_host_status: crate::storage::KnownHostCheck,
     prompt: impl std::future::Future<Output = Result<(), VncError>>,
-) -> Result<(), VncError> {
+) -> Result<bool, VncError> {
     if known_host_status == crate::storage::KnownHostCheck::Match {
-        return Ok(());
+        return Ok(false);
     }
-    prompt.await
+    prompt.await?;
+    Ok(true)
 }
 
 async fn prompt_vnc_server_key(
@@ -1501,7 +1510,7 @@ mod tests {
             let status = storage
                 .check_vnc_known_host("pi.local", 5900, "SHA256:new")
                 .unwrap();
-            let confirmed = confirm_vnc_trust(status, async {
+            let trust_candidate = match confirm_vnc_trust(status, async {
                 if accepted {
                     Ok(())
                 } else {
@@ -1509,11 +1518,19 @@ mod tests {
                 }
             })
             .await
-            .is_ok();
-            let candidate = (confirmed && authenticated).then_some("SHA256:new");
-            commit_vnc_trust(candidate, 1, current_generation, cancelled, |fingerprint| {
-                storage.upsert_vnc_known_host("pi.local", 5900, fingerprint)
-            })
+            {
+                Ok(true) => Some("SHA256:new"),
+                Ok(false) | Err(_) => None,
+            };
+            let authenticated_key = authenticated.then_some("SHA256:new");
+            commit_vnc_trust(
+                trust_candidate,
+                authenticated_key,
+                1,
+                current_generation,
+                cancelled,
+                |fingerprint| storage.upsert_vnc_known_host("pi.local", 5900, fingerprint),
+            )
             .unwrap();
             assert_eq!(
                 storage
@@ -1537,11 +1554,58 @@ mod tests {
 
     #[tokio::test]
     async fn matching_vnc_key_does_not_poll_user_confirmation() {
-        confirm_vnc_trust(crate::storage::KnownHostCheck::Match, async {
+        assert!(
+            !confirm_vnc_trust(crate::storage::KnownHostCheck::Match, async {
+                panic!("matching key must never prompt");
+            })
+            .await
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn matching_vnc_key_cannot_overwrite_newer_explicit_trust() {
+        use crate::storage::{KnownHostCheck, Storage};
+
+        let dir = std::env::temp_dir().join(format!("vnc-tofu-race-{}", uuid::Uuid::new_v4()));
+        let storage = Storage::open(&dir).unwrap();
+        storage
+            .upsert_vnc_known_host("pi.local", 5900, "SHA256:k1")
+            .unwrap();
+
+        let status = storage
+            .check_vnc_known_host("pi.local", 5900, "SHA256:k1")
+            .unwrap();
+        let trust_candidate = confirm_vnc_trust(status, async {
             panic!("matching key must never prompt");
         })
         .await
+        .unwrap()
+        .then_some("SHA256:k1");
+        assert!(trust_candidate.is_none());
+
+        storage
+            .upsert_vnc_known_host("pi.local", 5900, "SHA256:k2")
+            .unwrap();
+
+        commit_vnc_trust(
+            trust_candidate,
+            Some("SHA256:k1"),
+            1,
+            1,
+            false,
+            |fingerprint| storage.upsert_vnc_known_host("pi.local", 5900, fingerprint),
+        )
         .unwrap();
+
+        assert_eq!(
+            storage
+                .check_vnc_known_host("pi.local", 5900, "SHA256:k2")
+                .unwrap(),
+            KnownHostCheck::Match
+        );
+        drop(storage);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
