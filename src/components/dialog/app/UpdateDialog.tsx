@@ -147,7 +147,7 @@ function MarkdownContent({ content }: { content: string }) {
 
 export default function UpdateDialog({ open, onClose, onUpdateFound }: UpdateDialogProps) {
   const { t } = useTranslation();
-  const { runtimeInfo } = useApp();
+  const { runtimeInfo, runtimeInfoLoaded } = useApp();
   const [status, setStatus] = useState<UpdateStatus>("checking");
   const [progress, setProgress] = useState<UpdateProgress>({ downloaded: 0, total: 0 });
   const [error, setError] = useState<string>("");
@@ -158,7 +158,7 @@ export default function UpdateDialog({ open, onClose, onUpdateFound }: UpdateDia
   onUpdateFoundRef.current = onUpdateFound;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !runtimeInfoLoaded || runtimeInfo.packageManager) return;
 
     getVersion()
       .then(setCurrentVersion)
@@ -191,10 +191,10 @@ export default function UpdateDialog({ open, onClose, onUpdateFound }: UpdateDia
     return () => {
       cancelled = true;
     };
-  }, [open, runtimeInfo.portable]);
+  }, [open, runtimeInfo.packageManager, runtimeInfo.portable, runtimeInfoLoaded]);
 
   const handleUpdate = useCallback(async () => {
-    if (isUpdating.current) return;
+    if (isUpdating.current || runtimeInfo.packageManager) return;
     isUpdating.current = true;
     setStatus("downloading");
     setError("");
@@ -209,7 +209,7 @@ export default function UpdateDialog({ open, onClose, onUpdateFound }: UpdateDia
       setStatus("error");
       isUpdating.current = false;
     }
-  }, [runtimeInfo.portable]);
+  }, [runtimeInfo.packageManager, runtimeInfo.portable]);
 
   const handleRelaunch = useCallback(async () => {
     try {
