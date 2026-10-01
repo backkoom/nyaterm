@@ -65,6 +65,14 @@ pub enum CloudSyncError {
     SnapshotMissing { revision: String },
 
     #[error(
+        "New sync snapshot was not accepted by remote storage (candidate revision {revision}; latest was not changed)."
+    )]
+    SnapshotNotAccepted { revision: String },
+
+    #[error("Remote sync storage rejected file '{filename}' (gist may be at file capacity).")]
+    RemoteFileRejected { filename: String },
+
+    #[error(
         "Remote sync snapshot revision mismatch: latest points to {pointer_revision} but snapshot contains {snapshot_revision}."
     )]
     RevisionMismatch {

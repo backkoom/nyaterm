@@ -264,6 +264,10 @@ pub struct CloudSyncStatus {
     pub state: String,
     #[serde(default)]
     pub message: String,
+    /// Stable machine-readable identifier for failures the UI reacts to, so the
+    /// frontend never has to match prose error text.
+    #[serde(default)]
+    pub error_code: Option<String>,
     #[serde(default)]
     pub current_operation: Option<String>,
     #[serde(default)]
@@ -281,6 +285,7 @@ impl Default for CloudSyncStatus {
             provider: default_provider(),
             state: default_status_state(),
             message: String::new(),
+            error_code: None,
             current_operation: None,
             last_checked_at_ms: None,
             last_synced_at_ms: None,
