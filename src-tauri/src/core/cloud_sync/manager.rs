@@ -1068,13 +1068,8 @@ impl CloudSyncManager {
                 "Compatible current cloud sync snapshot write failed after commit"
             );
         }
-        self.schedule_sync_snapshot_gc(
-            remote.clone(),
-            settings.remote_root.clone(),
-            Some(pointer),
-            &settings.provider,
-        )
-        .await?;
+        self.schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer))
+            .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -1149,13 +1144,8 @@ impl CloudSyncManager {
         })
         .await?;
         let pointer = pointer_from_snapshot(&envelope);
-        self.schedule_sync_snapshot_gc(
-            remote.clone(),
-            settings.remote_root.clone(),
-            Some(pointer),
-            &settings.provider,
-        )
-        .await?;
+        self.schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer))
+            .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -1403,7 +1393,6 @@ impl CloudSyncManager {
             remote.clone(),
             settings.remote_root.clone(),
             Some(pointer.clone()),
-            &settings.provider,
         )
         .await?;
 
@@ -1445,26 +1434,20 @@ impl CloudSyncManager {
         remote: super::operator::CloudRemote,
         remote_root: String,
         latest: Option<RemoteSyncPointer>,
-        provider: &str,
     ) -> AppResult<()> {
-        let gist_backend = is_gist_provider(provider);
-        let grace_period = if gist_backend {
-            Duration::from_secs(0)
-        } else {
-            SYNC_SNAPSHOT_GC_GRACE_PERIOD
-        };
         let now = current_time_ms();
-        {
+        let grace_period = {
             let mut state = self.state.lock().await;
-            if !gist_backend
-                && !maintenance_due(state.last_gc_attempt_at_ms, now, CLOUD_SYNC_GC_INTERVAL_MS)
-            {
+            let Some(grace_period) =
+                sync_snapshot_gc_policy(&remote, state.last_gc_attempt_at_ms, now)
+            else {
                 tracing::info!("Cloud sync snapshot cleanup skipped by daily throttle");
                 return Ok(());
-            }
+            };
             state.last_gc_attempt_at_ms = Some(now);
             config::save_cloud_sync_state(&self.app()?, &state)?;
-        }
+            grace_period
+        };
 
         async_runtime::spawn(async move {
             let result = with_operation_timeout(
@@ -1882,6 +1865,20 @@ fn maintenance_due(last_attempt_ms: Option<u64>, now_ms: u64, interval_ms: u64) 
         .is_none_or(|last_attempt_ms| now_ms.saturating_sub(last_attempt_ms) >= interval_ms)
 }
 
+/// A grace period when GC is due, or `None` when the daily throttle applies.
+fn sync_snapshot_gc_policy(
+    remote: &super::operator::CloudRemote,
+    last_attempt_ms: Option<u64>,
+    now_ms: u64,
+) -> Option<Duration> {
+    if remote.file_capacity_limit().is_some() {
+        Some(Duration::ZERO)
+    } else {
+        maintenance_due(last_attempt_ms, now_ms, CLOUD_SYNC_GC_INTERVAL_MS)
+            .then_some(SYNC_SNAPSHOT_GC_GRACE_PERIOD)
+    }
+}
+
 fn should_skip_automatic_push(trigger: &str, state: &CloudSyncState, local_hash: &str) -> bool {
     trigger == "auto_push" && state.last_synced_payload_hash.as_deref() == Some(local_hash)
 }
@@ -2160,6 +2157,44 @@ mod tests {
             100 + CLOUD_SYNC_GC_INTERVAL_MS,
             CLOUD_SYNC_GC_INTERVAL_MS,
         ));
+    }
+
+    #[test]
+    fn snapshot_gc_policy_is_aggressive_only_for_hard_capacity_remotes() {
+        let mut settings = CloudSyncSettings::default();
+        settings.gitee_snippet.api_endpoint = "https://gitee.com/api/v5".to_string();
+        settings.gitee_snippet.gist_id = "abc".to_string();
+        settings.gitee_snippet.access_token = Some("token".to_string());
+        settings.github_gist.gist_id = "abc".to_string();
+        settings.github_gist.access_token = Some("token".to_string());
+        settings.webdav.endpoint = "https://dav.example.com".to_string();
+        settings.s3.bucket = "test-bucket".to_string();
+        settings.s3.region = "us-east-1".to_string();
+
+        for provider in ["gitee_snippet", "github_gist", "webdav", "s3"] {
+            settings.provider = provider.to_string();
+            let remote = build_remote(&settings).expect("build remote");
+            let grace_period = if provider == "gitee_snippet" {
+                Duration::ZERO
+            } else {
+                SYNC_SNAPSHOT_GC_GRACE_PERIOD
+            };
+            assert_eq!(
+                sync_snapshot_gc_policy(&remote, None, 100),
+                Some(grace_period),
+                "{provider}: initial cleanup"
+            );
+            assert_eq!(
+                sync_snapshot_gc_policy(&remote, Some(100), 101),
+                (provider == "gitee_snippet").then_some(Duration::ZERO),
+                "{provider}: cleanup within daily throttle"
+            );
+            assert_eq!(
+                sync_snapshot_gc_policy(&remote, Some(100), 100 + CLOUD_SYNC_GC_INTERVAL_MS),
+                Some(grace_period),
+                "{provider}: daily cleanup"
+            );
+        }
     }
 
     #[test]

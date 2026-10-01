@@ -141,10 +141,9 @@ pub(super) async fn prune_gist_snapshots_best_effort(
 
 /// Pure planning half of [`prune_gist_snapshots_before_upload`].
 ///
-/// Returns the snapshot files to delete so that `total_files + 1` fits into
-/// `capacity_limit`. Oldest generations go first (unreadable entries carry
-/// `created_at_ms == 0`, so they are reclaimed before readable history), and the
-/// latest pointer target is never touched.
+/// Returns safely deletable snapshot files, oldest first, to make room for the
+/// upload. Unreadable snapshots and the latest pointer target are never touched,
+/// even when too few safe candidates remain to meet `capacity_limit`.
 pub(super) fn plan_gist_capacity_prune(
     snapshots: &[SnapshotGcEntry],
     total_files: usize,
@@ -159,6 +158,7 @@ pub(super) fn plan_gist_capacity_prune(
 
     let mut candidates: Vec<&SnapshotGcEntry> = snapshots
         .iter()
+        .filter(|snapshot| snapshot.deletable)
         .filter(|snapshot| Some(snapshot.revision_id.as_str()) != latest_revision)
         .collect();
     candidates.sort_by_key(|snapshot| snapshot.created_at_ms);
@@ -428,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn gist_capacity_prune_drops_unreadable_orphans_first() {
+    fn gist_capacity_prune_keeps_unreadable_orphans() {
         let mut snapshots = vec![
             SnapshotGcEntry {
                 path: "nyaterm/sync/snapshots/broken.redb.enc".to_string(),
@@ -445,14 +445,48 @@ mod tests {
         ];
         snapshots.extend(full_gist_snapshots());
 
-        // Two slots needed: the orphans go first, no readable generation is lost.
-        let delete = plan_gist_capacity_prune(&snapshots, 11, 10, Some("r8"));
+        // The oldest safe generation goes first, despite the orphans' zero timestamps.
+        let delete = plan_gist_capacity_prune(&snapshots, 10, 10, Some("r8"));
+
+        assert_eq!(delete, vec!["nyaterm/sync/snapshots/r1.redb.enc"]);
+    }
+
+    #[test]
+    fn gist_capacity_prune_returns_empty_when_only_latest_is_deletable() {
+        let mut snapshots = full_gist_snapshots();
+        for snapshot in &mut snapshots {
+            snapshot.deletable = snapshot.revision_id == "r8";
+        }
+
+        let delete = plan_gist_capacity_prune(&snapshots, 10, 10, Some("r8"));
+
+        assert!(delete.is_empty());
+    }
+
+    #[test]
+    fn gist_capacity_prune_selects_only_safe_candidates_in_age_order() {
+        let mut unreadable = entry("broken", 0);
+        unreadable.deletable = false;
+        let mut unsafe_snapshot = entry("unsafe", 2);
+        unsafe_snapshot.deletable = false;
+        let snapshots = vec![
+            entry("r5", 5),
+            unreadable,
+            entry("latest", 1),
+            entry("r3", 3),
+            unsafe_snapshot,
+            entry("r4", 4),
+        ];
+
+        // Four slots needed, but only three candidates are safe to delete.
+        let delete = plan_gist_capacity_prune(&snapshots, 13, 10, Some("latest"));
 
         assert_eq!(
             delete,
             vec![
-                "nyaterm/sync/snapshots/broken.redb.enc".to_string(),
-                "nyaterm/sync/snapshots/.redb.enc".to_string(),
+                "nyaterm/sync/snapshots/r3.redb.enc".to_string(),
+                "nyaterm/sync/snapshots/r4.redb.enc".to_string(),
+                "nyaterm/sync/snapshots/r5.redb.enc".to_string(),
             ]
         );
     }
