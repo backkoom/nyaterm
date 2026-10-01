@@ -15,6 +15,7 @@
     "installed": "安裝版",
     "issues": "問題回報",
     "operatingSystem": "作業系統",
+    "packageManager": "套件管理器",
     "portable": "便攜版",
     "runtime": "執行環境",
     "supportInfo": "支援資訊",

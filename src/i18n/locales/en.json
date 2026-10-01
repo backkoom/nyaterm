@@ -15,6 +15,7 @@
     "installed": "Installed",
     "issues": "Issues",
     "operatingSystem": "Operating system",
+    "packageManager": "Package manager",
     "portable": "Portable",
     "runtime": "Runtime",
     "supportInfo": "Support information",
