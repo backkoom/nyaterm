@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::mpsc,
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub(super) struct TrzszSessionState {
@@ -455,7 +455,50 @@ impl NyaTermApp {
             let state = self.trzsz_state_mut(session_id);
             state.detector.scan_terminal_output(data).events
         };
+        self.process_trzsz_output_events(session_id, events, cx)
+    }
 
+    /// Called by the existing sideband runtime drain even without new output.
+    pub(in crate::features) fn drain_trzsz_idle_output(
+        &mut self,
+        now: Instant,
+        cx: &mut Context<Self>,
+    ) -> (Vec<(String, Vec<u8>)>, bool) {
+        let expired = self
+            .session
+            .trzsz_states_mut()
+            .filter_map(|(session_id, state)| {
+                let bytes = state.detector.flush_pending_if_idle(now);
+                (!bytes.is_empty()).then(|| (session_id.clone(), bytes))
+            })
+            .collect::<Vec<_>>();
+        let mut outputs = Vec::new();
+        let mut root_chrome_dirty = false;
+        for (session_id, bytes) in expired {
+            if !self.session.has_session(&session_id)
+                || self.terminal.session_id_is_retired(&session_id)
+            {
+                continue;
+            }
+            let (bytes, dirty) = self.process_trzsz_output_events(
+                &session_id,
+                vec![TrzszOutputEvent::Passthrough(bytes)],
+                cx,
+            );
+            root_chrome_dirty |= dirty;
+            if !bytes.is_empty() {
+                outputs.push((session_id, bytes));
+            }
+        }
+        (outputs, root_chrome_dirty)
+    }
+
+    fn process_trzsz_output_events(
+        &mut self,
+        session_id: &str,
+        events: Vec<TrzszOutputEvent>,
+        cx: &mut Context<Self>,
+    ) -> (Vec<u8>, bool) {
         let mut passthrough = Vec::new();
         let mut protocol_responses = Vec::new();
         let mut latest_trigger_status = None;
@@ -2352,6 +2395,9 @@ const TRZSZ_UPLOAD_WORKER_EVENT_DRAIN_BATCH: usize = 32;
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    use gpui::{AppContext as _, TestAppContext};
 
     use nyaterm_transport::{
         TrzszDownloadEngine, TrzszProtocolFrame, TrzszProtocolPayload, TrzszTransferState,
@@ -2362,6 +2408,81 @@ mod tests {
         TrzszDownloadRuntime, TrzszDownloadWorkerEvent, TrzszUploadPrepareWorker,
         TrzszUploadRuntime, process_trzsz_download_worker_frame, process_trzsz_upload_worker_begin,
     };
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestConfigDir;
+
+    #[test]
+    fn idle_trzsz_prefix_reaches_terminal_without_a_second_output_event() {
+        let root = TestConfigDir::new("nyaterm-trzsz-idle-colon");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "colon-session");
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(
+                app.process_trzsz_output("colon-session", b":", cx),
+                (Vec::new(), false)
+            );
+            assert!(
+                app.session.has_protocol_runtime_sessions(),
+                "the runtime must stay awake to flush the prefix"
+            );
+            let now = Instant::now() + Duration::from_millis(100);
+            assert_eq!(
+                app.drain_trzsz_idle_output(now, cx),
+                (vec![("colon-session".to_string(), b":".to_vec())], false)
+            );
+            assert!(app.trzsz_output_can_bypass_detector("colon-session", b"normal output"));
+            assert_eq!(app.drain_trzsz_idle_output(now, cx), (Vec::new(), false));
+        });
+    }
+
+    #[test]
+    fn idle_trzsz_prefix_stays_in_active_transfer_protocol_instead_of_terminal() {
+        let root = TestConfigDir::new("nyaterm-trzsz-idle-protocol");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "protocol-session");
+        cx.update_entity(&app, |app, cx| {
+            let state = app.trzsz_state_mut("protocol-session");
+            state.protocol_active = true;
+            assert!(
+                state
+                    .protocol
+                    .filter_terminal_output(b"#NUM")
+                    .frames
+                    .is_empty()
+            );
+            assert_eq!(
+                app.process_trzsz_output("protocol-session", b":", cx),
+                (Vec::new(), false)
+            );
+            assert_eq!(
+                app.drain_trzsz_idle_output(Instant::now() + Duration::from_millis(100), cx),
+                (Vec::new(), false)
+            );
+            let output = app
+                .trzsz_state_mut("protocol-session")
+                .protocol
+                .filter_terminal_output(b"1\n");
+            assert!(output.passthrough.is_empty());
+            assert_eq!(output.frames.len(), 1);
+            assert_eq!(output.frames[0].frame_type, "NUM");
+            assert_eq!(output.frames[0].payload, TrzszProtocolPayload::Integer(1));
+        });
+    }
+
+    #[test]
+    fn output_discontinuity_discards_pending_trzsz_prefix_before_idle_flush() {
+        let root = TestConfigDir::new("nyaterm-trzsz-idle-reset");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "reset-session");
+        cx.update_entity(&app, |app, cx| {
+            app.process_trzsz_output("reset-session", b":", cx);
+            app.note_trzsz_output_discontinuity("reset-session");
+            assert_eq!(
+                app.drain_trzsz_idle_output(Instant::now() + Duration::from_secs(2), cx),
+                (Vec::new(), false)
+            );
+        });
+    }
 
     #[test]
     fn trzsz_download_worker_frame_path_writes_file_off_ui_state() {

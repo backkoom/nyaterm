@@ -298,6 +298,37 @@ impl NyaTermApp {
                 }
             }
         }
+        // Process queued continuations before expiring detector prefixes. An
+        // incomplete marker must also release text when no next packet arrives.
+        if drain_sideband_workers
+            && self.session.pending_events_are_empty()
+            && !self.session.event_bridge_has_pending_ui_work()
+        {
+            let (outputs, dirty) = self.drain_trzsz_idle_output(Instant::now(), cx);
+            root_chrome_dirty |= dirty;
+            for (session_id, data) in outputs {
+                let started_at = Instant::now();
+                output_event_count += 1;
+                processed_output_bytes = processed_output_bytes.saturating_add(data.len());
+                let mut chunk_timings = SessionEventDrainTimings::default();
+                self.handle_session_output_after_sideband(
+                    &session_id,
+                    data,
+                    &mut pending_frame_outputs,
+                    &mut drain_timings,
+                    &mut chunk_timings,
+                    cx,
+                );
+                drain_timings.output_total += started_at.elapsed();
+                // Submit held bytes before allowing the bridge to send later
+                // output directly to the frame worker.
+                self.flush_pending_session_frame_outputs(
+                    &mut pending_frame_outputs,
+                    &mut drain_timings,
+                );
+                self.sync_session_event_bridge_session_policy(&session_id);
+            }
+        }
         self.flush_pending_session_frame_outputs(&mut pending_frame_outputs, &mut drain_timings);
 
         let queued_events =
@@ -527,40 +558,17 @@ impl NyaTermApp {
             }
             data
         };
-        if self.session_has_active_ai_capture(&session_id) {
-            self.flush_pending_session_frame_outputs(pending_frame_outputs, drain_timings);
-            let stage_started_at = Instant::now();
-            let text = self.decode_session_output_for_recording(&session_id, &data);
-            let stage_duration = stage_started_at.elapsed();
-            drain_timings.decode += stage_duration;
-            chunk_timings.decode += stage_duration;
-            let stage_started_at = Instant::now();
-            let result = self.ai.process_agent_output(&session_id, &text);
-            let stage_duration = stage_started_at.elapsed();
-            drain_timings.ai_capture += stage_duration;
-            chunk_timings.ai_capture += stage_duration;
-            if !result.visible_text.is_empty() {
-                let stage_started_at = Instant::now();
-                let visible_bytes =
-                    self.encode_visible_terminal_text_for_output(&session_id, &result.visible_text);
-                self.submit_terminal_frame_output(&session_id, visible_bytes);
-                let stage_duration = stage_started_at.elapsed();
-                drain_timings.terminal_append += stage_duration;
-                chunk_timings.terminal_append += stage_duration;
-            }
-            let stage_started_at = Instant::now();
-            for captured in result.completed {
-                self.handle_ai_agent_captured_output(captured, cx);
-            }
-            let stage_duration = stage_started_at.elapsed();
-            drain_timings.ai_capture += stage_duration;
-            chunk_timings.ai_capture += stage_duration;
-        } else {
-            self.maybe_detect_ai_terminal_error(&session_id, &data, cx);
-            pending_frame_outputs.push((session_id.clone(), data));
-        }
+        self.handle_session_output_after_sideband(
+            &session_id,
+            data,
+            pending_frame_outputs,
+            drain_timings,
+            &mut chunk_timings,
+            cx,
+        );
         // Routing only changes when sideband detectors activate/deactivate.
         if !sideband_bypass {
+            self.flush_pending_session_frame_outputs(pending_frame_outputs, drain_timings);
             self.sync_session_event_bridge_session_policy(&session_id);
         }
         let chunk_duration = chunk_started_at.elapsed();
@@ -575,6 +583,49 @@ impl NyaTermApp {
         SessionOutputDrainStep::Accepted {
             chunk_duration,
             root_chrome_dirty,
+        }
+    }
+
+    fn handle_session_output_after_sideband(
+        &mut self,
+        session_id: &str,
+        data: Vec<u8>,
+        pending_frame_outputs: &mut Vec<(String, Vec<u8>)>,
+        drain_timings: &mut SessionEventDrainTimings,
+        chunk_timings: &mut SessionEventDrainTimings,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session_has_active_ai_capture(session_id) {
+            self.flush_pending_session_frame_outputs(pending_frame_outputs, drain_timings);
+            let stage_started_at = Instant::now();
+            let text = self.decode_session_output_for_recording(session_id, &data);
+            let stage_duration = stage_started_at.elapsed();
+            drain_timings.decode += stage_duration;
+            chunk_timings.decode += stage_duration;
+            let stage_started_at = Instant::now();
+            let result = self.ai.process_agent_output(session_id, &text);
+            let stage_duration = stage_started_at.elapsed();
+            drain_timings.ai_capture += stage_duration;
+            chunk_timings.ai_capture += stage_duration;
+            if !result.visible_text.is_empty() {
+                let stage_started_at = Instant::now();
+                let visible_bytes =
+                    self.encode_visible_terminal_text_for_output(session_id, &result.visible_text);
+                self.submit_terminal_frame_output(session_id, visible_bytes);
+                let stage_duration = stage_started_at.elapsed();
+                drain_timings.terminal_append += stage_duration;
+                chunk_timings.terminal_append += stage_duration;
+            }
+            let stage_started_at = Instant::now();
+            for captured in result.completed {
+                self.handle_ai_agent_captured_output(captured, cx);
+            }
+            let stage_duration = stage_started_at.elapsed();
+            drain_timings.ai_capture += stage_duration;
+            chunk_timings.ai_capture += stage_duration;
+        } else {
+            self.maybe_detect_ai_terminal_error(session_id, &data, cx);
+            pending_frame_outputs.push((session_id.to_string(), data));
         }
     }
 
