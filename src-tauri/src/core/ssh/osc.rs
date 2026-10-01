@@ -110,7 +110,7 @@ pub fn injection_script(shell: ShellKind, ready_marker: &str) -> Option<String> 
                     // An exported PROMPT_COMMAND reaches child shells (su, tmux,
                     // zellij) that lack __nyaterm_prompt. Call it through a variable
                     // they do not inherit; there $(exit $?) leaves $? untouched.
-                    " __nyaterm_install_prompt(){{ local decl f; decl=\"$(declare -p PROMPT_COMMAND 2>/dev/null || true)\"; [[ ! \"$decl\" =~ ^declare\\ -[^[:space:]]*r ]] || return 1; if [[ \"$decl\" =~ ^declare\\ -[^[:space:]]*a[^[:space:]]*\\ PROMPT_COMMAND= ]]; then for f in \"${{PROMPT_COMMAND[@]}}\"; do [ \"$f\" = __nyaterm_prompt ] && return 0; done; PROMPT_COMMAND=(__nyaterm_prompt \"${{PROMPT_COMMAND[@]}}\") || return 1; else f=__nyaterm_prompt; if [[ \"$decl\" =~ ^declare\\ -[^[:space:]]*x ]]; then __nyaterm_prompt_hook=$f; f='${{__nyaterm_prompt_hook-$(exit $?)}}'; fi; case \"${{PROMPT_COMMAND-}}\" in *__nyaterm_prompt*) ;; *) PROMPT_COMMAND=\"$f${{PROMPT_COMMAND:+; $PROMPT_COMMAND}}\" || return 1;; esac; fi; }};",
+                    " __nyaterm_install_prompt(){{ local decl f; decl=\"$(declare -p PROMPT_COMMAND 2>/dev/null || true)\"; [[ ! \"$decl\" =~ ^declare\\ -[^[:space:]]*r ]] || return 1; if [[ \"$decl\" =~ ^declare\\ -[^[:space:]]*a[^[:space:]]*\\ PROMPT_COMMAND= ]]; then for f in \"${{PROMPT_COMMAND[@]}}\"; do [ \"$f\" = __nyaterm_prompt ] && return 0; done; PROMPT_COMMAND=(__nyaterm_prompt \"${{PROMPT_COMMAND[@]}}\") || return 1; else f=__nyaterm_prompt; if [[ \"$decl\" =~ ^declare\\ -[^[:space:]]*x ]]; then __nyaterm_prompt_hook=$f || return 1; export -n __nyaterm_prompt_hook || return 1; f='${{__nyaterm_prompt_hook-$(exit $?)}}'; fi; case \"${{PROMPT_COMMAND-}}\" in *__nyaterm_prompt*) ;; *) PROMPT_COMMAND=\"$f${{PROMPT_COMMAND:+; $PROMPT_COMMAND}}\" || return 1;; esac; fi; }};",
                     " if __nyaterm_install_prompt; then __nyaterm_install_ok=1; else __nyaterm_install_ok=0; fi;",
                     " __nyaterm_prune_history;",
                     " if [ \"$__nyaterm_install_ok\" = 1 ]; then if [ -n \"${{NYATERM_READY_PENDING:-}}\" ]; then unset NYATERM_READY_PENDING; printf '{ready_osc}'; fi; else unset NYATERM_READY_PENDING; __nyaterm_ready_failed; fi;",
@@ -1211,7 +1211,8 @@ mod tests {
         // PROMPT_COMMAND but not the integration functions. The user's hook
         // must still run there, see the real `$?` and print no error.
         let script = format!(
-            r#"export PROMPT_COMMAND='printf "hook=%s\n" "$?"'
+            r#"export __nyaterm_prompt_hook=stale
+export PROMPT_COMMAND='printf "hook=%s\n" "$?"'
 {integration}
 false; eval "$PROMPT_COMMAND"
 /bin/bash --noprofile --norc -c 'false; eval "$PROMPT_COMMAND"'
