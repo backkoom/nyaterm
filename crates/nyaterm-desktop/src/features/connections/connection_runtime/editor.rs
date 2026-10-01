@@ -690,6 +690,11 @@ impl NyaTermApp {
                 if let Some(path) = selected {
                     let path = path.display().to_string();
                     this.connection_state.apply_editor_shell_path(path.clone());
+                    this.connection_state.reset_editor_field(
+                        ConnectionEditorField::ShellPath,
+                        &path,
+                        cx,
+                    );
                     this.shell
                         .set_status(t!("dialog.shellPathSelected", path = path).to_string());
                 } else {
@@ -727,6 +732,11 @@ impl NyaTermApp {
                 if let Some(path) = selected {
                     let path = path.display().to_string();
                     this.connection_state.apply_editor_working_dir(path.clone());
+                    this.connection_state.reset_editor_field(
+                        ConnectionEditorField::WorkingDir,
+                        &path,
+                        cx,
+                    );
                     this.shell
                         .set_status(t!("dialog.workingDirectorySelected", path = path).to_string());
                 } else {

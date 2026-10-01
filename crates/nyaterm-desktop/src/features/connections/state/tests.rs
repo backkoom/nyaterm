@@ -1377,6 +1377,58 @@ fn apply_connection_editor_paths_update_field_and_clear_error() {
 }
 
 #[test]
+fn connection_path_pickers_update_existing_inputs_and_preserve_them_on_cancel() {
+    let mut cx = TestAppContext::single();
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        app.connection_state
+            .begin_editor(connection_editor_state_with_secret_draft());
+        app.connection_state.build_editor_fields(cx);
+    });
+
+    type PathPicker = fn(&mut NyaTermApp, &mut gpui::Context<NyaTermApp>);
+    for (field, directories, prompt) in [
+        (
+            ConnectionEditorField::ShellPath,
+            false,
+            NyaTermApp::prompt_connection_editor_shell_path as PathPicker,
+        ),
+        (
+            ConnectionEditorField::WorkingDir,
+            true,
+            NyaTermApp::prompt_connection_editor_working_dir as PathPicker,
+        ),
+    ] {
+        let input = cx.update_entity(&app, |app, _| {
+            app.connection_state.editor_fields()[&field].clone()
+        });
+        let selected = PathBuf::from("C:\\selected path");
+        for response in [Some(vec![selected.clone()]), None] {
+            cx.update_entity(&app, prompt);
+            cx.simulate_path_prompt_response(|options| {
+                assert_eq!(options.directories, directories);
+                assert_eq!(options.files, !directories);
+                assert!(!options.multiple);
+                response
+            });
+            cx.run_until_parked();
+
+            cx.update_entity(&app, |app, cx| {
+                let draft = app.connection_state.active_editor_draft().unwrap();
+                let value = match field {
+                    ConnectionEditorField::ShellPath => draft.shell_path,
+                    ConnectionEditorField::WorkingDir => draft.working_dir,
+                    _ => unreachable!(),
+                };
+                assert_eq!(value, selected.display().to_string());
+                assert_eq!(app.connection_state.editor_fields()[&field], input);
+                assert_eq!(input.read(cx).value(cx), value);
+            });
+        }
+    }
+}
+
+#[test]
 fn set_connection_group_editor_error_updates_active_draft() {
     let mut draft = Some(ConnectionGroupEditorState {
         mode: ConnectionGroupEditorMode::Create,

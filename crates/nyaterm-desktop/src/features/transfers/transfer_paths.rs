@@ -59,8 +59,9 @@ impl NyaTermApp {
             };
             let _ = this.update(cx, |this, cx| {
                 if let Some(path) = path {
-                    this.settings
-                        .set_transfer_download_path(path.display().to_string());
+                    let path = path.display().to_string();
+                    this.settings.set_transfer_download_path(path.clone());
+                    this.reset_text_input("settings.transfer.download-path", &path, cx);
                     this.save_transfer_settings("transfer download path saved", cx);
                 } else {
                     this.shell
@@ -90,7 +91,9 @@ impl NyaTermApp {
             };
             let _ = this.update(cx, |this, cx| {
                 if let Some(path) = path {
-                    this.settings.set_recording_path(path.display().to_string());
+                    let path = path.display().to_string();
+                    this.settings.set_recording_path(path.clone());
+                    this.reset_text_input("settings.recording.path", &path, cx);
                     this.save_recording_settings(cx);
                 } else {
                     this.shell
@@ -123,8 +126,9 @@ impl NyaTermApp {
             };
             let _ = this.update(cx, |this, cx| {
                 if let Some(path) = path {
-                    this.settings
-                        .set_transfer_default_editor(path.display().to_string());
+                    let path = path.display().to_string();
+                    this.settings.set_transfer_default_editor(path.clone());
+                    this.reset_text_input("settings.transfer.default-editor", &path, cx);
                     this.save_transfer_settings("transfer editor path saved", cx);
                 } else {
                     this.shell
@@ -786,10 +790,105 @@ fn transfer_upload_remote_child_path(remote_dir: &str, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{AppContext as _, Context, TestAppContext};
+    use nyaterm_core::{AppRuntime, AppSettingsSummary, RuntimeMode, test_support::TestTempDir};
+
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+    use crate::models::SettingsTab;
+
     use super::{
         local_directory_children, transfer_upload_local_name, transfer_upload_remote_child_path,
     };
     use std::path::PathBuf;
+
+    fn assert_settings_path_picker_updates_existing_input(
+        input_id: &str,
+        tab: SettingsTab,
+        directories: bool,
+        prompt: fn(&mut NyaTermApp, &mut Context<NyaTermApp>),
+        value: fn(&AppSettingsSummary) -> &str,
+    ) {
+        let mut cx = TestAppContext::single();
+        let root = TestTempDir::new("nyaterm-settings-path-picker");
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            root.path().to_path_buf(),
+            root.path().join("config"),
+            root.path().join("logs"),
+            root.path().join("cache"),
+            None,
+        );
+        let stores = UiStoreHandles {
+            startup_restore: cx.new(|_| StartupRestoreStore::default()),
+            overlays: cx.new(|_| OverlayStore::default()),
+        };
+        let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+        let input = cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.ensure_settings_tab_inputs(tab, cx);
+            app.existing_text_input(input_id).unwrap()
+        });
+
+        let first = root.path().join("first path");
+        let second = root.path().join("second path");
+        for (selected, expected) in [
+            (Some(first.clone()), &first),
+            (None, &first),
+            (Some(second.clone()), &second),
+        ] {
+            cx.update_entity(&app, prompt);
+            assert!(cx.did_prompt_for_paths());
+            cx.simulate_path_prompt_response(|options| {
+                assert_eq!(options.directories, directories);
+                assert_eq!(options.files, !directories);
+                assert!(!options.multiple);
+                selected.map(|path| vec![path])
+            });
+            cx.run_until_parked();
+
+            cx.update_entity(&app, |app, cx| {
+                let expected = expected.display().to_string();
+                assert_eq!(value(app.settings.summary()), expected);
+                assert_eq!(app.existing_text_input(input_id).unwrap(), input);
+                assert_eq!(input.read(cx).value(cx), expected);
+                assert!(app.settings_draft_dirty());
+            });
+        }
+    }
+
+    #[test]
+    fn download_directory_picker_updates_existing_settings_input() {
+        assert_settings_path_picker_updates_existing_input(
+            "settings.transfer.download-path",
+            SettingsTab::Transfer,
+            true,
+            NyaTermApp::prompt_transfer_download_path_setting,
+            |summary| &summary.transfer_download_path,
+        );
+    }
+
+    #[test]
+    fn recording_directory_picker_updates_existing_settings_input() {
+        assert_settings_path_picker_updates_existing_input(
+            "settings.recording.path",
+            SettingsTab::TerminalGeneral,
+            true,
+            NyaTermApp::prompt_recording_path_setting,
+            |summary| &summary.recording_path,
+        );
+    }
+
+    #[test]
+    fn default_editor_picker_updates_existing_settings_input() {
+        assert_settings_path_picker_updates_existing_input(
+            "settings.transfer.default-editor",
+            SettingsTab::Transfer,
+            false,
+            NyaTermApp::prompt_transfer_default_editor_setting,
+            |summary| &summary.transfer_default_editor,
+        );
+    }
 
     #[test]
     fn upload_folder_contents_collects_direct_children_once() {
