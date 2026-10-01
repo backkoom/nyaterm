@@ -40,7 +40,7 @@ describe("cloud sync gist capacity helpers", () => {
     expect(
       needsGistCapacityRecovery("gitee_snippet", rewordedMessage, GIST_CAPACITY_ERROR_CODE),
     ).toBe(true);
-    expect(needsGistCapacityRecovery("github_gist", "", GIST_CAPACITY_ERROR_CODE)).toBe(true);
+    expect(needsGistCapacityRecovery("gitee_snippet", "", GIST_CAPACITY_ERROR_CODE)).toBe(true);
   });
 
   it("falls back to the message when the status carries no code", () => {
@@ -48,11 +48,22 @@ describe("cloud sync gist capacity helpers", () => {
     expect(needsGistCapacityRecovery("gitee_snippet", REJECTED_FILE_MESSAGE, undefined)).toBe(true);
   });
 
-  it("only offers capacity recovery for gist providers", () => {
+  it.each([
+    NOT_ACCEPTED_MESSAGE,
+    REJECTED_FILE_MESSAGE,
+  ])("does not offer GitHub Gist capacity recovery for %s", (message) => {
+    expect(needsGistCapacityRecovery("github_gist", message)).toBe(false);
+    expect(needsGistCapacityRecovery("github_gist", message, null)).toBe(false);
+    expect(needsGistCapacityRecovery("github_gist", message, GIST_CAPACITY_ERROR_CODE)).toBe(false);
+  });
+
+  it("only offers capacity recovery for Gitee Snippet", () => {
     expect(needsGistCapacityRecovery("gitee_snippet", NOT_ACCEPTED_MESSAGE)).toBe(true);
-    expect(needsGistCapacityRecovery("github_gist", REJECTED_FILE_MESSAGE)).toBe(true);
+    expect(needsGistCapacityRecovery("github_gist", "", GIST_CAPACITY_ERROR_CODE)).toBe(false);
     expect(needsGistCapacityRecovery("webdav", NOT_ACCEPTED_MESSAGE)).toBe(false);
     expect(needsGistCapacityRecovery("s3", REJECTED_FILE_MESSAGE)).toBe(false);
+    expect(needsGistCapacityRecovery(null, NOT_ACCEPTED_MESSAGE)).toBe(false);
+    expect(needsGistCapacityRecovery(undefined, REJECTED_FILE_MESSAGE)).toBe(false);
     expect(
       needsGistCapacityRecovery("webdav", NOT_ACCEPTED_MESSAGE, GIST_CAPACITY_ERROR_CODE),
     ).toBe(false);

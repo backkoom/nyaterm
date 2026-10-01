@@ -2555,7 +2555,7 @@
     "syncPushSuccess": "雲端同步快照已上傳。",
     "syncPruneAndRetry": "清理遠端舊快照並重試",
     "syncPruneAndRetrySuccess": "已清理遠端舊快照並推送成功。",
-    "syncGistCapacityHint": "Gitee/GitHub 程式碼片段可能已達檔案數上限。清理舊快照後重新推送通常即可恢復。",
+    "syncGistCapacityHint": "Gitee 程式碼片段可能已達檔案數上限。清理舊快照後重新推送通常即可恢復。",
     "syncRecoverCurrentSuccess": "遠端同步中繼資料已復原。",
     "syncRemoteIncompleteTitle": "遠端同步資料不完整",
     "syncResolveDownloadSuccess": "遠端版本已成功下載。",

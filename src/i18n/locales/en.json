@@ -2562,7 +2562,7 @@
     "syncPushSuccess": "Snapshot uploaded.",
     "syncPruneAndRetry": "Clean remote snapshots & retry",
     "syncPruneAndRetrySuccess": "Remote snapshots cleaned and push succeeded.",
-    "syncGistCapacityHint": "Gitee/GitHub gist file limit may be full. Cleaning old snapshots and pushing again usually recovers sync.",
+    "syncGistCapacityHint": "Gitee Snippet may have reached its file limit. Cleaning old snapshots and pushing again usually recovers sync.",
     "syncRecoverCurrentSuccess": "Remote metadata recovered.",
     "syncRemoteIncompleteTitle": "Incomplete Remote Sync Data",
     "syncResolveDownloadSuccess": "Remote version downloaded.",

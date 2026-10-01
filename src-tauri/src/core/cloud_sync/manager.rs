@@ -1943,7 +1943,7 @@ fn is_non_retryable_automatic_error(error: &AppError) -> bool {
 /// The frontend must not parse prose error text: keeping the code here means
 /// rewording a message can never silently disable the recovery button.
 fn cloud_sync_failure_code(provider: &str, error: &AppError) -> Option<&'static str> {
-    if !is_gist_provider(provider) {
+    if provider != "gitee_snippet" {
         return None;
     }
 
@@ -1955,7 +1955,7 @@ fn cloud_sync_failure_code(provider: &str, error: &AppError) -> Option<&'static 
     }
 }
 
-/// `CloudSyncStatus.error_code` value for "the gist is full".
+/// `CloudSyncStatus.error_code` value for Gitee snippet capacity failures.
 pub(super) const GIST_CAPACITY_ERROR_CODE: &str = "gist_capacity";
 
 fn should_record_startup_check_failure(error: &AppError) -> bool {
@@ -2309,20 +2309,28 @@ mod tests {
     }
 
     #[test]
-    fn gist_capacity_failure_code_is_limited_to_gist_providers() {
-        let capacity_error = AppError::CloudSync(CloudSyncError::SnapshotNotAccepted {
-            revision: "r1".to_string(),
-        });
-
-        assert_eq!(
-            cloud_sync_failure_code("gitee_snippet", &capacity_error),
-            Some(GIST_CAPACITY_ERROR_CODE)
-        );
-        assert_eq!(
-            cloud_sync_failure_code("github_gist", &capacity_error),
-            Some(GIST_CAPACITY_ERROR_CODE)
-        );
-        assert_eq!(cloud_sync_failure_code("webdav", &capacity_error), None);
+    fn gist_capacity_failure_code_is_limited_to_gitee_snippet() {
+        for error in [
+            CloudSyncError::SnapshotNotAccepted {
+                revision: "r1".to_string(),
+            },
+            CloudSyncError::RemoteFileRejected {
+                filename: "nyaterm-x.blob".to_string(),
+            },
+        ] {
+            let error = AppError::CloudSync(error);
+            assert_eq!(
+                cloud_sync_failure_code("gitee_snippet", &error),
+                Some(GIST_CAPACITY_ERROR_CODE)
+            );
+            for provider in ["github_gist", "webdav", "s3"] {
+                assert_eq!(
+                    cloud_sync_failure_code(provider, &error),
+                    None,
+                    "{provider}"
+                );
+            }
+        }
         assert_eq!(
             cloud_sync_failure_code(
                 "gitee_snippet",
@@ -2364,6 +2372,27 @@ mod tests {
                 "sync",
                 "manual_push",
                 &AppError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")),
+            )
+            .await;
+
+        let status = manager.status.lock().await.clone();
+        assert_eq!(status.state, "failed");
+        assert!(status.error_code.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_failure_does_not_publish_capacity_code_for_github_gist() {
+        let manager = CloudSyncManager::new();
+        manager.settings.lock().await.provider = "github_gist".to_string();
+        manager.status.lock().await.error_code = Some(GIST_CAPACITY_ERROR_CODE.to_string());
+
+        manager
+            .record_failure(
+                "sync",
+                "manual_push",
+                &AppError::CloudSync(CloudSyncError::RemoteFileRejected {
+                    filename: "nyaterm-x.blob".to_string(),
+                }),
             )
             .await;
 

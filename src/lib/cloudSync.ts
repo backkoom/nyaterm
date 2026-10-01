@@ -239,12 +239,12 @@ export function isRemoteInconsistentConflict(conflict?: CloudConflictPreview | n
   return conflict?.kind === "remote_inconsistent";
 }
 
-/** Providers that keep every sync object in one gist-style, file-count limited list. */
+/** Providers that keep every sync object in one flat gist-style file list. */
 export function isGistCloudProvider(provider?: string | null) {
   return provider === "gitee_snippet" || provider === "github_gist";
 }
 
-/** `CloudSyncStatus.error_code` published when the remote gist is full. */
+/** `CloudSyncStatus.error_code` published for Gitee snippet capacity failures. */
 export const GIST_CAPACITY_ERROR_CODE = "gist_capacity";
 
 /**
@@ -262,13 +262,13 @@ export function isGistCapacitySyncFailure(message?: string | null) {
   );
 }
 
-/** Capacity recovery only applies to gist providers: other backends fail for other reasons. */
+/** Capacity recovery only applies to Gitee Snippet's hard file-count limit. */
 export function needsGistCapacityRecovery(
   provider?: string | null,
   message?: string | null,
   errorCode?: string | null,
 ) {
-  if (!isGistCloudProvider(provider)) {
+  if (provider !== "gitee_snippet") {
     return false;
   }
   return errorCode === GIST_CAPACITY_ERROR_CODE || isGistCapacitySyncFailure(message);

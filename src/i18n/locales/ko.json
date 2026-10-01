@@ -2560,7 +2560,7 @@
     "syncPushSuccess": "스냅샷을 업로드했습니다.",
     "syncPruneAndRetry": "원격 스냅샷 정리 후 재시도",
     "syncPruneAndRetrySuccess": "원격 스냅샷을 정리하고 푸시에 성공했습니다.",
-    "syncGistCapacityHint": "Gitee/GitHub gist 파일 수 한도에 도달했을 수 있습니다. 오래된 스냅샷을 정리한 뒤 다시 푸시하면 보통 복구됩니다.",
+    "syncGistCapacityHint": "Gitee gist 파일 수 한도에 도달했을 수 있습니다. 오래된 스냅샷을 정리한 뒤 다시 푸시하면 보통 복구됩니다.",
     "syncRecoverCurrentSuccess": "원격 동기화 메타데이터를 복구했습니다.",
     "syncRemoteIncompleteTitle": "불완전한 원격 동기화 데이터",
     "syncResolveDownloadSuccess": "원격 버전을 다운로드했습니다.",
