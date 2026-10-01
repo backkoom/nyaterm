@@ -1434,7 +1434,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -2128,7 +2128,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3414,7 +3414,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3441,6 +3441,7 @@ dependencies = [
  "image",
  "inventory",
  "itertools 0.14.0",
+ "libc",
  "log",
  "lyon",
  "num_cpus",
@@ -3484,8 +3485,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-base"
-version = "0.6.5"
-source = "git+https://github.com/nyakang/gpui-kit?rev=6492a25945b54072490c80730868d045a9393cb0#6492a25945b54072490c80730868d045a9393cb0"
+version = "0.7.0"
+source = "git+https://github.com/nyakang/gpui-kit?rev=04efb01f5c19fbb77c575632c9f09f30aadccc38#04efb01f5c19fbb77c575632c9f09f30aadccc38"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3498,9 +3499,11 @@ dependencies = [
  "gpui_macros",
  "html5ever",
  "instant",
+ "itertools 0.13.0",
  "lsp-types",
  "markdown",
  "markup5ever_rcdom",
+ "num-traits",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -3521,8 +3524,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-component"
-version = "0.6.5"
-source = "git+https://github.com/nyakang/gpui-kit?rev=6492a25945b54072490c80730868d045a9393cb0#6492a25945b54072490c80730868d045a9393cb0"
+version = "0.7.0"
+source = "git+https://github.com/nyakang/gpui-kit?rev=04efb01f5c19fbb77c575632c9f09f30aadccc38#04efb01f5c19fbb77c575632c9f09f30aadccc38"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3579,8 +3582,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-component-macros"
-version = "0.6.5"
-source = "git+https://github.com/nyakang/gpui-kit?rev=6492a25945b54072490c80730868d045a9393cb0#6492a25945b54072490c80730868d045a9393cb0"
+version = "0.7.0"
+source = "git+https://github.com/nyakang/gpui-kit?rev=04efb01f5c19fbb77c575632c9f09f30aadccc38#04efb01f5c19fbb77c575632c9f09f30aadccc38"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -3590,8 +3593,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-kit"
-version = "0.6.5"
-source = "git+https://github.com/nyakang/gpui-kit?rev=6492a25945b54072490c80730868d045a9393cb0#6492a25945b54072490c80730868d045a9393cb0"
+version = "0.7.0"
+source = "git+https://github.com/nyakang/gpui-kit?rev=04efb01f5c19fbb77c575632c9f09f30aadccc38#04efb01f5c19fbb77c575632c9f09f30aadccc38"
 dependencies = [
  "gpui",
  "gpui-base",
@@ -3603,8 +3606,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-kit-assets"
-version = "0.6.5"
-source = "git+https://github.com/nyakang/gpui-kit?rev=6492a25945b54072490c80730868d045a9393cb0#6492a25945b54072490c80730868d045a9393cb0"
+version = "0.7.0"
+source = "git+https://github.com/nyakang/gpui-kit?rev=04efb01f5c19fbb77c575632c9f09f30aadccc38#04efb01f5c19fbb77c575632c9f09f30aadccc38"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3618,30 +3621,36 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "anyhow",
- "block",
+ "async-task",
+ "block2 0.6.2",
  "cbindgen",
- "cocoa 0.26.0",
  "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
  "core-video",
  "derive_more",
+ "dispatch2",
  "etagere",
  "foreign-types",
  "gpui",
+ "gpui_util",
  "image",
+ "libc",
  "log",
+ "mach2 0.5.0",
  "metal",
- "objc",
  "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
  "parking_lot",
 ]
 
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3677,7 +3686,6 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-plasma",
  "wayland-protocols-wlr",
- "x11-clipboard",
  "x11rb",
  "xkbcommon",
  "zed-scap",
@@ -3687,12 +3695,11 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "accesskit",
  "accesskit_macos",
  "anyhow",
- "async-task",
  "block2 0.6.2",
  "cocoa 0.26.0",
  "collections",
@@ -3709,9 +3716,7 @@ dependencies = [
  "gpui_util",
  "image",
  "itertools 0.14.0",
- "libc",
  "log",
- "mach2 0.5.0",
  "objc",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -3733,7 +3738,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3744,8 +3749,9 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
+ "anyhow",
  "console_error_panic_hook",
  "gpui",
  "gpui_linux",
@@ -3757,7 +3763,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "schemars",
  "serde",
@@ -3767,7 +3773,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "anyhow",
  "log",
@@ -3777,7 +3783,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3805,7 +3811,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3831,7 +3837,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4260,7 +4266,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4572,11 +4578,11 @@ dependencies = [
 
 [[package]]
 name = "inotify"
-version = "0.10.2"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdd168d97690d0b8c412d6b6c10360277f4d7ee495c5d0d5d5fe0854923255cc"
+checksum = "4cc00ea907cab49550b7da656f80ebb97be1b997d931fbcd28d39734e17ce592"
 dependencies = [
- "bitflags 1.3.2",
+ "bitflags 2.13.2",
  "inotify-sys",
  "libc",
 ]
@@ -4679,7 +4685,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 [[package]]
 name = "ironrdp-async"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "bytes",
  "ironrdp-connector",
@@ -4692,12 +4698,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-bulk"
 version = "0.1.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 
 [[package]]
 name = "ironrdp-cfg"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-propertyset",
 ]
@@ -4705,7 +4711,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -4740,7 +4746,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-cliprdr"
 version = "0.7.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -4752,7 +4758,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-cliprdr-native"
 version = "0.7.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-cliprdr",
  "ironrdp-core",
@@ -4763,7 +4769,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-connector"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-core",
  "ironrdp-error",
@@ -4780,7 +4786,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-core"
 version = "0.2.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-error",
 ]
@@ -4788,7 +4794,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-displaycontrol"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-core",
  "ironrdp-dvc",
@@ -4800,7 +4806,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-dvc"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-core",
  "ironrdp-pdu",
@@ -4811,7 +4817,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-echo"
 version = "0.4.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-core",
  "ironrdp-dvc",
@@ -4822,7 +4828,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-egfx"
 version = "0.3.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -4836,12 +4842,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-error"
 version = "0.2.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 
 [[package]]
 name = "ironrdp-graphics"
 version = "0.9.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -4858,7 +4864,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-input"
 version = "0.7.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "bitvec",
  "ironrdp-pdu",
@@ -4868,7 +4874,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-mstsgu"
 version = "0.0.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
@@ -4891,7 +4897,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-pdu"
 version = "0.9.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -4914,12 +4920,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-propertyset"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 
 [[package]]
 name = "ironrdp-rail"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-core",
  "ironrdp-svc",
@@ -4928,7 +4934,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-rdcleanpath"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "der 0.8.2",
 ]
@@ -4936,7 +4942,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-rdpei"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -4949,7 +4955,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-session"
 version = "0.11.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-bulk",
  "ironrdp-core",
@@ -4967,7 +4973,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-svc"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -4977,7 +4983,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-tls"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "rustls-native-certs",
  "tokio",
@@ -4988,7 +4994,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-tokio"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=21e59c9c83fd02ecdb7404c18b98583f0c7ae365#21e59c9c83fd02ecdb7404c18b98583f0c7ae365"
+source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
 dependencies = [
  "ironrdp-async",
  "ironrdp-connector",
@@ -5933,12 +5939,11 @@ dependencies = [
 
 [[package]]
 name = "notify"
-version = "7.0.0"
+version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c533b4c39709f9ba5005d8002048266593c1cfaf3c5f0739d5b8ab0c6c504009"
+checksum = "4d3d07927151ff8575b7087f245456e549fea62edf0ec4e565a5ee50c8402bc3"
 dependencies = [
  "bitflags 2.13.2",
- "filetime",
  "fsevent-sys",
  "inotify",
  "kqueue",
@@ -5947,7 +5952,7 @@ dependencies = [
  "mio",
  "notify-types",
  "walkdir",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5966,11 +5971,11 @@ dependencies = [
 
 [[package]]
 name = "notify-types"
-version = "1.0.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "585d3cb5e12e01aed9e8a1f70d5c6b5e86fe2a6e48fc8cd0b3e0b8df6f6eb174"
+checksum = "42b8cfee0e339a0337359f3c88165702ac6e600dc01c0cc9579a92d62b08477a"
 dependencies = [
- "instant",
+ "bitflags 2.13.2",
 ]
 
 [[package]]
@@ -6161,7 +6166,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "usvg 0.45.1",
+ "usvg 0.46.0",
  "uuid",
 ]
 
@@ -6954,7 +6959,7 @@ dependencies = [
 [[package]]
 name = "pageant"
 version = "0.2.3"
-source = "git+https://github.com/nyakang/russh?rev=20e3c6f2d8d86ec2ea9c5975024f3804d34eeef1#20e3c6f2d8d86ec2ea9c5975024f3804d34eeef1"
+source = "git+https://github.com/nyakang/russh?rev=5ed33bde6e9f0288b7f0d54394d29f436849582b#5ed33bde6e9f0288b7f0d54394d29f436849582b"
 dependencies = [
  "base16ct",
  "byteorder",
@@ -7121,7 +7126,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "collections",
  "serde",
@@ -8238,7 +8243,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "derive_refineable",
 ]
@@ -8477,7 +8482,7 @@ dependencies = [
 [[package]]
 name = "russh"
 version = "0.63.3"
-source = "git+https://github.com/nyakang/russh?rev=20e3c6f2d8d86ec2ea9c5975024f3804d34eeef1#20e3c6f2d8d86ec2ea9c5975024f3804d34eeef1"
+source = "git+https://github.com/nyakang/russh?rev=5ed33bde6e9f0288b7f0d54394d29f436849582b#5ed33bde6e9f0288b7f0d54394d29f436849582b"
 dependencies = [
  "aes 0.9.3",
  "aws-lc-rs",
@@ -8548,7 +8553,7 @@ dependencies = [
 [[package]]
 name = "russh-cryptovec"
 version = "0.62.0"
-source = "git+https://github.com/nyakang/russh?rev=20e3c6f2d8d86ec2ea9c5975024f3804d34eeef1#20e3c6f2d8d86ec2ea9c5975024f3804d34eeef1"
+source = "git+https://github.com/nyakang/russh?rev=5ed33bde6e9f0288b7f0d54394d29f436849582b#5ed33bde6e9f0288b7f0d54394d29f436849582b"
 dependencies = [
  "log",
  "nix 0.31.3",
@@ -8558,8 +8563,8 @@ dependencies = [
 
 [[package]]
 name = "russh-sftp"
-version = "3.0.0"
-source = "git+https://github.com/nyakang/russh-sftp?rev=d24a126c95ea3e6698f16156ff797c3f40fa84c6#d24a126c95ea3e6698f16156ff797c3f40fa84c6"
+version = "3.0.1"
+source = "git+https://github.com/nyakang/russh-sftp?rev=aba3096b600dbbecbe7172dd4dec946667346c6b#aba3096b600dbbecbe7172dd4dec946667346c6b"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
@@ -8578,7 +8583,7 @@ dependencies = [
 [[package]]
 name = "russh-util"
 version = "0.52.0"
-source = "git+https://github.com/nyakang/russh?rev=20e3c6f2d8d86ec2ea9c5975024f3804d34eeef1#20e3c6f2d8d86ec2ea9c5975024f3804d34eeef1"
+source = "git+https://github.com/nyakang/russh?rev=5ed33bde6e9f0288b7f0d54394d29f436849582b#5ed33bde6e9f0288b7f0d54394d29f436849582b"
 dependencies = [
  "chrono",
  "tokio",
@@ -8895,7 +8900,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "async-task",
  "backtrace",
@@ -9636,8 +9641,8 @@ dependencies = [
 
 [[package]]
 name = "sspi"
-version = "0.22.0"
-source = "git+https://github.com/nyakang/sspi-rs?rev=91483f8f6211835bf74be4f614088cb19516a51a#91483f8f6211835bf74be4f614088cb19516a51a"
+version = "0.22.1"
+source = "git+https://github.com/nyakang/sspi-rs?rev=37afc5f400193a219fdd1cf4c9d83f1fedac650c#37afc5f400193a219fdd1cf4c9d83f1fedac650c"
 dependencies = [
  "async-dnssd",
  "async-recursion",
@@ -9776,7 +9781,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "heapless",
  "log",
@@ -11116,7 +11121,7 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 [[package]]
 name = "util_macros"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "perf",
  "quote",
@@ -12437,16 +12442,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "x11-clipboard"
-version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "662d74b3d77e396b8e5beb00b9cad6a9eccf40b2ef68cc858784b14c41d535a3"
-dependencies = [
- "libc",
- "x11rb",
-]
-
-[[package]]
 name = "x11rb"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13045,7 +13040,7 @@ checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 [[package]]
 name = "zlog"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "anyhow",
  "chrono",
@@ -13084,7 +13079,7 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -13095,7 +13090,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=4ba16e3a20a9403b2d0266626f5c435bb1204223#4ba16e3a20a9403b2d0266626f5c435bb1204223"
+source = "git+https://github.com/nyakang/zed?rev=0544bd292a52fed9718e1ba9739c4ac82c41d223#0544bd292a52fed9718e1ba9739c4ac82c41d223"
 
 [[package]]
 name = "zune-core"
