@@ -89,6 +89,7 @@ pub struct NyaInputState {
     pending_value: Option<SharedString>,
     silent_value: Option<SharedString>,
     placeholder: SharedString,
+    placeholder_pending: bool,
     masked: bool,
     applied_masked: bool,
     multi_line: bool,
@@ -113,6 +114,7 @@ impl NyaInputState {
             pending_value: None,
             silent_value: None,
             placeholder: SharedString::default(),
+            placeholder_pending: false,
             masked: false,
             applied_masked: false,
             multi_line: false,
@@ -163,6 +165,19 @@ impl NyaInputState {
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            self.placeholder_pending = true;
+            cx.notify();
+        }
     }
 
     pub fn masked(mut self, masked: bool) -> Self {
@@ -271,6 +286,26 @@ impl NyaInputState {
 
     fn ensure_component(&mut self, window: &mut Window, cx: &mut Context<Self>) -> ComponentState {
         if let Some(state) = self.state.clone() {
+            if std::mem::take(&mut self.placeholder_pending) {
+                let placeholder = component_placeholder(self.placeholder.clone(), self.multi_line);
+                match &state {
+                    ComponentState::Input(input) => {
+                        input.update(cx, |input, cx| {
+                            input.set_placeholder(placeholder, window, cx)
+                        });
+                    }
+                    ComponentState::Textarea(input) => {
+                        input.update(cx, |input, cx| {
+                            input.set_placeholder(placeholder, window, cx)
+                        });
+                    }
+                    ComponentState::Editor(input) => {
+                        input.update(cx, |input, cx| {
+                            input.set_placeholder(placeholder, window, cx)
+                        });
+                    }
+                }
+            }
             if let Some(value) = self.pending_value.take() {
                 state.set_value(value, window, cx);
             }
@@ -283,6 +318,7 @@ impl NyaInputState {
             .unwrap_or_else(|| self.seed.clone());
         let masked = self.masked;
         let multi_line = self.multi_line;
+        self.placeholder_pending = false;
         let placeholder = component_placeholder(self.placeholder.clone(), multi_line);
         let language = self.language.clone();
         let rows = self.rows;
@@ -549,6 +585,7 @@ pub struct NyaInputShell {
     multi_line: bool,
     search: bool,
     framed: bool,
+    height: Option<gpui::Pixels>,
     trailing: Vec<AnyElement>,
     on_key_down: Option<KeyDownHandler>,
 }
@@ -562,6 +599,7 @@ impl NyaInputShell {
             multi_line: false,
             search: false,
             framed: true,
+            height: None,
             trailing: Vec::new(),
             on_key_down: None,
         }
@@ -575,6 +613,11 @@ impl NyaInputShell {
 
     pub fn multi_line(mut self) -> Self {
         self.multi_line = true;
+        self
+    }
+
+    pub fn height(mut self, height: gpui::Pixels) -> Self {
+        self.height = Some(height);
         self
     }
 
@@ -612,6 +655,7 @@ impl RenderOnce for NyaInputShell {
             multi_line,
             search,
             framed,
+            height,
             trailing,
             on_key_down,
         } = self;
@@ -649,7 +693,7 @@ impl RenderOnce for NyaInputShell {
             ComponentState::Textarea(state) => Textarea::new(&state)
                 .disabled(disabled)
                 .readonly(readonly)
-                .h(px(88.))
+                .h(height.unwrap_or(px(88.)))
                 .into_any_element(),
             ComponentState::Editor(state) => Editor::new(&state)
                 .disabled(disabled)

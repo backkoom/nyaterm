@@ -4,13 +4,17 @@ use rust_i18n::t;
 
 use gpui::{
     App, ClickEvent, ClipboardItem, Context, Entity, FontWeight, IntoElement, MouseButton,
-    MouseDownEvent, Rgba, SharedString, WeakEntity, Window, div, prelude::*, px, rgb, rgba, svg,
+    MouseDownEvent, RenderImage, Rgba, ScrollHandle, SharedString, WeakEntity, Window, div, img,
+    prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::{
     AgentCommandExecutionMode, AiAction, AiAgentKind, AiCommandCard, AiMessage, AiMessageRole,
-    AiMode, AiModelConfigItem, AiReasoningEffort, AiSession, AiSessionScopeType, truncate_preview,
+    AiMode, AiModelConfigItem, AiProviderKind, AiReasoningEffort, AiSession, AiSessionScopeType,
+    truncate_preview,
 };
-use nyaterm_ui::{NyaInputShell, NyaScrollable, NyaSearchInput};
+use nyaterm_ui::{
+    NyaDropdownMenu, NyaInputShell, NyaMenuAnchor, NyaMenuItem, NyaScrollable, NyaSearchInput,
+};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::{
@@ -25,7 +29,7 @@ use crate::models::{
     AiDetectedErrorState, AiMessageMenuState, AiPreparedRequest, NavItem, SettingsTab,
 };
 use crate::theme::ThemePalette;
-use crate::widgets::{mode_button, small_button, status_pill, svg_icon_button};
+use crate::widgets::{small_button, status_pill, svg_icon_button};
 
 use crate::features::runtime_jobs::{AiAgentStepStatus, AiAgentStepView};
 
@@ -49,6 +53,8 @@ pub(in crate::features) struct AiPanelChrome {
 pub(in crate::features) struct AiModelChoice {
     pub model: AiModelConfigItem,
     pub provider_label: String,
+    pub provider_kind: Option<AiProviderKind>,
+    pub provider_icon: Option<Arc<RenderImage>>,
 }
 
 #[derive(Clone)]
@@ -79,12 +85,17 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub agent_mode: bool,
     pub running: bool,
     pub agent_kind: AiAgentKind,
+    pub codex_enabled: bool,
+    pub claude_code_enabled: bool,
     pub reasoning_effort: AiReasoningEffort,
+    pub reasoning_choices: Arc<[AiReasoningEffort]>,
     pub external_agent: bool,
     pub external_model_label: String,
     pub selected_model_id: Option<String>,
     pub selected_model_exists: bool,
     pub model_label: String,
+    pub selected_provider_kind: Option<AiProviderKind>,
+    pub selected_provider_icon: Option<Arc<RenderImage>>,
     pub enabled_models: Arc<[AiModelConfigItem]>,
     pub model_choices: Arc<[AiModelChoice]>,
     pub discovery_menu_open: bool,
@@ -130,6 +141,10 @@ pub(in crate::features) struct AiHeaderPresentation {
 pub(in crate::features) struct AiPanel {
     app: WeakEntity<NyaTermApp>,
     snapshot: Option<AiPanelSnapshot>,
+    transcript_scroll: ScrollHandle,
+    mention_scroll: ScrollHandle,
+    model_scroll: ScrollHandle,
+    picker_reveal_pending: bool,
     #[cfg(test)]
     paint_count: usize,
     #[cfg(test)]
@@ -141,6 +156,10 @@ impl AiPanel {
         Self {
             app,
             snapshot: None,
+            transcript_scroll: ScrollHandle::new(),
+            mention_scroll: ScrollHandle::new(),
+            model_scroll: ScrollHandle::new(),
+            picker_reveal_pending: false,
             #[cfg(test)]
             paint_count: 0,
             #[cfg(test)]
@@ -153,6 +172,47 @@ impl AiPanel {
         snapshot: AiPanelSnapshot,
         cx: &mut Context<Self>,
     ) {
+        // Inspect the previous layout before the new transcript changes its extent.
+        // Manual scrolling (including scrollbar dragging) suspends following until
+        // the reader returns to within 60px of the bottom.
+        if self.snapshot.as_ref().is_none_or(|previous| {
+            previous.current_ai_session_id != snapshot.current_ai_session_id
+                || previous.owner_terminal_id != snapshot.owner_terminal_id
+                || ai_transcript_near_bottom(&self.transcript_scroll)
+        }) {
+            self.transcript_scroll.scroll_to_bottom();
+        }
+        if snapshot.mention_open
+            && self.snapshot.as_ref().is_none_or(|previous| {
+                !previous.mention_open
+                    || previous.mention_index != snapshot.mention_index
+                    || previous.prompt_draft != snapshot.prompt_draft
+            })
+        {
+            self.mention_scroll.scroll_to_item(snapshot.mention_index);
+            self.picker_reveal_pending = true;
+        }
+        if snapshot.discovery_menu_open
+            && self.snapshot.as_ref().is_none_or(|previous| {
+                !previous.discovery_menu_open
+                    || previous.discovery_index != snapshot.discovery_index
+                    || previous.reasoning_choices != snapshot.reasoning_choices
+                    || !previous
+                        .model_choices
+                        .iter()
+                        .map(|choice| &choice.model.id)
+                        .eq(snapshot.model_choices.iter().map(|choice| &choice.model.id))
+            })
+        {
+            let index = snapshot.discovery_index
+                + if snapshot.discovery_index < snapshot.reasoning_choices.len() {
+                    1
+                } else {
+                    2
+                };
+            self.model_scroll.scroll_to_item(index);
+            self.picker_reveal_pending = true;
+        }
         self.snapshot = Some(snapshot);
         #[cfg(test)]
         {
@@ -185,8 +245,10 @@ impl AiPanel {
             return R::default();
         };
         app.update(cx, |app, cx| {
+            let before = app.ai_header_presentation();
             let result = f(app, cx);
             app.defer_ai_panel_snapshot_flush(cx);
+            app.notify_root_if_ai_header_changed(before, cx);
             result
         })
     }
@@ -210,11 +272,13 @@ impl AiPanel {
         let agent_step_rows = self.ai_agent_step_list(&snapshot, cx);
         let prompt_input = NyaInputShell::new("ai.chat.prompt", &snapshot.prompt_input)
             .multi_line()
+            .height(px(64.))
             .into_any_element();
         let model_search_input = snapshot
             .model_search_input
             .as_ref()
             .map(|field| NyaSearchInput::new("ai-model-search", field).into_any_element());
+        let panel_entity = cx.weak_entity();
         let composer_disabled = snapshot.running || !snapshot.enabled;
         let send_disabled = !snapshot.running
             && (!snapshot.enabled
@@ -228,26 +292,75 @@ impl AiPanel {
             .overflow_hidden()
             .bg(snapshot.chrome.transparent_surface)
             .relative()
+            .on_children_prepainted(move |_, _, cx| {
+                let Some(panel) = panel_entity.upgrade() else {
+                    return;
+                };
+                if !panel.read(cx).picker_reveal_pending {
+                    return;
+                }
+                // A mounted handle learns its viewport and overflow mode during
+                // prepaint. Queue reveal only after those bounds are measured,
+                // including when filtering moves a bottom-anchored popup.
+                cx.defer(move |cx| {
+                    panel.update(cx, |panel, cx| {
+                        if !std::mem::take(&mut panel.picker_reveal_pending) {
+                            return;
+                        }
+                        if let Some(snapshot) = panel.snapshot.as_ref() {
+                            if snapshot.mention_open {
+                                panel.mention_scroll.scroll_to_item(snapshot.mention_index);
+                            }
+                            if snapshot.discovery_menu_open {
+                                let headings = if snapshot.discovery_index
+                                    < snapshot.reasoning_choices.len()
+                                {
+                                    1
+                                } else {
+                                    2
+                                };
+                                panel
+                                    .model_scroll
+                                    .scroll_to_item(snapshot.discovery_index + headings);
+                            }
+                        }
+                        cx.notify();
+                    })
+                });
+            })
             .when_some(snapshot.detected_error.clone(), |this, detected| {
                 this.child(self.ai_detected_error_banner(&snapshot, detected, cx))
             })
             .child(
                 div()
-                    .id(SharedString::from("ai-transcript-scroll"))
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
                     .w_full()
-                    .overflow_y_scrollbar()
-                    .px_3()
-                    .py_2()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(self.ai_transcript_body(&snapshot, agent_step_rows, command_rows, cx)),
+                    .relative()
+                    .child(
+                        div()
+                            .id(SharedString::from("ai-transcript-scroll"))
+                            .debug_selector(|| "ai-transcript-viewport".to_string())
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.transcript_scroll)
+                            .px_3()
+                            .py_2()
+                            .flex()
+                            .flex_col()
+                            .child(self.ai_transcript_body(
+                                &snapshot,
+                                agent_step_rows,
+                                command_rows,
+                                cx,
+                            )),
+                    )
+                    .vertical_scrollbar(&self.transcript_scroll),
             )
             .child(
                 div()
+                    .debug_selector(|| "ai-composer".to_string())
                     .flex_none()
                     .border_t_1()
                     .border_color(rgb(palette.border))
@@ -262,16 +375,11 @@ impl AiPanel {
                     .when(!snapshot.target_sessions.is_empty(), |this| {
                         this.child(self.ai_target_sessions_row(&snapshot, cx))
                     })
-                    .when(snapshot.mention_open, |this| {
-                        this.child(self.ai_mention_popover(&snapshot, cx))
-                    })
-                    .child(self.ai_mode_switch(&snapshot, cx))
-                    .when(!snapshot.external_agent, |this| {
-                        this.child(self.ai_reasoning_switch(&snapshot, cx))
-                    })
                     .child(
                         div()
+                            .debug_selector(|| "ai-prompt".to_string())
                             .w_full()
+                            .relative()
                             .flex()
                             .when(composer_disabled, |this| this.opacity(0.56))
                             .on_key_down(cx.listener(|panel, event: &gpui::KeyDownEvent, _, cx| {
@@ -281,7 +389,10 @@ impl AiPanel {
                                     cx.stop_propagation();
                                 }
                             }))
-                            .child(div().min_w_0().flex_1().child(prompt_input)),
+                            .child(div().min_w_0().flex_1().child(prompt_input))
+                            .when(snapshot.mention_open, |this| {
+                                this.child(self.ai_mention_popover(&snapshot, cx))
+                            }),
                     )
                     .child(
                         div()
@@ -296,6 +407,7 @@ impl AiPanel {
                                     .flex()
                                     .items_center()
                                     .gap_2()
+                                    .child(self.ai_mode_switch(&snapshot, cx))
                                     .when(snapshot.external_agent, |this| {
                                         this.child(ai_agent_status_badge(&snapshot))
                                     })
@@ -381,7 +493,7 @@ impl AiPanel {
                     .child(small_button(
                         palette,
                         "ai-detected-error-analyze",
-                        "Analyze",
+                        t!("ai.analyze"),
                         cx.listener(move |panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| {
                                 app.analyze_ai_detected_error(analyze_state.clone(), cx);
@@ -391,7 +503,7 @@ impl AiPanel {
                     .child(small_button(
                         palette,
                         "ai-detected-error-close",
-                        "Close",
+                        t!("common.close"),
                         cx.listener(|panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| {
                                 app.dismiss_ai_detected_error(cx);
@@ -547,8 +659,12 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
-        let mut popover = div()
-            .max_h(px(192.))
+        let popover = div()
+            .absolute()
+            .bottom(gpui::relative(1.))
+            .mb_1()
+            .left_0()
+            .right_0()
             .overflow_hidden()
             .rounded_md()
             .border_1()
@@ -572,16 +688,25 @@ impl AiPanel {
                 )
                 .into_any_element();
         }
-        for (index, candidate) in snapshot.mention_candidates.iter().enumerate().take(8) {
+        let mut rows = div()
+            .id("ai-mention-list")
+            .max_h(px(192.))
+            .overflow_y_scroll()
+            .track_scroll(&self.mention_scroll)
+            .flex()
+            .flex_col();
+        for (index, candidate) in snapshot.mention_candidates.iter().enumerate() {
             let focused = index == snapshot.mention_index;
             let candidate = candidate.clone();
-            popover = popover.child(
+            rows = rows.child(
                 div()
                     .id(SharedString::from(format!(
                         "ai-mention-session-{}",
                         candidate.session_id
                     )))
+                    .debug_selector(move || format!("ai-mention-row-{index}"))
                     .h(px(30.))
+                    .flex_none()
                     .px_2()
                     .flex()
                     .items_center()
@@ -626,7 +751,14 @@ impl AiPanel {
                     ),
             );
         }
-        popover.into_any_element()
+        popover
+            .child(
+                div()
+                    .relative()
+                    .child(rows)
+                    .vertical_scrollbar(&self.mention_scroll),
+            )
+            .into_any_element()
     }
 
     fn ai_mode_switch(
@@ -635,99 +767,88 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
+        let modes = [
+            (AiMode::Ask, AiAgentKind::Nyaterm, t!("ai.modeAsk"), true),
+            (
+                AiMode::Agent,
+                AiAgentKind::Nyaterm,
+                t!("ai.modeNyatermAgent"),
+                true,
+            ),
+            (
+                AiMode::Agent,
+                AiAgentKind::Codex,
+                t!("ai.modeCodexAgent"),
+                snapshot.codex_enabled,
+            ),
+            (
+                AiMode::Agent,
+                AiAgentKind::ClaudeCode,
+                t!("ai.modeClaudeCodeAgent"),
+                snapshot.claude_code_enabled,
+            ),
+        ];
+        let mut items = Vec::new();
+        let mut selected_label = t!("ai.modeAsk");
+        for (mode, kind, label, enabled) in modes {
+            let selected = if mode == AiMode::Ask {
+                !snapshot.agent_mode
+            } else {
+                snapshot.agent_mode && snapshot.agent_kind == kind
+            };
+            if selected {
+                selected_label = label.clone();
+            }
+            items.push(
+                NyaMenuItem::action(label)
+                    .checked(selected)
+                    .disabled(!enabled)
+                    .on_click(cx.listener(move |panel, _, window, cx| {
+                        panel.with_app(cx, |app, cx| {
+                            app.set_ai_run_mode(mode.clone(), kind.clone(), cx);
+                            app.focus_text_input_if_present("ai.chat.prompt", window, cx);
+                        });
+                    })),
+            );
+        }
         div()
-            .h(px(28.))
-            .w_full()
-            .flex()
-            .items_center()
+            .debug_selector(|| "ai-mode-control".to_string())
+            .w(px(108.))
+            .min_w_0()
+            .max_w(gpui::relative(0.45))
+            .flex_none()
             .rounded_md()
             .border_1()
             .border_color(rgb(palette.border))
             .bg(rgb(palette.input))
-            .p(px(1.))
-            .gap_0()
-            .child(mode_button(
-                "ai-mode-ask",
-                "Ask",
-                !snapshot.agent_mode,
-                palette,
-                cx.listener(|panel, _, _, cx| {
-                    panel.with_app(cx, |app, cx| {
-                        app.set_ai_run_mode(AiMode::Ask, AiAgentKind::Nyaterm, cx);
-                    });
-                }),
-            ))
-            .child(mode_button(
-                "ai-mode-nyaterm",
-                "NyaTerm Agent",
-                snapshot.agent_mode && snapshot.agent_kind == AiAgentKind::Nyaterm,
-                palette,
-                cx.listener(|panel, _, _, cx| {
-                    panel.with_app(cx, |app, cx| {
-                        app.set_ai_run_mode(AiMode::Agent, AiAgentKind::Nyaterm, cx);
-                    });
-                }),
-            ))
-            .child(mode_button(
-                "ai-mode-codex",
-                "Codex Agent",
-                snapshot.agent_mode && snapshot.agent_kind == AiAgentKind::Codex,
-                palette,
-                cx.listener(|panel, _, _, cx| {
-                    panel.with_app(cx, |app, cx| {
-                        app.set_ai_run_mode(AiMode::Agent, AiAgentKind::Codex, cx);
-                    });
-                }),
-            ))
-            .child(mode_button(
-                "ai-mode-claude",
-                "Claude Code",
-                snapshot.agent_mode && snapshot.agent_kind == AiAgentKind::ClaudeCode,
-                palette,
-                cx.listener(|panel, _, _, cx| {
-                    panel.with_app(cx, |app, cx| {
-                        app.set_ai_run_mode(AiMode::Agent, AiAgentKind::ClaudeCode, cx);
-                    });
-                }),
-            ))
-    }
-
-    fn ai_reasoning_switch(
-        &self,
-        snapshot: &AiPanelSnapshot,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let palette = snapshot.chrome.palette;
-        let mut row = div().h(px(25.)).w_full().flex().items_center().gap_1();
-        let model = snapshot
-            .enabled_models
-            .iter()
-            .find(|model| Some(&model.id) == snapshot.selected_model_id.as_ref());
-        for effort in nyaterm_core::ai::provider_settings::model_reasoning_options(model) {
-            let label = match effort {
-                AiReasoningEffort::Auto => "Auto",
-                AiReasoningEffort::None => "None",
-                AiReasoningEffort::Minimal => "Minimal",
-                AiReasoningEffort::Low => "Low",
-                AiReasoningEffort::Medium => "Med",
-                AiReasoningEffort::High => "High",
-                AiReasoningEffort::XHigh => "XHigh",
-                AiReasoningEffort::Max => "Max",
-                AiReasoningEffort::Ultra => "Ultra",
-            };
-            row = row.child(mode_button(
-                format!("ai-reasoning-{label}"),
-                label,
-                snapshot.reasoning_effort == effort,
-                palette,
-                cx.listener(move |panel, _, _, cx| {
-                    panel.with_app(cx, |app, cx| {
-                        app.set_ai_reasoning_effort(effort.clone(), cx)
-                    });
-                }),
-            ));
-        }
-        row
+            .child(
+                NyaDropdownMenu::new("ai-mode-selector")
+                    .anchor(NyaMenuAnchor::BottomLeft)
+                    .min_width(px(170.))
+                    .content(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .text_size(px(11.))
+                                    .text_ellipsis()
+                                    .child(selected_label),
+                            )
+                            .child(
+                                svg()
+                                    .size(px(12.))
+                                    .flex_none()
+                                    .path("icons/chevron-down.svg"),
+                            ),
+                    )
+                    .items(items),
+            )
     }
 
     fn ai_model_selector(
@@ -737,68 +858,102 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
-        let selected_id = snapshot.selected_model_id.clone();
-        let discovery_menu_open = snapshot.discovery_menu_open;
-        let model_label = snapshot.model_label.clone();
+        let content = div()
+            .min_w_0()
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .when(snapshot.selected_model_exists, |this| {
+                this.child(ai_model_provider_badge(
+                    palette,
+                    snapshot.selected_provider_kind.as_ref(),
+                    snapshot.selected_provider_icon.as_ref(),
+                ))
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .text_size(px(11.))
+                    .text_ellipsis()
+                    .child(snapshot.model_label.clone()),
+            )
+            .when(snapshot.selected_model_exists, |this| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(format!(
+                            "· {}",
+                            super::reasoning_effort_label(&snapshot.reasoning_effort)
+                        )),
+                )
+            })
+            .child(
+                svg()
+                    .size(px(12.))
+                    .flex_none()
+                    .path("icons/chevron-down.svg"),
+            );
         div()
             .min_w_0()
             .flex_1()
             .relative()
             .child(
                 div()
-                    .id(SharedString::from("ai-model-selector"))
-                    .min_w_0()
+                    .debug_selector(|| "ai-model-control".to_string())
                     .h(px(28.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
+                    .min_w_0()
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
                     .bg(rgb(palette.input))
-                    .text_size(px(11.))
-                    .text_color(rgb(palette.text_muted))
-                    .overflow_hidden()
-                    .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .hover(move |this| {
-                        this.border_color(rgb(palette.link))
-                            .text_color(rgb(palette.text))
-                    })
-                    .on_click(cx.listener(|panel, _, window, cx| {
-                        panel.with_app(cx, |app, cx| {
-                            let selected_index = app.ai_selected_model_index();
-                            let opening = app.ai.toggle_discovery_menu(selected_index);
-                            if opening {
-                                app.reset_text_input("ai.model-search", "", cx);
-                                let field = app.text_input(
-                                    "ai.model-search",
-                                    "",
-                                    TextInputSetup::placeholder("Search models"),
-                                    cx,
-                                );
-                                window.focus(&field.read(cx).focus_handle(), cx);
-                            }
-                        });
-                    }))
                     .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .child(truncate_preview(&model_label, 24)),
-                    )
-                    .child(
-                        svg()
-                            .size(px(14.))
-                            .flex_none()
-                            .path("icons/chevron-down.svg")
-                            .text_color(rgb(palette.text_dimmed)),
+                        nyaterm_ui::NyaButton::new("ai-model-selector", "")
+                            .variant(nyaterm_ui::NyaButtonVariant::Ghost)
+                            .small()
+                            .height(px(28.))
+                            .full_width()
+                            .content(content)
+                            .disabled(snapshot.enabled_models.is_empty())
+                            .tooltip(format!(
+                                "{} · {}",
+                                snapshot.model_label,
+                                super::reasoning_effort_label(&snapshot.reasoning_effort)
+                            ))
+                            .on_click(cx.listener(|panel, _, window, cx| {
+                                panel.with_app(cx, |app, cx| {
+                                    let selected_index = app.ai_selected_model_index();
+                                    if app.ai.toggle_discovery_menu(selected_index) {
+                                        app.reset_text_input("ai.model-search", "", cx);
+                                        let field = app.text_input(
+                                            "ai.model-search",
+                                            "",
+                                            TextInputSetup::placeholder(t!("ai.searchModels")),
+                                            cx,
+                                        );
+                                        window.focus(&field.read(cx).focus_handle(), cx);
+                                    } else {
+                                        app.focus_text_input_if_present(
+                                            "ai.chat.prompt",
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                });
+                            })),
                     ),
             )
-            .when(discovery_menu_open, |this| {
-                this.child(self.ai_model_menu(snapshot, selected_id, model_search_input, cx))
+            .when(snapshot.discovery_menu_open, |this| {
+                this.child(self.ai_model_menu(
+                    snapshot,
+                    snapshot.selected_model_id.clone(),
+                    model_search_input,
+                    cx,
+                ))
             })
     }
 
@@ -819,7 +974,7 @@ impl AiPanel {
             .right_0()
             .bottom(px(34.))
             .w(px(260.))
-            .max_h(px(280.))
+            .max_h(px(360.))
             .overflow_hidden()
             .rounded_md()
             .border_1()
@@ -866,44 +1021,87 @@ impl AiPanel {
             menu = menu.child(
                 div()
                     .mb_1()
-                    .on_key_down(cx.listener(|panel, event: &gpui::KeyDownEvent, _, cx| {
-                        if panel
-                            .with_app(cx, |app, cx| app.handle_ai_model_search_key_down(event, cx))
-                        {
-                            cx.stop_propagation();
-                        }
-                    }))
+                    .on_key_down(
+                        cx.listener(|panel, event: &gpui::KeyDownEvent, window, cx| {
+                            if panel.with_app(cx, |app, cx| {
+                                let handled = app.handle_ai_model_search_key_down(event, cx);
+                                if handled && !app.ai.discovery_menu_is_open() {
+                                    app.focus_text_input_if_present("ai.chat.prompt", window, cx);
+                                }
+                                handled
+                            }) {
+                                cx.stop_propagation();
+                            }
+                        }),
+                    )
                     .child(model_search_input),
             );
         }
-        if snapshot.model_choices.is_empty() {
-            return menu.child(
+        let mut rows = div()
+            .id(SharedString::from("ai-model-choice-list"))
+            .min_h_0()
+            .max_h(px(300.))
+            .overflow_y_scroll()
+            .track_scroll(&self.model_scroll)
+            .flex()
+            .flex_col()
+            .child(ai_menu_heading(palette, t!("ai.reasoningIntensity")));
+        for (index, effort) in snapshot.reasoning_choices.iter().enumerate() {
+            let effort = effort.clone();
+            let selected = snapshot.reasoning_effort == effort;
+            let label = super::reasoning_effort_label(&effort);
+            rows = rows.child(
                 div()
-                    .h(px(52.))
+                    .id(SharedString::from(format!("ai-reasoning-choice-{index}")))
+                    .h(px(28.))
+                    .flex_none()
+                    .px_2()
                     .flex()
                     .items_center()
-                    .justify_center()
+                    .gap_2()
+                    .rounded_sm()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.text))
+                    .bg(if snapshot.discovery_index == index {
+                        rgb(palette.hover)
+                    } else {
+                        rgba(0x00000000)
+                    })
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(rgb(palette.hover)))
+                    .on_click(cx.listener(move |panel, _, _, cx| {
+                        panel.with_app(cx, |app, cx| {
+                            app.ai.set_discovery_index(index);
+                            app.set_ai_reasoning_effort(effort.clone(), cx);
+                        });
+                    }))
+                    .child(ai_choice_check(palette, selected))
+                    .child(label),
+            );
+        }
+        rows = rows.child(ai_menu_heading(palette, t!("ai.models")));
+        if snapshot.model_choices.is_empty() {
+            rows = rows.child(
+                div()
+                    .px_2()
+                    .py_2()
                     .text_size(px(11.))
                     .text_color(rgb(palette.text_muted))
                     .child(t!("ai.noModelMatches")),
             );
         }
-        let mut rows = div()
-            .id(SharedString::from("ai-model-choice-list"))
-            .max_h(px(220.))
-            .overflow_y_scrollbar()
-            .flex()
-            .flex_col();
         for (index, choice) in snapshot.model_choices.iter().enumerate() {
             let model = choice.model.clone();
             let provider_label = choice.provider_label.clone();
             let model_id = model.id.clone();
             let is_selected = selected_id.as_deref() == Some(model.id.as_str());
-            let focused = index == snapshot.discovery_index;
+            let choice_index = index + snapshot.reasoning_choices.len();
+            let focused = choice_index == snapshot.discovery_index;
             rows = rows.child(
                 div()
                     .id(SharedString::from(format!("ai-model-choice-{}", model.id)))
                     .h(px(34.))
+                    .flex_none()
                     .px_2()
                     .flex()
                     .items_center()
@@ -916,12 +1114,13 @@ impl AiPanel {
                     })
                     .cursor_pointer()
                     .hover(move |this| this.bg(rgb(palette.hover)))
-                    .on_click(cx.listener(move |panel, _, _, cx| {
+                    .on_click(cx.listener(move |panel, _, window, cx| {
                         let model_id = model_id.clone();
                         panel.with_app(cx, move |app, cx| {
-                            app.ai.set_discovery_index(index);
+                            app.ai.set_discovery_index(choice_index);
                             app.ai.close_discovery_menu();
                             app.set_ai_default_model(model_id, cx);
+                            app.focus_text_input_if_present("ai.chat.prompt", window, cx);
                         });
                     }))
                     .child(
@@ -941,6 +1140,11 @@ impl AiPanel {
                                 )
                             }),
                     )
+                    .child(ai_model_provider_badge(
+                        palette,
+                        choice.provider_kind.as_ref(),
+                        choice.provider_icon.as_ref(),
+                    ))
                     .child(
                         div()
                             .min_w_0()
@@ -962,7 +1166,13 @@ impl AiPanel {
                     ),
             );
         }
-        menu.child(rows)
+        menu.child(
+            div()
+                .relative()
+                .min_h_0()
+                .child(rows)
+                .vertical_scrollbar(&self.model_scroll),
+        )
     }
 
     fn ai_transcript_body(
@@ -972,7 +1182,13 @@ impl AiPanel {
         command_rows: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut body = div().min_w_0().w_full().flex().flex_col().gap_2();
+        let mut body = div()
+            .min_w_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .when(snapshot.messages.is_empty(), |this| this.flex_1());
         if snapshot.messages.is_empty() {
             body = body.child(self.ai_empty_transcript(snapshot, cx));
         } else {
@@ -989,9 +1205,12 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let palette = snapshot.chrome.palette;
-        let has_model = snapshot.selected_model_id.is_some() || !snapshot.enabled_models.is_empty();
+        let has_model = snapshot.external_agent
+            || snapshot.selected_model_id.is_some()
+            || !snapshot.enabled_models.is_empty();
         if !snapshot.enabled {
             return div()
+                .flex_1()
                 .min_h(px(192.))
                 .flex()
                 .flex_col()
@@ -1015,6 +1234,7 @@ impl AiPanel {
         }
         if !has_model {
             return div()
+                .flex_1()
                 .min_h(px(240.))
                 .flex()
                 .flex_col()
@@ -1074,6 +1294,8 @@ impl AiPanel {
                 .into_any_element();
         }
         div()
+            .debug_selector(|| "ai-empty-transcript".to_string())
+            .flex_1()
             .min_h(px(180.))
             .flex()
             .flex_col()
@@ -2410,7 +2632,7 @@ impl gpui::Render for AiPanel {
 impl NyaTermApp {
     pub(in crate::features) fn ai_header_presentation(&self) -> AiHeaderPresentation {
         let selected_model_id = self.ai_selected_model_id();
-        let model_label = selected_model_id
+        let mut model_label = selected_model_id
             .as_deref()
             .and_then(|model_id| {
                 self.ai
@@ -2421,6 +2643,44 @@ impl NyaTermApp {
                     .map(|model| truncate_preview(&model.name, 28))
             })
             .unwrap_or_else(|| t!("ai.notConfigured").to_string());
+        if self.ai.chat_run_mode() == AiMode::Agent {
+            match self.ai.chat_agent_kind() {
+                AiAgentKind::Codex => {
+                    model_label = self
+                        .ai
+                        .settings_config()
+                        .codex
+                        .default_model
+                        .clone()
+                        .filter(|model| !model.trim().is_empty())
+                        .unwrap_or_else(|| "Codex".to_string())
+                }
+                AiAgentKind::ClaudeCode => {
+                    model_label = self
+                        .ai
+                        .settings_config()
+                        .claude_code
+                        .default_model
+                        .clone()
+                        .filter(|model| !model.trim().is_empty())
+                        .unwrap_or_else(|| "Claude Code".to_string())
+                }
+                AiAgentKind::Nyaterm => {}
+            }
+        }
+        if let Some(active_id) = self.session.active_id() {
+            let label = self
+                .session
+                .display_name(active_id)
+                .unwrap_or_else(|| short_id(active_id).to_string());
+            let targets = self.ai_effective_target_session_ids();
+            let count = targets.iter().filter(|id| id.as_str() != active_id).count();
+            model_label = if count > 0 {
+                t!("ai.panelMetaMultiTarget", target = label, count = count).to_string()
+            } else {
+                label
+            };
+        }
         AiHeaderPresentation {
             running: self.ai.chat_or_agent_is_running(),
             selected_model_id,
@@ -2593,6 +2853,28 @@ impl NyaTermApp {
         panel.update(cx, |panel, cx| panel.set_snapshot(snapshot, cx));
     }
 
+    fn ai_model_provider_presentation(
+        &self,
+        model: &AiModelConfigItem,
+    ) -> (Option<AiProviderKind>, Option<Arc<RenderImage>>) {
+        let credential = model.credential_id.as_ref().and_then(|id| {
+            self.ai
+                .settings_config()
+                .provider_credentials
+                .iter()
+                .find(|credential| &credential.id == id)
+        });
+        (
+            credential
+                .map(|credential| credential.provider_kind.clone())
+                .or_else(|| model.provider_kind.clone()),
+            model
+                .credential_id
+                .as_ref()
+                .and_then(|id| self.ai.provider_view().icons.get(id).cloned()),
+        )
+    }
+
     fn build_ai_panel_snapshot(&mut self, cx: &mut Context<Self>) -> AiPanelSnapshot {
         self.sync_ai_active_scope(cx);
         let palette = self.theme_palette();
@@ -2611,13 +2893,27 @@ impl NyaTermApp {
             .and_then(|model_id| enabled_models.iter().find(|model| model.id == model_id))
             .map(|model| model.name.clone())
             .unwrap_or_else(|| t!("ai.notConfigured").to_string());
+        let selected_model = enabled_models
+            .iter()
+            .find(|model| Some(&model.id) == selected_model_id.as_ref());
+        let (selected_provider_kind, selected_provider_icon) = selected_model
+            .map(|model| self.ai_model_provider_presentation(model))
+            .unwrap_or_default();
+        let reasoning_choices: Arc<[AiReasoningEffort]> =
+            self.ai_filtered_reasoning_choices().into();
         let model_choices_vec = self.ai_filtered_model_choices();
-        self.ai.clamp_discovery_index(model_choices_vec.len());
+        self.ai
+            .clamp_discovery_index(reasoning_choices.len() + model_choices_vec.len());
         let model_choices = model_choices_vec
             .into_iter()
-            .map(|(model, provider_label)| AiModelChoice {
-                model,
-                provider_label,
+            .map(|(model, provider_label)| {
+                let (provider_kind, provider_icon) = self.ai_model_provider_presentation(&model);
+                AiModelChoice {
+                    model,
+                    provider_label,
+                    provider_kind,
+                    provider_icon,
+                }
             })
             .collect::<Vec<_>>()
             .into();
@@ -2653,29 +2949,32 @@ impl NyaTermApp {
         self.ai.clamp_chat_mention_index(mention_candidates.len());
 
         let prompt_placeholder = if !enabled {
-            "Go to Settings to enable AI"
-        } else if agent_mode {
-            "Describe a task for the agent..."
+            t!("ai.goToSettingsToEnable")
         } else {
-            "Ask about the terminal or generate a command..."
+            t!("ai.placeholder")
         };
         let prompt_draft = self.ai.chat_prompt_draft().to_string();
         self.ensure_text_input(
             "ai.chat.prompt",
             &prompt_draft,
-            TextInputSetup::multi_line(prompt_placeholder).submit_on_enter(),
+            TextInputSetup::multi_line(prompt_placeholder.clone()).submit_on_enter(),
             cx,
         );
         let prompt_input = self
             .existing_text_input("ai.chat.prompt")
             .expect("AI prompt input was just built");
 
+        prompt_input.update(cx, |input, cx| {
+            input.set_disabled(running || !enabled, cx);
+            input.set_placeholder(prompt_placeholder, cx);
+        });
+
         let model_search_input = if self.ai.discovery_menu_is_open() {
             let query = self.ai.discovery_query().to_string();
             self.ensure_text_input(
                 "ai.model-search",
                 &query,
-                TextInputSetup::placeholder("Search models"),
+                TextInputSetup::placeholder(t!("ai.searchModels")),
                 cx,
             );
             self.existing_text_input("ai.model-search")
@@ -2687,7 +2986,7 @@ impl NyaTermApp {
             self.ensure_text_input(
                 "ai.history-search",
                 &query,
-                TextInputSetup::placeholder("Search history..."),
+                TextInputSetup::placeholder(t!("ai.historySearchPlaceholder")),
                 cx,
             );
             self.existing_text_input("ai.history-search")
@@ -2710,6 +3009,9 @@ impl NyaTermApp {
             running,
             agent_kind,
             reasoning_effort: self.ai.settings_config().default_reasoning_effort.clone(),
+            reasoning_choices,
+            codex_enabled: self.ai.settings_config().codex.enabled,
+            claude_code_enabled: self.ai.settings_config().claude_code.enabled,
             external_agent,
             external_model_label: match self.ai.chat_agent_kind() {
                 AiAgentKind::Codex => self
@@ -2719,7 +3021,7 @@ impl NyaTermApp {
                     .default_model
                     .clone()
                     .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| "Default model".to_string()),
+                    .unwrap_or_else(|| "Codex".to_string()),
                 AiAgentKind::ClaudeCode => self
                     .ai
                     .settings_config()
@@ -2727,12 +3029,14 @@ impl NyaTermApp {
                     .default_model
                     .clone()
                     .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| "Default model".to_string()),
+                    .unwrap_or_else(|| "Claude Code".to_string()),
                 AiAgentKind::Nyaterm => String::new(),
             },
             selected_model_id,
             selected_model_exists,
             model_label,
+            selected_provider_kind,
+            selected_provider_icon,
             enabled_models,
             model_choices,
             discovery_menu_open: self.ai.discovery_menu_is_open(),
@@ -2824,6 +3128,8 @@ fn agent_kind_label(kind: &AiAgentKind) -> &'static str {
 fn ai_agent_status_badge(snapshot: &AiPanelSnapshot) -> impl IntoElement {
     let palette = snapshot.chrome.palette;
     div()
+        .min_w_0()
+        .flex_1()
         .h(px(28.))
         .px_2()
         .flex()
@@ -2832,32 +3138,102 @@ fn ai_agent_status_badge(snapshot: &AiPanelSnapshot) -> impl IntoElement {
         .border_1()
         .border_color(rgb(palette.border))
         .bg(rgb(palette.input))
+        .text_size(px(11.))
+        .text_color(rgb(palette.text_muted))
+        .child(
+            div()
+                .min_w_0()
+                .text_ellipsis()
+                .child(snapshot.external_model_label.clone()),
+        )
+}
+
+fn ai_transcript_near_bottom(handle: &ScrollHandle) -> bool {
+    handle.max_offset().y + handle.offset().y <= px(60.)
+}
+
+fn ai_menu_heading(palette: ThemePalette, label: impl Into<SharedString>) -> impl IntoElement {
+    div()
+        .h(px(24.))
+        .flex_none()
+        .px_2()
+        .flex()
+        .items_center()
         .text_size(px(10.))
-        .text_color(rgb(if snapshot.running {
-            palette.success
-        } else {
-            palette.text_muted
-        }))
-        .child(format!(
-            "{} · {}{}",
-            agent_kind_label(&snapshot.agent_kind),
-            if snapshot.running { "running · " } else { "" },
-            truncate_preview(&snapshot.external_model_label, 24),
-        ))
+        .text_color(rgb(palette.text_muted))
+        .child(label.into())
+}
+
+fn ai_choice_check(palette: ThemePalette, selected: bool) -> impl IntoElement {
+    div().size(px(14.)).flex_none().when(selected, |this| {
+        this.child(
+            svg()
+                .size(px(13.))
+                .path("icons/check.svg")
+                .text_color(rgb(palette.link)),
+        )
+    })
+}
+
+fn ai_model_provider_badge(
+    palette: ThemePalette,
+    kind: Option<&AiProviderKind>,
+    image: Option<&Arc<RenderImage>>,
+) -> gpui::AnyElement {
+    if let Some(image) = image {
+        return img(image.clone())
+            .size(px(16.))
+            .flex_none()
+            .rounded_full()
+            .into_any_element();
+    }
+    let path = match kind {
+        Some(AiProviderKind::Openai) => "icons/settings/openai.svg",
+        Some(AiProviderKind::Anthropic) => "icons/settings/anthropic.svg",
+        Some(AiProviderKind::Gemini) => "icons/settings/gemini.svg",
+        Some(AiProviderKind::Deepseek) => "icons/settings/deepseek.svg",
+        Some(AiProviderKind::Xai) => "icons/settings/xai.svg",
+        Some(AiProviderKind::Zai) => "icons/settings/zai.svg",
+        Some(AiProviderKind::Ollama) => "icons/settings/ollama.svg",
+        Some(AiProviderKind::Mimo) => "icons/settings/mimo.svg",
+        _ => "icons/settings/cloud.svg",
+    };
+    div()
+        .size(px(16.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(kind == Some(&AiProviderKind::Cohere), |this| {
+            this.text_size(px(10.))
+                .text_color(rgb(palette.accent))
+                .child("C")
+        })
+        .when(kind != Some(&AiProviderKind::Cohere), |this| {
+            this.child(
+                svg()
+                    .size(px(14.))
+                    .path(path)
+                    .text_color(rgb(palette.accent)),
+            )
+        })
+        .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::Arc;
     use std::time::Instant;
 
+    use super::{AiMentionCandidate, AiPanel, AiPanelSnapshot};
     use gpui::{
         AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, VisualTestContext, div, px,
+        TestAppContext, VisualTestContext, div, point, px,
     };
     use nyaterm_core::{
-        AgentCommandExecutionMode, AiMode, AiModelConfigItem, AiModelSource, AiProviderKind,
-        AiSettings, AppRuntime, RuntimeMode,
+        AgentCommandExecutionMode, AiMessage, AiMessageRole, AiMode, AiModelConfigItem,
+        AiModelSource, AiProviderKind, AiSettings, AppRuntime, RuntimeMode,
     };
     use nyaterm_ui::NyaInputEvent;
 
@@ -3314,5 +3690,180 @@ mod tests {
             super::components::ai_message_menu_position(240., 180., 128., 64., 200., 120.),
             (64., 48., 104.)
         );
+    }
+    struct CompactAiHost {
+        panel: Entity<AiPanel>,
+    }
+
+    impl Render for CompactAiHost {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().w(px(320.)).h(px(800.)).child(self.panel.clone())
+        }
+    }
+
+    fn compact_host<'a>(
+        cx: &'a mut TestAppContext,
+        root: &Path,
+    ) -> (Entity<NyaTermApp>, &'a mut VisualTestContext) {
+        let app = app(cx, root);
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            let mut settings = app.ai.settings_config_cloned();
+            settings.enabled = true;
+            settings.models = vec![AiModelConfigItem {
+                id: "fixture".to_string(),
+                name: "A long model name that must truncate in a narrow panel".to_string(),
+                provider_kind: Some(AiProviderKind::OpenaiCompatible),
+                credential_id: None,
+                enabled: true,
+                source: AiModelSource::Manual,
+                backend: Default::default(),
+                last_seen_at: None,
+                supported_reasoning_efforts: None,
+            }];
+            settings.default_model_id = Some("fixture".to_string());
+            app.ai.replace_settings_config(settings, false);
+            app.flush_ai_panel_snapshot(cx);
+        });
+        let panel = app.read_with(cx, |app, _| app.ai_panel.clone());
+        let (_, vcx) = cx.add_window_view(move |_, _| CompactAiHost { panel });
+        let vcx: &mut VisualTestContext = vcx;
+        compact_draw(&app, vcx);
+        (app, vcx)
+    }
+
+    fn compact_draw(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext) {
+        vcx.run_until_parked();
+        for _ in 0..2 {
+            vcx.update(|window, cx| {
+                app.read(cx)
+                    .ai_panel
+                    .clone()
+                    .update(cx, |_, cx| cx.notify());
+                window.refresh();
+                _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+        }
+    }
+
+    fn edit_panel_snapshot(
+        app: &Entity<NyaTermApp>,
+        vcx: &mut VisualTestContext,
+        edit: impl FnOnce(&mut AiPanelSnapshot),
+    ) {
+        vcx.update(|_, cx| {
+            let panel = app.read(cx).ai_panel.clone();
+            panel.update(cx, |panel, cx| {
+                let mut snapshot = panel.snapshot().unwrap().clone();
+                edit(&mut snapshot);
+                panel.set_snapshot(snapshot, cx);
+            });
+        });
+        compact_draw(app, vcx);
+    }
+
+    #[test]
+    fn narrow_ai_panel_centers_empty_state_and_keeps_compact_controls_inside_composer() {
+        let root = TestConfigDir::new("nyaterm-ai-compact");
+        let mut cx = TestAppContext::single();
+        let (_, vcx) = compact_host(&mut cx, root.path());
+        let viewport = vcx.debug_bounds("ai-transcript-viewport").unwrap();
+        let empty = vcx.debug_bounds("ai-empty-transcript").unwrap();
+        assert!((empty.center().y - viewport.center().y).abs() < px(16.));
+        let composer = vcx.debug_bounds("ai-composer").unwrap();
+        let prompt = vcx.debug_bounds("ai-prompt").unwrap();
+        let mode = vcx.debug_bounds("ai-mode-control").unwrap();
+        let model = vcx.debug_bounds("ai-model-control").unwrap();
+        let send = vcx.debug_bounds("ai-send-control").unwrap();
+        assert!(
+            composer.size.height <= px(122.),
+            "composer should have just a textarea and one control row"
+        );
+        assert_eq!(prompt.size.height, px(64.));
+        for control in [mode, model, send] {
+            assert!(control.top() >= prompt.bottom());
+            assert!(control.left() >= composer.left());
+            assert!(control.right() <= composer.right());
+            assert!((control.center().y - send.center().y).abs() <= px(2.));
+        }
+        assert!(mode.right() <= model.left());
+        assert!(model.right() <= send.left());
+    }
+
+    #[test]
+    fn mention_picker_reveals_keyboard_selection_beyond_eight_sessions() {
+        let root = TestConfigDir::new("nyaterm-ai-mentions");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.mention_open = true;
+            snapshot.mention_index = 10;
+            snapshot.mention_candidates = (0..12)
+                .map(|index| AiMentionCandidate {
+                    session_id: format!("fixture-{index}"),
+                    label: format!("Terminal {index}"),
+                    kind: "Local".to_string(),
+                    selected: false,
+                })
+                .collect::<Vec<_>>()
+                .into();
+        });
+        let selected = vcx.debug_bounds("ai-mention-row-10").unwrap();
+        let prompt = vcx.debug_bounds("ai-prompt").unwrap();
+        let scroll = vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).mention_scroll.clone());
+        assert!(
+            scroll.offset().y < px(0.),
+            "offset={:?}, max={:?}, viewport={:?}, selected={selected:?}",
+            scroll.offset(),
+            scroll.max_offset(),
+            scroll.bounds()
+        );
+        assert!(selected.top() >= scroll.bounds().top());
+        assert!(selected.bottom() <= scroll.bounds().bottom());
+        assert!(selected.bottom() <= prompt.top());
+        assert!(vcx.debug_bounds("ai-mention-row-11").is_some());
+    }
+
+    fn transcript_message(index: usize) -> Arc<AiMessage> {
+        Arc::new(AiMessage {
+            id: format!("message-{index}"),
+            session_id: "fixture".to_string(),
+            role: AiMessageRole::User,
+            content: "fixture output\n".repeat(6),
+            created_at: "2026-10-02T00:00:00Z".to_string(),
+            reasoning_content: None,
+            command_cards: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn growing_transcript_follows_bottom_but_preserves_a_readers_scroll_position() {
+        let root = TestConfigDir::new("nyaterm-ai-scroll");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.messages = (0..24).map(transcript_message).collect::<Vec<_>>().into();
+        });
+        let scroll = vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).transcript_scroll.clone());
+        assert!(scroll.max_offset().y > px(200.));
+        assert_eq!(scroll.offset().y, -scroll.max_offset().y);
+        scroll.set_offset(point(px(0.), px(-100.)));
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.messages = (0..25).map(transcript_message).collect::<Vec<_>>().into();
+        });
+        assert_eq!(scroll.offset().y, px(-100.));
+        scroll.scroll_to_bottom();
+        compact_draw(&app, vcx);
+        let previous_extent = scroll.max_offset().y;
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.messages = (0..26).map(transcript_message).collect::<Vec<_>>().into();
+        });
+        assert!(scroll.max_offset().y > previous_extent);
+        assert_eq!(scroll.offset().y, -scroll.max_offset().y);
     }
 }

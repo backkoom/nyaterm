@@ -111,6 +111,22 @@
     "showLabel": "레이블 표시"
   },
   "ai": {
+    "modeNyatermAgent": "NyaAgent",
+    "modeCodexAgent": "Codex Agent",
+    "modeClaudeCodeAgent": "Claude Code",
+    "panelMetaMultiTarget": "%{target} + 세션 %{count}개",
+    "reasoningEffort": {
+      "auto": "자동",
+      "high": "높음",
+      "low": "가벼움",
+      "max": "최대",
+      "medium": "보통",
+      "minimal": "최소",
+      "none": "끄기",
+      "ultra": "초고",
+      "xhigh": "매우 높음"
+    },
+    "reasoningIntensity": "추론 강도",
     "actionName": "작업 이름",
     "actionPrompt": "작업 프롬프트",
     "activeProfile": "활성 프로필",

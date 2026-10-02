@@ -28,3 +28,21 @@ const AGENT_OBSERVATION_QUIET: Duration = Duration::from_millis(900);
 /// is what decides when the loop advances rather than this interval.
 const AGENT_OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const AGENT_DEFAULT_STEP_TIMEOUT: Duration = Duration::from_millis(30_000);
+
+pub(in crate::features) fn reasoning_effort_label(
+    effort: &nyaterm_core::AiReasoningEffort,
+) -> String {
+    use nyaterm_core::AiReasoningEffort;
+    let key = match effort {
+        AiReasoningEffort::Auto => "ai.reasoningEffort.auto",
+        AiReasoningEffort::None => "ai.reasoningEffort.none",
+        AiReasoningEffort::Minimal => "ai.reasoningEffort.minimal",
+        AiReasoningEffort::Low => "ai.reasoningEffort.low",
+        AiReasoningEffort::Medium => "ai.reasoningEffort.medium",
+        AiReasoningEffort::High => "ai.reasoningEffort.high",
+        AiReasoningEffort::XHigh => "ai.reasoningEffort.xhigh",
+        AiReasoningEffort::Max => "ai.reasoningEffort.max",
+        AiReasoningEffort::Ultra => "ai.reasoningEffort.ultra",
+    };
+    rust_i18n::t!(key).to_string()
+}

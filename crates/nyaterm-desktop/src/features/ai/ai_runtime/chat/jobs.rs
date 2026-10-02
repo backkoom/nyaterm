@@ -292,11 +292,41 @@ impl NyaTermApp {
             .iter()
             .position(|(model, _)| model.id == selected_model_id)
             .unwrap_or(0)
+            + self.ai_filtered_reasoning_choices().len()
+    }
+
+    pub(in crate::features) fn ai_filtered_reasoning_choices(
+        &self,
+    ) -> Vec<nyaterm_core::AiReasoningEffort> {
+        let models = self.ai_enabled_models();
+        let selected_id = self.ai_selected_model_id();
+        let model = models
+            .iter()
+            .find(|model| Some(&model.id) == selected_id.as_ref());
+        let query = self.ai.discovery_query().trim().to_lowercase();
+        nyaterm_core::ai::provider_settings::model_reasoning_options(model)
+            .into_iter()
+            .filter(|effort| {
+                query.is_empty()
+                    || format!(
+                        "{} {effort:?}",
+                        crate::features::ai::reasoning_effort_label(effort)
+                    )
+                    .to_lowercase()
+                    .contains(&query)
+            })
+            .collect()
     }
 
     pub(in crate::features) fn select_ai_model_choice(&mut self, cx: &mut Context<Self>) {
+        let reasoning = self.ai_filtered_reasoning_choices();
+        let index = self.ai.discovery_index();
+        if let Some(effort) = reasoning.get(index) {
+            self.set_ai_reasoning_effort(effort.clone(), cx);
+            return;
+        }
         let choices = self.ai_filtered_model_choices();
-        let Some((model, _)) = choices.get(self.ai.discovery_index()).cloned() else {
+        let Some((model, _)) = choices.get(index.saturating_sub(reasoning.len())).cloned() else {
             self.defer_ai_panel_snapshot_flush(cx);
             return;
         };
@@ -319,7 +349,8 @@ impl NyaTermApp {
         }
 
         // The box owns the text; the menu owns the keys that walk and pick.
-        let choice_count = self.ai_filtered_model_choices().len();
+        let choice_count =
+            self.ai_filtered_reasoning_choices().len() + self.ai_filtered_model_choices().len();
         match keystroke.key.as_str() {
             "escape" => {
                 let selected_index = self.ai_selected_model_index();

@@ -746,6 +746,9 @@ fn parallel_terminal_chats_isolate_cancel_and_late_results() {
 fn terminal_scopes_keep_run_mode_and_agent_protocol_independent() {
     let cx = TestAppContext::single();
     let mut state = state(&cx);
+    state.settings.config.codex.enabled = true;
+    // Existing terminal drafts retain their mode; fresh drafts inherit the saved default.
+    state.switch_scope("terminal:b");
     state.switch_scope("terminal:a");
     state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Nyaterm);
     let first = state.begin_chat_request("inspect".to_string(), AiMode::Agent, None);
@@ -1190,4 +1193,52 @@ fn connection_checks_do_not_modify_settings_and_reasoning_edits_fall_back_to_aut
         state.settings.config.default_reasoning_effort,
         AiReasoningEffort::Auto
     );
+}
+
+#[test]
+fn selected_run_mode_survives_settings_round_trip_and_seeds_new_terminal_drafts() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    state.settings.config.codex.enabled = true;
+    assert!(state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Codex));
+    let encoded = serde_json::to_string(state.settings_config()).unwrap();
+    let restored: AiSettings = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.default_mode, AiMode::Agent);
+    assert_eq!(restored.default_agent_kind, AiAgentKind::Codex);
+    state.switch_scope("terminal:new");
+    assert_eq!(state.chat_run_mode(), AiMode::Agent);
+    assert_eq!(state.chat_agent_kind(), AiAgentKind::Codex);
+    assert!(state.set_chat_run_mode(AiMode::Ask, AiAgentKind::Codex));
+    assert_eq!(state.settings_config().default_mode, AiMode::Ask);
+    assert_eq!(
+        state.settings_config().default_agent_kind,
+        AiAgentKind::Nyaterm
+    );
+}
+
+#[test]
+fn disabled_external_agent_cannot_replace_the_current_mode_or_saved_default() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    assert!(state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Nyaterm));
+    for kind in [AiAgentKind::Codex, AiAgentKind::ClaudeCode] {
+        assert!(!state.set_chat_run_mode(AiMode::Agent, kind));
+        assert_eq!(state.chat_run_mode(), AiMode::Agent);
+        assert_eq!(state.chat_agent_kind(), AiAgentKind::Nyaterm);
+        assert_eq!(
+            state.settings_config().default_agent_kind,
+            AiAgentKind::Nyaterm
+        );
+    }
+}
+
+#[test]
+fn disabling_an_external_agent_falls_back_to_ask_for_its_existing_terminal_draft() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    state.settings.config.codex.enabled = true;
+    state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Codex);
+    state.toggle_settings_codex_enabled();
+    assert_eq!(state.chat_run_mode(), AiMode::Ask);
+    assert_eq!(state.chat_agent_kind(), AiAgentKind::Nyaterm);
 }

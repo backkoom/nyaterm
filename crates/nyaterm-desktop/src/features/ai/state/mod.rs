@@ -602,16 +602,50 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn chat_run_mode(&self) -> AiMode {
+        if self.chat.run_mode == AiMode::Agent
+            && match self.chat.agent_kind {
+                AiAgentKind::Codex => !self.settings.config.codex.enabled,
+                AiAgentKind::ClaudeCode => !self.settings.config.claude_code.enabled,
+                AiAgentKind::Nyaterm => false,
+            }
+        {
+            return AiMode::Ask;
+        }
         self.chat.run_mode.clone()
     }
 
     pub(in crate::features) fn chat_agent_kind(&self) -> AiAgentKind {
-        self.chat.agent_kind.clone()
+        if self.chat_run_mode() == AiMode::Ask {
+            AiAgentKind::Nyaterm
+        } else {
+            self.chat.agent_kind.clone()
+        }
     }
 
-    pub(in crate::features) fn set_chat_run_mode(&mut self, mode: AiMode, kind: AiAgentKind) {
+    pub(in crate::features) fn set_chat_run_mode(
+        &mut self,
+        mode: AiMode,
+        kind: AiAgentKind,
+    ) -> bool {
+        if mode == AiMode::Agent
+            && match kind {
+                AiAgentKind::Codex => !self.settings.config.codex.enabled,
+                AiAgentKind::ClaudeCode => !self.settings.config.claude_code.enabled,
+                AiAgentKind::Nyaterm => false,
+            }
+        {
+            return false;
+        }
+        let kind = if mode == AiMode::Ask {
+            AiAgentKind::Nyaterm
+        } else {
+            kind
+        };
+        self.settings.config.default_mode = mode.clone();
+        self.settings.config.default_agent_kind = kind.clone();
         self.chat.run_mode = mode;
         self.chat.agent_kind = kind;
+        true
     }
 
     pub(in crate::features) fn chat_prompt_draft(&self) -> &str {

@@ -3,6 +3,7 @@ use gpui::{
     rgb, svg,
 };
 use nyaterm_core::AiCommandCard;
+use nyaterm_ui::{NyaButton, NyaButtonVariant};
 
 use crate::features::formatting::risk_label;
 use crate::theme::ThemePalette;
@@ -44,55 +45,41 @@ impl AiCommandCardPresentation {
 }
 
 pub(super) fn ai_send_button(
-    palette: ThemePalette,
+    _palette: ThemePalette,
     running: bool,
     disabled: bool,
     cx: &mut Context<AiPanel>,
 ) -> impl IntoElement {
-    let icon = if running {
-        "icons/ai/stop.svg"
-    } else {
-        "icons/ai/send.svg"
-    };
     div()
-        .id(SharedString::from("ai-ask-run"))
+        .debug_selector(|| "ai-send-control".to_string())
         .size(px(28.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
-        .text_color(if disabled {
-            rgb(palette.text_dimmed)
-        } else {
-            rgb(palette.text_muted)
-        })
-        .opacity(if disabled { 0.48 } else { 1.0 })
-        .when(!disabled, |this| {
-            this.cursor_pointer().hover(move |this| {
-                this.bg(rgb(palette.surface_elevated))
-                    .text_color(rgb(palette.text))
-            })
-        })
+        .flex_none()
         .child(
-            svg()
-                .size(px(16.))
-                .flex_none()
-                .path(icon)
-                .text_color(if disabled {
-                    rgb(palette.text_dimmed)
+            NyaButton::new("ai-ask-run", "")
+                .small()
+                .full_width()
+                .height(px(28.))
+                .icon(if running {
+                    "icons/ai/stop.svg"
                 } else {
-                    rgb(palette.text_muted)
-                }),
+                    "icons/ai/send.svg"
+                })
+                .variant(if running {
+                    NyaButtonVariant::Secondary
+                } else {
+                    NyaButtonVariant::Primary
+                })
+                .disabled(disabled)
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                    panel.with_app(cx, move |app, cx| {
+                        if app.ai.chat_or_agent_is_running() {
+                            app.cancel_ai_chat(cx);
+                        } else if !disabled {
+                            app.start_ai_ask(cx);
+                        }
+                    });
+                })),
         )
-        .on_click(cx.listener(move |panel, _, _, cx| {
-            panel.with_app(cx, move |app, cx| {
-                if app.ai.chat_or_agent_is_running() {
-                    app.cancel_ai_chat(cx);
-                } else if !disabled {
-                    app.start_ai_ask(cx);
-                }
-            });
-        }))
 }
 
 pub(super) fn ai_user_pre_wrap_text(palette: ThemePalette, text: &str) -> gpui::AnyElement {

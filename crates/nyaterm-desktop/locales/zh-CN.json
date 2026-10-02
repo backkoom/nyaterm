@@ -111,6 +111,22 @@
     "showLabel": "显示工具名称"
   },
   "ai": {
+    "modeNyatermAgent": "NyaAgent",
+    "modeCodexAgent": "Codex Agent",
+    "modeClaudeCodeAgent": "Claude Code",
+    "panelMetaMultiTarget": "%{target} + %{count} 个会话",
+    "reasoningEffort": {
+      "auto": "自动",
+      "high": "高",
+      "low": "轻度",
+      "max": "最高",
+      "medium": "中",
+      "minimal": "最低",
+      "none": "关闭",
+      "ultra": "超高",
+      "xhigh": "极高"
+    },
+    "reasoningIntensity": "推理强度",
     "actionName": "功能名称",
     "actionPrompt": "功能提示词",
     "activeProfile": "当前配置档",

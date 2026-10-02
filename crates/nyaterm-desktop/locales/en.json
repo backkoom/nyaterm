@@ -111,6 +111,22 @@
     "showLabel": "Show Labels"
   },
   "ai": {
+    "modeNyatermAgent": "NyaAgent",
+    "modeCodexAgent": "Codex Agent",
+    "modeClaudeCodeAgent": "Claude Code",
+    "panelMetaMultiTarget": "%{target} + %{count} sessions",
+    "reasoningEffort": {
+      "auto": "Auto",
+      "high": "High",
+      "low": "Light",
+      "max": "Max",
+      "medium": "Medium",
+      "minimal": "Minimal",
+      "none": "Off",
+      "ultra": "Ultra",
+      "xhigh": "Extreme"
+    },
+    "reasoningIntensity": "Reasoning effort",
     "actionName": "Action name",
     "actionPrompt": "Action prompt",
     "activeProfile": "Active Profile",

@@ -111,6 +111,22 @@
     "showLabel": "ラベルを表示"
   },
   "ai": {
+    "modeNyatermAgent": "NyaAgent",
+    "modeCodexAgent": "Codex Agent",
+    "modeClaudeCodeAgent": "Claude Code",
+    "panelMetaMultiTarget": "%{target} + %{count} セッション",
+    "reasoningEffort": {
+      "auto": "自動",
+      "none": "無効",
+      "minimal": "最小",
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "非常に高い",
+      "max": "最大",
+      "ultra": "超高"
+    },
+    "reasoningIntensity": "推論の強度",
     "actionName": "アクション名",
     "actionPrompt": "アクションのプロンプト",
     "activeProfile": "有効なプロファイル",

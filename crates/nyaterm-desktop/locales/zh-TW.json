@@ -111,6 +111,22 @@
     "showLabel": "顯示工具名稱"
   },
   "ai": {
+    "modeNyatermAgent": "NyaAgent",
+    "modeCodexAgent": "Codex Agent",
+    "modeClaudeCodeAgent": "Claude Code",
+    "panelMetaMultiTarget": "%{target} + %{count} 個工作階段",
+    "reasoningEffort": {
+      "auto": "自動",
+      "high": "高",
+      "low": "輕度",
+      "max": "最高",
+      "medium": "中",
+      "minimal": "最低",
+      "none": "關閉",
+      "ultra": "超高",
+      "xhigh": "極高"
+    },
+    "reasoningIntensity": "推理強度",
     "actionName": "功能名稱",
     "actionPrompt": "功能提示詞",
     "activeProfile": "目前設定檔",

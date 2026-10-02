@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, App, ClickEvent, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    SharedString, Styled, Window, div, prelude::FluentBuilder as _, px, rgb,
+    Anchor, AnyElement, App, ClickEvent, InteractiveElement, IntoElement, ParentElement, Pixels,
+    RenderOnce, SharedString, Styled, Window, div, prelude::FluentBuilder as _, px, rgb,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::{Cancel, Confirm};
@@ -512,6 +512,7 @@ impl NyaMenuItem {
 pub struct NyaDropdownMenu {
     id: SharedString,
     label: Option<SharedString>,
+    content: Option<AnyElement>,
     icon_path: Option<SharedString>,
     icon_size: Option<Pixels>,
     tooltip: Option<SharedString>,
@@ -538,6 +539,7 @@ impl NyaDropdownMenu {
         Self {
             id: id.into(),
             label: None,
+            content: None,
             icon_path: None,
             icon_size: None,
             tooltip: None,
@@ -555,6 +557,12 @@ impl NyaDropdownMenu {
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    /// A full-width trigger with caller-owned, truncatable content.
+    pub fn content(mut self, content: impl IntoElement) -> Self {
+        self.content = Some(content.into_any_element());
         self
     }
 
@@ -641,6 +649,9 @@ impl RenderOnce for NyaDropdownMenu {
         let mut trigger = Button::new(self.id).ghost().small();
         if let Some(label) = self.label {
             trigger = trigger.label(label);
+        }
+        if let Some(content) = self.content {
+            trigger = trigger.w_full().child(content);
         }
         if let Some(icon_path) = self.icon_path {
             let icon = Icon::default()

@@ -377,6 +377,7 @@ impl NyaTermApp {
                 if app.ai.provider_view().generation == generation {
                     app.ai.provider_view_mut().icons = std::sync::Arc::new(icons);
                     app.request_settings_panel_refresh(cx);
+                    app.defer_ai_panel_snapshot_flush(cx);
                 }
             });
         })

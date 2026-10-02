@@ -329,6 +329,11 @@ impl NyaTermApp {
                     .child(
                         div()
                             .w(px(144.))
+                            .h(px(28.))
+                            .rounded_md()
+                            .bg(rgb(palette.surface_elevated))
+                            .flex()
+                            .items_center()
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
@@ -338,6 +343,8 @@ impl NyaTermApp {
                             )
                             .child(
                                 NyaSearchInput::new("quick-command-search-input", &search_field)
+                                    .compact()
+                                    .bare()
                                     .on_key_down(cx.listener(
                                         |this, event: &KeyDownEvent, _, cx| {
                                             if event.keystroke.key == "escape" {

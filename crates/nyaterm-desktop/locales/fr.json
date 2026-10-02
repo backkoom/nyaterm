@@ -111,6 +111,22 @@
     "showLabel": "Afficher les libellés"
   },
   "ai": {
+    "modeNyatermAgent": "NyaAgent",
+    "modeCodexAgent": "Codex Agent",
+    "modeClaudeCodeAgent": "Claude Code",
+    "panelMetaMultiTarget": "%{target} + %{count} sessions",
+    "reasoningEffort": {
+      "auto": "Auto",
+      "none": "Désactivé",
+      "minimal": "Minimal",
+      "low": "Faible",
+      "medium": "Moyen",
+      "high": "Élevé",
+      "xhigh": "Très élevé",
+      "max": "Maximum",
+      "ultra": "Ultra"
+    },
+    "reasoningIntensity": "Intensité de raisonnement",
     "actionName": "Nom de l'action",
     "actionPrompt": "Invite de l'action",
     "activeProfile": "Profil actif",
