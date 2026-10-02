@@ -328,8 +328,9 @@ fn serial_session_thread(
                 }
                 let send_data = prepare_terminal_write_input(data, &encoding, raw, backspace_as_bs);
                 let mut p = port_writer.lock().unwrap();
+                // On Windows, flush waits for pending serial writes to transmit and can stall
+                // subsequent input. Write directly without draining the port for each command.
                 let _ = p.write_all(&send_data);
-                let _ = p.flush();
             }
             SessionCommand::CaptureExec {
                 marker_id,
