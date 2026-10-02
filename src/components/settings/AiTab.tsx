@@ -1042,26 +1042,6 @@ export function AiModelsTab() {
     null,
   );
   const [showProviderChoices, setShowProviderChoices] = useState(false);
-  const [providerListScrolling, setProviderListScrolling] = useState(false);
-  const providerListScrollTimer = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (providerListScrollTimer.current !== null) {
-        window.clearTimeout(providerListScrollTimer.current);
-      }
-    },
-    [],
-  );
-  const showProviderListScrollbar = () => {
-    setProviderListScrolling(true);
-    if (providerListScrollTimer.current !== null) {
-      window.clearTimeout(providerListScrollTimer.current);
-    }
-    providerListScrollTimer.current = window.setTimeout(() => {
-      setProviderListScrolling(false);
-      providerListScrollTimer.current = null;
-    }, 1000);
-  };
   const [providerDraft, setProviderDraft] = useState<{
     credential: AIProviderCredential;
     isAutomatic?: boolean;
@@ -2108,15 +2088,17 @@ export function AiModelsTab() {
 
   return (
     <div className="space-y-5">
-      <SettingSection title={t("ai.providerList")}>
-        <div className="space-y-3">
-          <div
-            className={`provider-list-scroll flex min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden px-0.5 py-1 ${providerListScrolling ? "is-scrolling" : ""}`}
-            onScroll={showProviderListScrollbar}
-          >
+      <SettingSection
+        title={t("ai.providerList")}
+        headerRowClassName="flex-row flex-wrap items-center justify-between sm:items-center"
+        contentClassName={
+          enabledCredentials.length === 0 && !showProviderChoices ? "hidden" : undefined
+        }
+        action={
+          <div className="flex items-center gap-2">
             <Button
               type="button"
-              size="icon-lg"
+              size="icon-sm"
               variant="outline"
               className="rounded-lg border-border/70"
               disabled={refreshing || testingProviderId !== null || enabledCredentials.length === 0}
@@ -2129,7 +2111,8 @@ export function AiModelsTab() {
             <Button
               type="button"
               variant="outline"
-              className="h-10 rounded-lg border-border/70 px-3 text-sm"
+              size="sm"
+              className="rounded-lg border-border/70"
               aria-expanded={showProviderChoices}
               onClick={() => {
                 setShowProviderChoices(true);
@@ -2139,18 +2122,24 @@ export function AiModelsTab() {
               <MdAdd />
               {t("ai.addProvider")}
             </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 px-0.5 py-1">
             {enabledCredentials.map((credential) => (
               <Button
                 key={credential.id}
                 type="button"
                 size="default"
                 variant="outline"
-                className={`h-10 rounded-lg px-3 text-sm font-normal ${
+                className={`h-10 min-w-0 max-w-full rounded-lg px-3 text-sm font-normal ${
                   selectedProviderCredential?.id === credential.id
                     ? "border-primary bg-primary/5 ring-1 ring-primary/20"
                     : "border-border/70"
                 }`}
                 aria-pressed={selectedProviderCredential?.id === credential.id}
+                title={credential.name.trim() || getProviderLabel(credential.provider_kind)}
                 onClick={() => {
                   cancelProviderConnectionTest();
                   setProviderDraft(null);
