@@ -435,13 +435,21 @@ impl Render for NyaInputState {
 #[derive(IntoElement)]
 pub struct NyaInput {
     state: Entity<NyaInputState>,
+    font_size: Option<gpui::Pixels>,
 }
 
 impl NyaInput {
     pub fn new(state: &Entity<NyaInputState>) -> Self {
         Self {
             state: state.clone(),
+            font_size: None,
         }
+    }
+
+    /// Override the compact component size for fields that follow the UI font.
+    pub fn text_size(mut self, font_size: gpui::Pixels) -> Self {
+        self.font_size = Some(font_size);
+        self
     }
 }
 
@@ -453,6 +461,11 @@ impl RenderOnce for NyaInput {
         let input = match state {
             ComponentState::Input(state) => Input::new(&state)
                 .xsmall()
+                .when_some(self.font_size, |this, font_size| {
+                    this.text_size(font_size)
+                        .line_height(font_size * 1.5)
+                        .h_full()
+                })
                 .appearance(false)
                 .bordered(false)
                 .focus_bordered(false)
@@ -466,6 +479,7 @@ impl RenderOnce for NyaInput {
                 .readonly(readonly)
                 .h_full()
                 .text_xs()
+                .when_some(self.font_size, |this, font_size| this.text_size(font_size))
                 .into_any_element(),
             ComponentState::Editor(state) => Editor::new(&state)
                 .appearance(false)
@@ -474,6 +488,7 @@ impl RenderOnce for NyaInput {
                 .readonly(readonly)
                 .h_full()
                 .text_xs()
+                .when_some(self.font_size, |this, font_size| this.text_size(font_size))
                 .into_any_element(),
         };
         div()

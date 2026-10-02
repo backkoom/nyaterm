@@ -33,6 +33,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
         .snapshot()
         .expect("the caller returns early without a snapshot");
     let chrome = snapshot.chrome;
+    let metrics = TransferBrowserPathMetrics::new(chrome.ui_font_size);
     let browser = &snapshot.browser;
     let display_browser_path =
         display_transfer_browser_home_path(&current_browser_path, &browser.home_dir);
@@ -57,7 +58,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
             let focus = field.read(cx).focus_handle();
             div()
                 .id("transfer-path-bar-input-shell")
-                .h(px(20.))
+                .h(px(metrics.control_height))
                 .min_w_0()
                 .flex_1()
                 .px_1()
@@ -71,26 +72,29 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                 })
                 .child(
                     div()
+                        .h_full()
                         .min_w_0()
                         .flex_1()
-                        .text_size(px(10.))
                         .text_color(rgb(palette.text))
-                        .child(NyaInput::new(&field)),
+                        .child(NyaInput::new(&field).text_size(px(metrics.font_size))),
                 )
                 .into_any_element()
         });
     let breadcrumbs = build_transfer_browser_breadcrumbs(&current_browser_path, &browser.home_dir);
-    let breadcrumb_width = (chrome.panel_width - 52.).max(32.);
+    // Shell padding, row gap, favorite margin and the favorite button.
+    let breadcrumb_width = (chrome.panel_width - 28. - metrics.control_height).max(0.);
     let (visible_breadcrumbs, overflow_breadcrumbs) =
-        collapse_transfer_browser_breadcrumbs(&breadcrumbs, breadcrumb_width);
+        collapse_transfer_browser_breadcrumbs(&breadcrumbs, breadcrumb_width, metrics);
 
-    // Tauri FileExplorerPathBar: minHeight ~26px, mono path, favorites on the right.
     div()
         .relative()
         .flex()
         .flex_col()
         .gap_0()
-        .min_h(px(26.))
+        .min_h(px(metrics.row_height()))
+        .flex_none()
+        .text_size(px(metrics.font_size))
+        .line_height(px(metrics.line_height))
         .border_b_1()
         .border_color(rgb(palette.border))
         .bg(chrome.transparent_surface)
@@ -112,7 +116,6 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                             .flex()
                             .items_center()
                             .font_family(crate::features::shell::gpui_code_font_family())
-                            .text_size(px(10.))
                             .on_key_down(cx.listener(|panel, event: &KeyDownEvent, window, cx| {
                                 panel.with_app(cx, |this, cx| {
                                     this.mark_user_activity();
@@ -143,6 +146,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                             overflow_segments: overflow_breadcrumbs.clone(),
                             overflow_label: t!("fileExplorer.breadcrumbOverflow").to_string(),
                             available_width: breadcrumb_width,
+                            metrics,
                         },
                         cx,
                     ))
@@ -151,7 +155,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                     div()
                         .id(SharedString::from("transfer-browser-path-favorite"))
                         .ml_1()
-                        .size(px(22.))
+                        .size(px(metrics.control_height))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -205,7 +209,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                 deferred(
                     div()
                         .absolute()
-                        .top(px(26.))
+                        .top(px(metrics.row_height()))
                         .left_0()
                         .right_0()
                         .occlude()
@@ -215,6 +219,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                             current_browser_path,
                             browser.home_dir.clone(),
                             history_paths,
+                            metrics,
                             cx,
                         )),
                 )
@@ -556,6 +561,7 @@ fn transfer_browser_breadcrumb_row(
         overflow_segments,
         overflow_label,
         available_width,
+        metrics,
     } = presentation;
     let mut row = div()
         .id(SharedString::from("transfer-browser-path-display"))
@@ -565,7 +571,8 @@ fn transfer_browser_breadcrumb_row(
         .items_center()
         .overflow_hidden()
         .font_family(crate::features::shell::gpui_code_font_family())
-        .text_size(px(10.))
+        .text_size(px(metrics.font_size))
+        .line_height(px(metrics.line_height))
         .tooltip(move |window, cx| {
             nyaterm_ui::NyaTooltip::new(display_path.clone()).build(window, cx)
         });
@@ -575,7 +582,7 @@ fn transfer_browser_breadcrumb_row(
         row = row.child(
             div()
                 .id(SharedString::from("transfer-browser-breadcrumb-overflow"))
-                .size(px(20.))
+                .size(px(metrics.control_height))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -612,6 +619,19 @@ fn transfer_browser_breadcrumb_row(
         );
     }
 
+    let current_label_width = (available_width
+        - if overflow_segments.is_empty() {
+            0.
+        } else {
+            metrics.control_height
+        }
+        - visible_segments
+            .iter()
+            .filter(|segment| segment.path != current_path)
+            .map(|segment| metrics.segment_width(segment))
+            .sum::<f32>()
+        - metrics.children_width)
+        .clamp(16., metrics.max_label_width);
     for segment in visible_segments {
         let is_current = segment.path == current_path;
         let branch_child_path = all_segments
@@ -635,20 +655,13 @@ fn transfer_browser_breadcrumb_row(
                             "transfer-browser-breadcrumb-label-{}",
                             segment.path
                         )))
-                        .h(px(20.))
+                        .h(px(metrics.control_height))
                         .max_w(px(if is_current {
-                            (available_width
-                                - if overflow_segments.is_empty() {
-                                    0.
-                                } else {
-                                    24.
-                                }
-                                - 16.)
-                                .clamp(16., 128.)
+                            current_label_width
                         } else {
-                            128.
+                            metrics.max_label_width
                         }))
-                        .px_1()
+                        .px(px(4.))
                         .flex()
                         .items_center()
                         .overflow_hidden()
@@ -684,8 +697,8 @@ fn transfer_browser_breadcrumb_row(
                             "transfer-browser-breadcrumb-children-{}",
                             segment.path
                         )))
-                        .h(px(20.))
-                        .w(px(16.))
+                        .h(px(metrics.control_height))
+                        .w(px(metrics.children_width))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -735,6 +748,43 @@ struct TransferBrowserBreadcrumbRowPresentation {
     overflow_segments: Vec<TransferBrowserBreadcrumbSegment>,
     overflow_label: String,
     available_width: f32,
+    metrics: TransferBrowserPathMetrics,
+}
+
+/// Keep the rendered controls and the collapse budget on the same font scale.
+#[derive(Clone, Copy)]
+struct TransferBrowserPathMetrics {
+    font_size: f32,
+    line_height: f32,
+    control_height: f32,
+    children_width: f32,
+    max_label_width: f32,
+}
+
+impl TransferBrowserPathMetrics {
+    fn new(ui_font_size: f32) -> Self {
+        // Match the 12px file labels at the default 16px UI size while keeping
+        // the path readable at smaller settings and responsive to larger ones.
+        let font_size = (ui_font_size * 0.75).max(10.);
+        let line_height = font_size * 1.5;
+        Self {
+            font_size,
+            line_height,
+            control_height: (line_height + 4.).max(22.),
+            children_width: (font_size * 0.8).max(16.),
+            max_label_width: 128. * font_size / 10.,
+        }
+    }
+
+    fn row_height(self) -> f32 {
+        self.control_height + 5. // Vertical padding and bottom border.
+    }
+
+    fn segment_width(self, segment: &TransferBrowserBreadcrumbSegment) -> f32 {
+        let label = truncate_preview(&segment.label, 18);
+        (label.chars().count() as f32 * self.font_size * 0.6 + 8.).min(self.max_label_width)
+            + self.children_width
+    }
 }
 
 fn transfer_browser_path_menu_entries(
@@ -882,23 +932,25 @@ fn build_transfer_browser_breadcrumbs(
 fn collapse_transfer_browser_breadcrumbs(
     segments: &[TransferBrowserBreadcrumbSegment],
     available_width: f32,
+    metrics: TransferBrowserPathMetrics,
 ) -> (
     Vec<TransferBrowserBreadcrumbSegment>,
     Vec<TransferBrowserBreadcrumbSegment>,
 ) {
     let mut shown = vec![true; segments.len()];
-    let segment_width = |segment: &TransferBrowserBreadcrumbSegment| {
-        (segment.label.chars().count() as f32 * 6. + 24.).min(152.)
-    };
     loop {
         let hidden = shown.iter().filter(|shown| !**shown).count();
         let width = segments
             .iter()
             .zip(&shown)
             .filter(|(_, shown)| **shown)
-            .map(|(segment, _)| segment_width(segment))
+            .map(|(segment, _)| metrics.segment_width(segment))
             .sum::<f32>()
-            + if hidden > 0 { 24. } else { 0. };
+            + if hidden > 0 {
+                metrics.control_height
+            } else {
+                0.
+            };
         if width <= available_width.max(0.) {
             break;
         }
@@ -927,12 +979,13 @@ fn transfer_browser_path_history_list(
     current_browser_path: String,
     home_dir: String,
     paths: Vec<String>,
+    metrics: TransferBrowserPathMetrics,
     cx: &mut Context<TransferPanel>,
 ) -> impl IntoElement {
     let mut list = div()
         .id(SharedString::from("transfer-browser-path-history-list"))
         .mt(px(1.))
-        .max_h(px(120.))
+        .max_h(px(metrics.control_height * 5.))
         .overflow_scrollbar()
         .rounded_b_md()
         .border_1()
@@ -951,13 +1004,14 @@ fn transfer_browser_path_history_list(
                 .id(SharedString::from(format!(
                     "transfer-browser-path-history-{path}"
                 )))
-                .h(px(24.))
+                .h(px(metrics.control_height))
                 .w_full()
                 .px_2()
                 .flex()
                 .items_center()
                 .font_family(crate::features::shell::gpui_code_font_family())
-                .text_size(px(10.))
+                .text_size(px(metrics.font_size))
+                .line_height(px(metrics.line_height))
                 .text_color(if is_current {
                     rgb(palette.link)
                 } else {
@@ -1019,8 +1073,8 @@ mod tests {
     use nyaterm_transport::{SftpFileEntry, SftpFileType};
 
     use super::{
-        build_transfer_browser_breadcrumbs, collapse_transfer_browser_breadcrumbs,
-        transfer_browser_child_directories,
+        TransferBrowserPathMetrics, build_transfer_browser_breadcrumbs,
+        collapse_transfer_browser_breadcrumbs, transfer_browser_child_directories,
     };
 
     fn entry(name: &str, path: &str, file_type: SftpFileType) -> SftpFileEntry {
@@ -1084,7 +1138,11 @@ mod tests {
     #[test]
     fn long_breadcrumbs_keep_root_and_last_two_segments_visible() {
         let segments = build_transfer_browser_breadcrumbs("/a/b/c/d/e", "");
-        let (visible, overflow) = collapse_transfer_browser_breadcrumbs(&segments, 120.);
+        let (visible, overflow) = collapse_transfer_browser_breadcrumbs(
+            &segments,
+            120.,
+            TransferBrowserPathMetrics::new(12.),
+        );
 
         assert_eq!(
             visible
@@ -1105,7 +1163,11 @@ mod tests {
     #[test]
     fn narrow_breadcrumbs_keep_current_directory_reachable() {
         let segments = build_transfer_browser_breadcrumbs("/a/b/c/d/e", "");
-        let (visible, overflow) = collapse_transfer_browser_breadcrumbs(&segments, 55.);
+        let (visible, overflow) = collapse_transfer_browser_breadcrumbs(
+            &segments,
+            55.,
+            TransferBrowserPathMetrics::new(24.),
+        );
         assert_eq!(
             visible
                 .iter()
@@ -1119,9 +1181,36 @@ mod tests {
     #[test]
     fn wide_breadcrumbs_show_every_segment() {
         let segments = build_transfer_browser_breadcrumbs("/a/b/c", "");
-        let (visible, overflow) = collapse_transfer_browser_breadcrumbs(&segments, 400.);
+        let (visible, overflow) = collapse_transfer_browser_breadcrumbs(
+            &segments,
+            400.,
+            TransferBrowserPathMetrics::new(24.),
+        );
         assert_eq!(visible.len(), segments.len());
         assert!(overflow.is_empty());
+    }
+
+    #[test]
+    fn larger_ui_fonts_collapse_more_segments_at_the_same_panel_width() {
+        let segments = build_transfer_browser_breadcrumbs("/home/nya/work/src", "");
+        let (small_visible, small_overflow) = collapse_transfer_browser_breadcrumbs(
+            &segments,
+            220.,
+            TransferBrowserPathMetrics::new(12.),
+        );
+        assert_eq!(small_visible.len(), segments.len());
+        assert!(small_overflow.is_empty());
+
+        for font_size in [16., 18., 20., 24.] {
+            let (visible, overflow) = collapse_transfer_browser_breadcrumbs(
+                &segments,
+                220.,
+                TransferBrowserPathMetrics::new(font_size),
+            );
+            assert!(!overflow.is_empty(), "font size {font_size}");
+            assert_eq!(visible.last(), segments.last());
+            assert_eq!(visible.len() + overflow.len(), segments.len());
+        }
     }
 
     #[test]

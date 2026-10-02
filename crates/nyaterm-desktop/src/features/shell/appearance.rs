@@ -747,6 +747,7 @@ impl NyaTermApp {
             return;
         }
         self.sync_component_theme(cx);
+        self.defer_transfer_panel_snapshot_flush(cx);
         self.save_appearance_settings(cx);
     }
 

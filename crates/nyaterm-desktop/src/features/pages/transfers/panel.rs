@@ -30,6 +30,7 @@ pub(in crate::features) struct TransferChrome {
     pub transparent_section_header: Rgba,
     pub surface: Rgba,
     pub panel_width: f32,
+    pub ui_font_size: f32,
 }
 
 /// The browser's render state, owned.
@@ -352,6 +353,27 @@ mod tests {
 
     fn paints(app: &Entity<NyaTermApp>, cx: &mut gpui::App) -> usize {
         app.read(cx).transfer_panel.read(cx).paint_count()
+    }
+
+    #[test]
+    fn ui_font_size_changes_refresh_the_transfer_snapshot_without_panel_interaction() {
+        let test_dir = TestConfigDir::new("nyaterm-transfer-font-size");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = hosted(&mut cx, test_dir.path());
+
+        for font_size in [12, 24, 18] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| app.set_ui_font_size_from_input(font_size, cx));
+            });
+            vcx.run_until_parked();
+            vcx.update(|_, cx| {
+                let panel = app.read(cx).transfer_panel.read(cx);
+                assert_eq!(
+                    panel.snapshot().unwrap().chrome.ui_font_size,
+                    font_size as f32
+                );
+            });
+        }
     }
 
     struct QueueHost {
