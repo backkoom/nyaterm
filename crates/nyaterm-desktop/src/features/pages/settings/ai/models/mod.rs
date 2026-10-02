@@ -4,15 +4,15 @@ use crate::features::ai::ConnectionStatus;
 use crate::features::pages::settings::panel::SettingsPanel;
 use crate::theme::ThemePalette;
 use gpui::{
-    AnyElement, Context, IntoElement, KeyDownEvent, SharedString, div, img, prelude::*, px, rgb,
-    svg,
+    AnyElement, Context, FontWeight, IntoElement, KeyDownEvent, SharedString, div, img, prelude::*,
+    px, rgb, svg,
 };
 use nyaterm_core::ai::provider_settings::{
     DEFAULT_MODEL_REASONING_EFFORTS, MODEL_REASONING_EFFORTS, protocol_value, provider_label,
     provider_name_taken, provider_requires_api_key,
 };
 use nyaterm_core::ai::{AiModelSource, AiProviderKind};
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton, NyaScrollable, NyaSelectOption};
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton, NyaSelectOption};
 use rust_i18n::t;
 
 impl SettingsPanel {
@@ -37,13 +37,11 @@ impl SettingsPanel {
             .statuses
             .values()
             .any(|status| *status == ConnectionStatus::Testing);
-        let mut buttons = div()
-            .id("ai-provider-list-scroll")
+        let actions = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
-            .min_w_0()
-            .overflow_x_scrollbar()
             .child(
                 NyaIconButton::new("ai-provider-refresh", "icons/fe/refresh.svg")
                     .tooltip(t!("ai.refreshProviders"))
@@ -54,39 +52,119 @@ impl SettingsPanel {
             )
             .child(
                 NyaButton::new("ai-provider-add", t!("ai.addProvider"))
-                    .height(px(40.))
                     .icon("icons/settings/plus.svg")
                     .selected(view.choices_open)
                     .on_click(cx.listener(|panel, _, _, cx| {
                         panel.with_app(cx, |app, cx| app.toggle_ai_provider_choices(cx));
                     })),
             );
+        let columns = if self.viewport_width >= 800. {
+            3
+        } else if self.viewport_width >= 520. {
+            2
+        } else {
+            1
+        };
+        let mut providers = div()
+            .id("ai-provider-list")
+            .w_full()
+            .min_w_0()
+            .grid()
+            .grid_cols(columns)
+            .gap_2();
         for credential in &credentials {
             let id = credential.id.clone();
+            let is_selected = view.selected_id.as_ref() == Some(&id);
+            let status = view.statuses.get(&id).copied().unwrap_or_default();
+            let status_label = match status {
+                ConnectionStatus::Idle => t!("ai.providerStatusIdle"),
+                ConnectionStatus::Testing => t!("ai.providerStatusTesting"),
+                ConnectionStatus::Success => t!("ai.providerStatusSuccess"),
+                ConnectionStatus::Error => t!("ai.providerStatusError"),
+            };
             let name = if credential.name.trim().is_empty() {
                 provider_label(&credential.provider_kind).to_string()
             } else {
                 credential.name.clone()
             };
-            buttons = buttons.child(
-                NyaButton::new(format!("ai-provider-{id}"), "")
-                    .height(px(40.))
-                    .selected(view.selected_id.as_ref() == Some(&id))
-                    .content(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(self.provider_badge(credential, palette))
-                            .child(div().max_w(px(160.)).overflow_hidden().child(name))
-                            .child(status_dot(
-                                palette,
-                                view.statuses.get(&id).copied().unwrap_or_default(),
-                            )),
-                    )
-                    .on_click(cx.listener(move |panel, _, _, cx| {
-                        panel.with_app(cx, |app, cx| app.select_ai_provider(id.clone(), cx));
-                    })),
+            providers = providers.child(
+                div()
+                    .min_w_0()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(if is_selected {
+                        palette.accent
+                    } else {
+                        palette.border
+                    }))
+                    .bg(rgb(palette.surface_elevated))
+                    .overflow_hidden()
+                    .child(
+                        NyaButton::new(format!("ai-provider-{id}"), "")
+                            .variant(NyaButtonVariant::Ghost)
+                            .height(px(64.))
+                            .full_width()
+                            .selected(is_selected)
+                            .tooltip(name.clone())
+                            .content(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .child(self.provider_badge(credential, palette)),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .truncate()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child(name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .text_size(px(11.))
+                                                    .text_color(rgb(status_color(palette, status)))
+                                                    .child(status_dot(palette, status))
+                                                    .child(
+                                                        div()
+                                                            .min_w_0()
+                                                            .truncate()
+                                                            .child(status_label),
+                                                    ),
+                                            ),
+                                    )
+                                    .child(div().w(px(14.)).flex_none().when(
+                                        is_selected,
+                                        |mark| {
+                                            mark.child(
+                                                svg()
+                                                    .path("icons/check.svg")
+                                                    .size(px(14.))
+                                                    .text_color(rgb(palette.accent)),
+                                            )
+                                        },
+                                    )),
+                            )
+                            .on_click(cx.listener(move |panel, _, _, cx| {
+                                panel
+                                    .with_app(cx, |app, cx| app.select_ai_provider(id.clone(), cx));
+                            })),
+                    ),
             );
         }
         let mut picker = div().flex().flex_wrap().gap_2();
@@ -122,13 +200,25 @@ impl SettingsPanel {
         }
         let mut page = div().flex().flex_col().gap_5().child(ai_card(
             palette,
-            div().child(t!("ai.providerList")),
-            div(),
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .child(t!("ai.providerList"))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("ai.providerCount", count = credentials.len())),
+                ),
+            actions,
             div()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .child(buttons)
+                .when(!credentials.is_empty(), |body| body.child(providers))
                 .when(view.choices_open || credentials.is_empty(), |body| {
                     body.child(picker)
                 }),
@@ -574,12 +664,16 @@ fn status_dot(palette: ThemePalette, status: ConnectionStatus) -> impl IntoEleme
         .size(px(9.))
         .rounded_full()
         .flex_none()
-        .bg(rgb(match status {
-            ConnectionStatus::Idle => palette.text_dimmed,
-            ConnectionStatus::Testing => palette.accent,
-            ConnectionStatus::Success => palette.success,
-            ConnectionStatus::Error => palette.danger,
-        }))
+        .bg(rgb(status_color(palette, status)))
+}
+
+fn status_color(palette: ThemePalette, status: ConnectionStatus) -> u32 {
+    match status {
+        ConnectionStatus::Idle => palette.text_muted,
+        ConnectionStatus::Testing => palette.accent,
+        ConnectionStatus::Success => palette.success,
+        ConnectionStatus::Error => palette.danger,
+    }
 }
 fn model_badge(palette: ThemePalette, text: impl Into<SharedString>) -> impl IntoElement {
     div()
