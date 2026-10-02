@@ -13,6 +13,17 @@ pub fn discover_provider_models(
     settings: &AiSettings,
     credential: &AiProviderCredential,
 ) -> Result<Vec<AiModelDiscovery>, String> {
+    discover_provider_models_cancellable(settings, credential, &|| false)
+}
+
+pub(crate) fn discover_provider_models_cancellable(
+    settings: &AiSettings,
+    credential: &AiProviderCredential,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<AiModelDiscovery>, String> {
+    if is_cancelled() {
+        return Err("AI model discovery cancelled".into());
+    }
     let base = credential
         .base_url
         .as_deref()
@@ -35,6 +46,9 @@ pub fn discover_provider_models(
     let mut cursor: Option<ProviderModelCursor> = None;
     let mut seen = std::collections::HashSet::new();
     for _ in 0..100 {
+        if is_cancelled() {
+            return Err("AI model discovery cancelled".into());
+        }
         let mut request = client.get(&url);
         match protocol {
             AiProviderApiProtocol::Anthropic => {
@@ -68,6 +82,9 @@ pub fn discover_provider_models(
         let raw = response
             .text()
             .map_err(|_| "Cannot read provider model response")?;
+        if is_cancelled() {
+            return Err("AI model discovery cancelled".into());
+        }
         let page = parse_provider_model_page(protocol, &raw).map_err(|error| error.to_string())?;
         names.extend(page.names);
         cursor = page.next_cursor;

@@ -1,5 +1,6 @@
 mod provider;
 use nyaterm_core::ai::{AiProviderApiProtocol, provider_settings::effective_protocol};
+pub(crate) use provider::discover_provider_models_cancellable;
 pub use provider::{discover_provider_models, test_model_connection};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -1061,6 +1062,59 @@ mod tests {
             server.join().unwrap();
         }
     }
+    #[test]
+    fn cancelled_discovery_does_not_open_a_provider_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let settings = responses_settings(format!("http://{}/v1", listener.local_addr().unwrap()));
+        let error = super::discover_provider_models_cancellable(
+            &settings,
+            &settings.provider_credentials[0],
+            &|| true,
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn discovery_cancelled_during_a_response_does_not_request_the_next_page() {
+        use nyaterm_core::ai::AiProviderApiProtocol;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut settings =
+            responses_settings(format!("http://{}/v1", listener.local_addr().unwrap()));
+        settings.provider_credentials[0].api_protocol = Some(AiProviderApiProtocol::Anthropic);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let server_cancelled = Arc::clone(&cancelled);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            server_cancelled.store(true, Ordering::Release);
+            let body = r#"{"data":[{"id":"fixture-model"}],"has_more":true,"last_id":"cursor"}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            listener
+        });
+        let error = super::discover_provider_models_cancellable(
+            &settings,
+            &settings.provider_credentials[0],
+            &|| cancelled.load(Ordering::Acquire),
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"));
+        let listener = server.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
     #[test]
     fn discovery_follows_protocol_pagination_and_rejects_repeated_cursors() {
         use nyaterm_core::ai::AiProviderApiProtocol;

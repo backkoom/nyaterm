@@ -2212,6 +2212,12 @@ impl AiPanelState {
 
 /// Transitions that span more than one AI concern.
 impl AiFeatureState {
+    pub(in crate::features) fn shutdown_agent_management_worker(
+        &mut self,
+    ) -> Option<std::thread::JoinHandle<()>> {
+        self.agent_management.begin_shutdown()
+    }
+
     pub(in crate::features) fn agent_management_view(&self) -> &AgentManagementView {
         self.agent_management.view()
     }

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use futures::StreamExt as _;
 use futures::future::{Either, select};
 use gpui::{
-    AnyWindowHandle, AppContext as _, Context, TitlebarOptions, WeakEntity, WindowOptions, point,
-    px,
+    AnyWindowHandle, AppContext as _, Context, Task, TitlebarOptions, WeakEntity, WindowOptions,
+    point, px,
 };
 use nyaterm_core::{
     ACTIVATION_QUEUE_CAPACITY, ActivationOpenBehavior, ActivationReceiver, ActivationRequest,
@@ -1531,25 +1531,38 @@ impl DesktopController {
         next_recent: Option<WorkspaceId>,
         cx: &mut Context<Self>,
     ) {
-        self.closing_workspaces.remove(&workspace_id);
         let Some(entry) = self.windows.remove(&workspace_id) else {
+            self.closing_workspaces.remove(&workspace_id);
             return;
         };
-        let _ = entry.shell.update(cx, |shell, cx| {
-            if let Some(app) = &shell.app {
-                app.update(cx, |app, _| {
-                    app.shutdown_workspace_sessions();
-                    app.shutdown_blocking_jobs();
-                });
-            }
-        });
+        let cleanup = entry
+            .shell
+            .update(cx, |shell, cx| {
+                shell.app.as_ref().map(|app| {
+                    app.update(cx, |app, cx| {
+                        app.shutdown_workspace_sessions();
+                        app.shutdown_blocking_jobs(cx)
+                    })
+                })
+            })
+            .ok()
+            .flatten();
         self.release_settings_owner(workspace_id);
         self.pending_tab_moves.remove(&workspace_id);
-        cx.defer(move |cx| {
-            let _ = entry
-                .handle
-                .update(cx, |_, window, _| window.remove_window());
-        });
+        cx.spawn(async move |this, cx| {
+            if let Some(cleanup) = cleanup {
+                cleanup.await;
+            }
+            let _ = this.update(cx, |controller, cx| {
+                controller.closing_workspaces.remove(&workspace_id);
+                cx.defer(move |cx| {
+                    let _ = entry
+                        .handle
+                        .update(cx, |_, window, _| window.remove_window());
+                });
+            });
+        })
+        .detach();
         self.most_recent_workspace_id = next_recent;
         self.device_windows = device_windows;
     }
@@ -1587,7 +1600,7 @@ impl DesktopController {
         workspace_id: WorkspaceId,
         cx: &mut Context<Self>,
     ) {
-        if self.process_quitting || self.closing_workspaces.contains(&workspace_id) {
+        if self.process_quitting || !self.closing_workspaces.is_empty() {
             return;
         }
         if self.windows.len() == 1 {
@@ -1611,8 +1624,7 @@ impl DesktopController {
                         let outcome = task.await.outcome;
                         let _ = this.update(cx, |controller, cx| match outcome {
                             Ok(()) => {
-                                controller.shutdown_all_workspaces(cx);
-                                cx.quit();
+                                controller.quit_after_workspace_shutdown(cx);
                             }
                             Err(error) => {
                                 controller.process_quitting = false;
@@ -1742,8 +1754,7 @@ impl DesktopController {
             return;
         }
         let Some(store_runtime) = self.startup.shared_store_runtime() else {
-            self.shutdown_all_workspaces(cx);
-            cx.quit();
+            self.quit_after_workspace_shutdown(cx);
             return;
         };
         store_runtime.begin_shutdown();
@@ -1757,8 +1768,7 @@ impl DesktopController {
                     let outcome = barrier.await.outcome;
                     let _ = this.update(cx, |controller, cx| match outcome {
                         Ok(()) => {
-                            controller.shutdown_all_workspaces(cx);
-                            cx.quit();
+                            controller.quit_after_workspace_shutdown(cx);
                         }
                         Err(error) => {
                             store_runtime.resume_after_failed_shutdown();
@@ -1893,36 +1903,47 @@ impl DesktopController {
         )
     }
 
-    pub fn shutdown_all_workspaces(&mut self, cx: &mut Context<Self>) {
-        self.shutdown_workspaces_except(None, cx);
+    fn quit_after_workspace_shutdown(&mut self, cx: &mut Context<Self>) {
+        let tasks = self.shutdown_workspaces_except(None, cx);
+        cx.spawn(async move |this, cx| {
+            for task in tasks {
+                task.await;
+            }
+            let _ = this.update(cx, |_, cx| cx.quit());
+        })
+        .detach();
     }
 
     pub fn shutdown_other_workspaces(
         &mut self,
         excluded_workspace_id: WorkspaceId,
         cx: &mut Context<Self>,
-    ) {
-        self.shutdown_workspaces_except(Some(excluded_workspace_id), cx);
+    ) -> Vec<Task<()>> {
+        self.shutdown_workspaces_except(Some(excluded_workspace_id), cx)
     }
 
     fn shutdown_workspaces_except(
         &mut self,
         excluded_workspace_id: Option<WorkspaceId>,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Vec<Task<()>> {
+        let mut tasks = Vec::new();
         for (workspace_id, entry) in &self.windows {
             if excluded_workspace_id == Some(*workspace_id) {
                 continue;
             }
-            let _ = entry.shell.update(cx, |shell, cx| {
-                if let Some(app) = &shell.app {
-                    app.update(cx, |app, _| {
+            if let Ok(Some(task)) = entry.shell.update(cx, |shell, cx| {
+                shell.app.as_ref().map(|app| {
+                    app.update(cx, |app, cx| {
                         app.shutdown_workspace_sessions();
-                        app.shutdown_blocking_jobs();
-                    });
-                }
-            });
+                        app.shutdown_blocking_jobs(cx)
+                    })
+                })
+            }) {
+                tasks.push(task);
+            }
         }
+        tasks
     }
 
     pub fn workspace_count(&self) -> usize {

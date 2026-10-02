@@ -667,16 +667,36 @@ impl AppShell {
 
     fn quit_after_worker_shutdown(&mut self, launch_update: bool, cx: &mut Context<Self>) {
         let started_at = Instant::now();
-        // The current shell is already borrowed by the persistence completion callback.
-        if let Some(app) = &self.app {
-            app.update(cx, |app, _| {
-                app.shutdown_workspace_sessions();
-                app.shutdown_blocking_jobs();
-            });
-        }
-        self.controller.update(cx, |controller, cx| {
+        let mut tasks = self.controller.update(cx, |controller, cx| {
             controller.shutdown_other_workspaces(self.workspace_id, cx)
         });
+        // The current shell is already borrowed by the persistence completion callback.
+        if let Some(app) = &self.app {
+            tasks.push(app.update(cx, |app, cx| {
+                app.shutdown_workspace_sessions();
+                app.shutdown_blocking_jobs(cx)
+            }));
+        }
+        if !matches!(self.lifecycle, AppShellLifecycle::Flushing) {
+            self.enter_flushing(cx);
+        }
+        cx.spawn(async move |this, cx| {
+            for task in tasks {
+                task.await;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.finish_worker_shutdown(launch_update, started_at, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn finish_worker_shutdown(
+        &mut self,
+        launch_update: bool,
+        started_at: Instant,
+        cx: &mut Context<Self>,
+    ) {
         tracing::info!(
             elapsed_ms = started_at.elapsed().as_millis(),
             "workspace workers stopped"

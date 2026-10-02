@@ -155,7 +155,10 @@ impl NyaTermApp {
         let jobs = self.blocking_jobs.clone();
         let store = self.store_blocking_client();
         cx.spawn(async move |this, cx| {
-            let result = await_blocking_job(jobs.submit_task("ai-provider-test", move |_| {
+            let result = await_blocking_job(jobs.submit_task("ai-provider-test", move |cancel| {
+                if cancel.is_cancelled() {
+                    return Err("AI provider test cancelled".to_string());
+                }
                 let current = store
                     .request_fn(nyaterm_store::StoreDomain::Ai, |store| {
                         store.load_ai_settings()
@@ -164,6 +167,7 @@ impl NyaTermApp {
                 let settings = nyaterm_core::merge_masked_ai_settings(&current, settings);
                 Ok::<_, String>(
                     ids.into_iter()
+                        .take_while(|_| !cancel.is_cancelled())
                         .map(|id| {
                             let result = settings
                                 .provider_credentials
@@ -171,7 +175,11 @@ impl NyaTermApp {
                                 .find(|credential| credential.id == id)
                                 .ok_or_else(|| "Provider no longer exists".into())
                                 .and_then(|credential| {
-                                    crate::http::ai::discover_provider_models(&settings, credential)
+                                    crate::http::ai::discover_provider_models_cancellable(
+                                        &settings,
+                                        credential,
+                                        &|| cancel.is_cancelled(),
+                                    )
                                 });
                             (id, result)
                         })
@@ -229,12 +237,15 @@ impl NyaTermApp {
         self.request_settings_panel_refresh(cx);
         cx.spawn(async move |this, cx| {
             let test_id = id.clone();
-            let result = await_blocking_job(jobs.submit_task("ai-model-test", move |_| {
+            let result = await_blocking_job(jobs.submit_task("ai-model-test", move |cancel| {
                 let current = store
                     .request_fn(nyaterm_store::StoreDomain::Ai, |store| {
                         store.load_ai_settings()
                     })
                     .map_err(|error| error.to_string())?;
+                if cancel.is_cancelled() {
+                    return Err("AI model test cancelled".to_string());
+                }
                 crate::http::ai::test_model_connection(
                     &nyaterm_core::merge_masked_ai_settings(&current, settings),
                     &test_id,
