@@ -21,7 +21,7 @@ jobs:
     name: Verify draft release is ready
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Require a version tag
         shell: bash
@@ -806,7 +806,7 @@ jobs:
     needs: cleanup-sigs
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Verify draft assets and signed updater targets
         uses: actions/github-script@v8
@@ -1034,7 +1034,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     permissions:
-      contents: read
+      contents: write
 
     env:
       TAG: ${{ github.ref_name }}
