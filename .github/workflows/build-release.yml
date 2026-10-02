@@ -78,11 +78,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          expected_prerelease=false
+          [[ "$GITHUB_REF_NAME" != *-* ]] || expected_prerelease=true
           for attempt in $(seq 1 13); do
             if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --json tagName,isDraft,isPrerelease,body > release.json; then
-              if ! jq -e --arg tag "$GITHUB_REF_NAME" '.tagName == $tag and .isDraft == true' release.json > /dev/null; then
-                echo "::error::Release must match the tag and remain Draft."
+              if ! jq -e --arg tag "$GITHUB_REF_NAME" --argjson prerelease "$expected_prerelease" \
+                '.tagName == $tag and .isDraft == true and .isPrerelease == $prerelease' release.json > /dev/null; then
+                echo "::error::Release must match the tag, remain Draft, and have isPrerelease=$expected_prerelease."
                 exit 1
               fi
               if jq -e '.body // "" | test("\\S")' release.json > /dev/null; then
@@ -823,6 +826,10 @@ jobs:
             });
             const release = releases.find(item => item.tag_name === tag);
             if (!release) throw new Error(`No Release found for ${tag}`);
+            const expectedPrerelease = tag.includes('-');
+            if (release.prerelease !== expectedPrerelease) {
+              throw new Error(`Release ${tag} must have prerelease=${expectedPrerelease}.`);
+            }
             if (release.tag_name !== tag || !release.draft || !release.body?.trim()) {
               throw new Error('Release must match the tag and remain Draft with a non-empty body.');
             }
@@ -910,9 +917,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          expected_prerelease=false
+          [[ "$GITHUB_REF_NAME" != *-* ]] || expected_prerelease=true
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,body \
-            | jq -e --arg tag "$GITHUB_REF_NAME" '.tagName == $tag and .isDraft == true and (.body // "" | test("\\S"))' > /dev/null
+            --json tagName,isDraft,isPrerelease,body \
+            | jq -e --arg tag "$GITHUB_REF_NAME" --argjson prerelease "$expected_prerelease" \
+              '.tagName == $tag and .isDraft == true and .isPrerelease == $prerelease and (.body // "" | test("\\S"))' > /dev/null
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
 
   publish-beta-updater:
