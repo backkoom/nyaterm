@@ -26,10 +26,27 @@ use super::{
     AppShell, AppShellStartup, GlobalStateMutation, ProcessStateStore, SessionHub,
     SharedStateDomain, SharedStateEvent,
 };
+use crate::features::WorkspaceCloseSnapshot;
+use crate::features::shell::tray::model::{TrayAction, TraySnapshot, TraySyncState};
+use crate::features::shell::tray::{SystemTray, show_window as show_tray_window};
 use crate::features::update::{UpdateCheckKind, UpdateEvent, UpdateStore};
 use crate::features::{AutoSyncResult, AutoSyncTrigger, run_auto_sync};
-use crate::features::{SystemTray, TraySnapshot, WorkspaceCloseSnapshot, show_tray_window};
 use crate::models::NavItem;
+
+fn tray_click_shows_window(event: &tray_icon::TrayIconEvent) -> bool {
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+    matches!(
+        event,
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } | TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+        }
+    )
+}
 
 pub struct DesktopControllerGlobal(pub gpui::Entity<DesktopController>);
 impl gpui::Global for DesktopControllerGlobal {}
@@ -798,76 +815,255 @@ impl DesktopController {
         .detach();
     }
 
-    fn recent_app(
+    fn tray_apps(
         &self,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::Entity<crate::features::NyaTermApp>> {
-        let id = self
-            .most_recent_workspace_id
-            .or_else(|| self.windows.keys().next().copied())?;
-        self.windows
-            .get(&id)?
-            .shell
-            .update(cx, |shell, _| shell.app.clone())
-            .ok()
-            .flatten()
+        cx: &gpui::App,
+    ) -> Vec<(WorkspaceId, gpui::Entity<crate::features::NyaTermApp>)> {
+        let mut apps: Vec<_> = self
+            .windows
+            .iter()
+            .filter_map(|(id, entry)| {
+                if self.closing_workspaces.contains(id) {
+                    return None;
+                }
+                entry
+                    .shell
+                    .upgrade()
+                    .and_then(|shell| shell.read(cx).app.clone())
+                    .map(|app| (*id, app))
+            })
+            .collect();
+        apps.sort_by_key(|(id, _)| {
+            (
+                self.device_windows
+                    .window_order
+                    .iter()
+                    .position(|candidate| candidate == id)
+                    .unwrap_or(usize::MAX),
+                id.0,
+            )
+        });
+        apps
     }
 
-    fn tray_snapshot(&self, cx: &mut Context<Self>) -> TraySnapshot {
-        self.recent_app(cx)
-            .map(|app| app.read(cx).tray_snapshot())
-            .unwrap_or_else(TraySnapshot::empty)
+    fn recent_tray_workspace(&self, cx: &gpui::App) -> Option<WorkspaceId> {
+        let apps = self.tray_apps(cx);
+        self.most_recent_workspace_id
+            .filter(|id| apps.iter().any(|(candidate, _)| candidate == id))
+            .or_else(|| apps.first().map(|(id, _)| *id))
+    }
+
+    fn tray_action_workspace(&self, action: &TrayAction, cx: &gpui::App) -> Option<WorkspaceId> {
+        match action {
+            TrayAction::FocusSession(session_id) => self
+                .tray_apps(cx)
+                .iter()
+                .find(|(_, app)| app.read(cx).owns_tray_session(session_id))
+                .map(|(id, _)| *id),
+            _ => self.recent_tray_workspace(cx),
+        }
+    }
+
+    fn tray_snapshot(&self, cx: &gpui::App) -> TraySnapshot {
+        let apps = self.tray_apps(cx);
+        let Some(target_id) = self.recent_tray_workspace(cx) else {
+            return TraySnapshot::empty();
+        };
+        let mut snapshots: Vec<_> = apps
+            .iter()
+            .map(|(id, app)| (*id, app.read(cx).tray_window_snapshot()))
+            .collect();
+        let target = &snapshots
+            .iter()
+            .find(|(id, _)| *id == target_id)
+            .expect("ready tray target")
+            .1;
+        let (enabled, minimize, lock_available) = self
+            .process_state
+            .as_ref()
+            .map(|state| {
+                let snapshot = state.read(cx).snapshot();
+                (
+                    snapshot.cloud_sync_settings.enabled,
+                    snapshot.settings.minimize_to_tray,
+                    snapshot.settings.enable_startup_lock || snapshot.settings.enable_idle_lock,
+                )
+            })
+            .unwrap_or((
+                target.sync_enabled,
+                target.minimize_to_tray,
+                target.lock_available,
+            ));
+        let sync = TraySyncState::aggregate(
+            enabled,
+            self.auto_sync.running,
+            snapshots.iter().map(|(_, snapshot)| snapshot.sync_state),
+            target.sync_state,
+        );
+        let locked = self.screen_locked
+            || apps
+                .iter()
+                .any(|(_, app)| app.read(cx).tray_screen_locked());
+        let sessions = snapshots
+            .iter_mut()
+            .flat_map(|(_, snapshot)| std::mem::take(&mut snapshot.sessions))
+            .collect();
+        TraySnapshot::new(sessions, sync, minimize, lock_available, locked)
     }
 
     fn poll_tray(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.tray_snapshot(cx);
         if let Some(tray) = self.tray.as_mut() {
-            tray.update(snapshot)
+            tray.update(snapshot);
         }
         while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
-            self.handle_tray_action(event.id.as_ref(), cx);
+            if let Some(action) = TrayAction::from_menu_id(event.id.as_ref()) {
+                if action == TrayAction::MinimizeMode
+                    && let Some(tray) = self.tray.as_mut()
+                {
+                    tray.refresh_checkmark();
+                }
+                self.handle_tray_action(action, cx);
+            }
         }
         while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
-            if matches!(event, tray_icon::TrayIconEvent::DoubleClick { .. }) {
-                self.handle_tray_action("show", cx);
+            if tray_click_shows_window(&event) {
+                self.handle_tray_action(TrayAction::Show, cx);
             }
         }
     }
 
-    fn handle_tray_action(&mut self, action: &str, cx: &mut Context<Self>) {
+    fn show_recent_tray_window(&mut self, cx: &mut Context<Self>) {
+        let id = self
+            .most_recent_workspace_id
+            .filter(|id| self.windows.contains_key(id))
+            .or_else(|| {
+                self.device_windows
+                    .window_order
+                    .iter()
+                    .copied()
+                    .find(|id| self.windows.contains_key(id))
+            });
+        if let Some(entry) = id.and_then(|id| self.windows.get(&id)) {
+            let _ = entry
+                .handle
+                .update(cx, |_, window, cx| show_tray_window(window, cx));
+        } else if let Err(error) = self.open_workspace(OpenWorkspaceRequest::default(), cx) {
+            tracing::error!(%error, "could not show NyaTerm window");
+        }
+    }
+
+    fn handle_tray_action(&mut self, action: TrayAction, cx: &mut Context<Self>) {
+        if self.process_quitting {
+            return;
+        }
+        let locked = self.screen_locked
+            || self
+                .tray_apps(cx)
+                .iter()
+                .any(|(_, app)| app.read(cx).tray_screen_locked());
+        if locked && action.requires_unlock() {
+            self.show_recent_tray_window(cx);
+            return;
+        }
         match action {
-            "show" => {
-                if let Some(id) = self
-                    .most_recent_workspace_id
-                    .or_else(|| self.windows.keys().next().copied())
-                {
-                    if let Some(entry) = self.windows.get(&id) {
-                        let _ = entry.handle.update(cx, |_, window, cx| {
-                            show_tray_window(window, cx);
-                        });
-                    }
-                } else if let Err(error) = self.open_workspace(OpenWorkspaceRequest::default(), cx)
-                {
-                    tracing::error!(%error, "could not show NyaTerm window");
-                }
-            }
-            "new-window" => {
+            TrayAction::Show => self.show_recent_tray_window(cx),
+            TrayAction::NewWindow => {
                 if let Err(error) = self.open_workspace(OpenWorkspaceRequest::default(), cx) {
                     tracing::error!(%error, "could not open NyaTerm window");
                 }
             }
-            "quit" => self.request_quit(cx),
+            TrayAction::Quit => self.request_quit(cx),
             _ => {
-                if let Some(app) = self.recent_app(cx) {
-                    let action = action.to_string();
-                    app.update(cx, |app, cx| app.handle_tray_action(action, cx));
-                }
+                let controller = cx.weak_entity();
+                // Resolve ownership after deferring, then release the controller before
+                // entering a feature that may call back into it (settings, lock, sync).
+                cx.defer(move |cx| {
+                    let Some(controller) = controller.upgrade() else {
+                        return;
+                    };
+                    let (target, action) = {
+                        let state = controller.read(cx);
+                        if state.process_quitting {
+                            return;
+                        }
+                        let apps = state.tray_apps(cx);
+                        let locked = state.screen_locked
+                            || apps
+                                .iter()
+                                .any(|(_, app)| app.read(cx).tray_screen_locked());
+                        let action = if locked && action.requires_unlock() {
+                            TrayAction::Show
+                        } else {
+                            action
+                        };
+                        if matches!(
+                            action,
+                            TrayAction::SyncPush | TrayAction::SyncPull | TrayAction::Lock
+                        ) && !state.tray_snapshot(cx).action_enabled(&action)
+                        {
+                            return;
+                        }
+                        let id = state.tray_action_workspace(&action, cx);
+                        let target = id.and_then(|id| {
+                            let entry = state.windows.get(&id)?;
+                            let app = apps
+                                .iter()
+                                .find(|(candidate, _)| *candidate == id)?
+                                .1
+                                .clone();
+                            Some((entry.handle, app))
+                        });
+                        (target, action)
+                    };
+                    if let Some((handle, app)) = target {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            app.update(cx, |app, cx| app.handle_tray_action(action, window, cx))
+                        });
+                    }
+                });
             }
         }
     }
 
     pub fn tray_available(&self) -> bool {
-        self.tray.is_some()
+        self.tray.as_ref().is_some_and(SystemTray::available)
+    }
+
+    pub(crate) fn cloud_sync_pull_blocked_excluding(
+        &self,
+        excluded: WorkspaceId,
+        cx: &gpui::App,
+    ) -> bool {
+        self.windows
+            .iter()
+            .filter(|(id, _)| **id != excluded)
+            .any(|(_, entry)| {
+                entry
+                    .shell
+                    .upgrade()
+                    .and_then(|shell| shell.read(cx).app.clone())
+                    .is_none_or(|app| app.read(cx).cloud_sync_session_restore_blocked())
+            })
+    }
+
+    pub(crate) fn cloud_sync_job_running_excluding(
+        &self,
+        excluded: WorkspaceId,
+        cx: &gpui::App,
+    ) -> bool {
+        self.auto_sync.running
+            || self
+                .windows
+                .iter()
+                .filter(|(id, _)| **id != excluded)
+                .any(|(_, entry)| {
+                    entry
+                        .shell
+                        .upgrade()
+                        .and_then(|shell| shell.read(cx).app.clone())
+                        .is_some_and(|app| app.read(cx).cloud_sync_job_running())
+                })
     }
 
     pub fn screen_locked(&self) -> bool {
@@ -1509,8 +1705,10 @@ impl DesktopController {
             let handle = entry.handle;
             cx.defer(move |cx| {
                 let _ = handle.update(cx, move |_, window, cx| {
-                    let _ =
-                        shell.update(cx, |shell, cx| shell.request_application_quit(window, cx));
+                    let _ = shell.update(cx, |shell, cx| {
+                        show_tray_window(window, cx);
+                        shell.request_application_quit(window, cx)
+                    });
                 });
             });
         }
@@ -2020,5 +2218,151 @@ mod tests {
                 "network timeout"
             ))
         ));
+    }
+}
+
+#[cfg(test)]
+mod tray_tests {
+    use gpui::{AppContext as _, TestAppContext, px, size};
+    use nyaterm_core::{AppRuntime, RuntimeMode, WorkspaceId, uuid};
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+
+    use super::{DesktopController, WorkspaceWindow, tray_click_shows_window};
+    use crate::app_shell::{AppShell, AppShellStartup};
+    use crate::features::shell::tray::model::TrayAction;
+    use crate::features::test_support::app_with_visible_local_session;
+
+    #[test]
+    fn tray_click_policy_accepts_only_left_release_and_left_double_click() {
+        let click = |button, button_state| TrayIconEvent::Click {
+            id: "tray".into(),
+            position: (0., 0.).into(),
+            rect: Default::default(),
+            button,
+            button_state,
+        };
+        assert!(tray_click_shows_window(&click(
+            MouseButton::Left,
+            MouseButtonState::Up
+        )));
+        assert!(!tray_click_shows_window(&click(
+            MouseButton::Left,
+            MouseButtonState::Down
+        )));
+        assert!(!tray_click_shows_window(&click(
+            MouseButton::Right,
+            MouseButtonState::Up
+        )));
+        assert!(tray_click_shows_window(&TrayIconEvent::DoubleClick {
+            id: "tray".into(),
+            position: (0., 0.).into(),
+            rect: Default::default(),
+            button: MouseButton::Left,
+        }));
+        assert!(!tray_click_shows_window(&TrayIconEvent::DoubleClick {
+            id: "tray".into(),
+            position: (0., 0.).into(),
+            rect: Default::default(),
+            button: MouseButton::Right,
+        }));
+    }
+
+    #[test]
+    fn tray_routes_live_ownership_after_move_and_ignores_closed_sessions() {
+        let mut cx = TestAppContext::single();
+        let root = std::env::temp_dir().join(format!("nyaterm-tray-routing-{}", uuid()));
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            root.clone(),
+            root.join("config"),
+            root.join("logs"),
+            root.join("cache"),
+            None,
+        );
+        let startup = AppShellStartup::prepare(&runtime);
+        let controller = cx.new(|cx| DesktopController::new(runtime.clone(), startup, cx));
+        let session_hub = cx.read(|cx| controller.read(cx).session_hub.clone());
+        let first_id = WorkspaceId::new();
+        let second_id = WorkspaceId::new();
+        let mut shells = Vec::new();
+        for id in [first_id, second_id] {
+            let startup = cx.read(|cx| controller.read(cx).startup.for_workspace(id));
+            let handle = cx.open_window(size(px(800.), px(600.)), |_, cx| {
+                AppShell::new(
+                    runtime.clone(),
+                    None,
+                    startup,
+                    id,
+                    controller.clone(),
+                    session_hub.clone(),
+                    cx,
+                )
+            });
+            let shell = handle.root(&mut cx).unwrap();
+            cx.update_entity(&controller, |controller, _| {
+                controller.windows.insert(
+                    id,
+                    WorkspaceWindow {
+                        handle: handle.into(),
+                        shell: shell.downgrade(),
+                    },
+                );
+                controller.device_windows.window_order.push(id);
+            });
+            shells.push(shell);
+        }
+        let first_root = std::env::temp_dir().join(format!("nyaterm-tray-first-{}", uuid()));
+        let second_root = std::env::temp_dir().join(format!("nyaterm-tray-second-{}", uuid()));
+        let first_app = app_with_visible_local_session(&mut cx, &first_root, "first-session");
+        let second_app = app_with_visible_local_session(&mut cx, &second_root, "second-session");
+        cx.update_entity(&shells[0], |shell, _| shell.app = Some(first_app.clone()));
+        cx.update_entity(&shells[1], |shell, _| shell.app = Some(second_app.clone()));
+        cx.update_entity(&controller, |controller, cx| {
+            controller.most_recent_workspace_id = Some(second_id);
+            assert_eq!(
+                controller
+                    .tray_action_workspace(&TrayAction::FocusSession("first-session".into()), cx),
+                Some(first_id)
+            );
+            assert_eq!(
+                controller.tray_action_workspace(&TrayAction::ActiveSessions, cx),
+                Some(second_id)
+            );
+            assert!(
+                controller
+                    .tray_snapshot(cx)
+                    .action_enabled(&TrayAction::FocusSession("first-session".into()))
+            );
+            assert!(
+                controller
+                    .tray_snapshot(cx)
+                    .action_enabled(&TrayAction::FocusSession("second-session".into()))
+            );
+            assert!(controller.cloud_sync_pull_blocked_excluding(second_id, cx));
+        });
+        // Transfer the owning application catalog between shells; the action contains
+        // only the stable session id, never the window captured by an old menu.
+        cx.update_entity(&shells[0], |shell, _| shell.app = Some(second_app));
+        cx.update_entity(&shells[1], |shell, _| shell.app = Some(first_app));
+        cx.update_entity(&controller, |controller, cx| {
+            assert_eq!(
+                controller
+                    .tray_action_workspace(&TrayAction::FocusSession("first-session".into()), cx),
+                Some(second_id)
+            );
+        });
+        cx.update_entity(&shells[1], |shell, _| shell.app = None);
+        cx.update_entity(&controller, |controller, cx| {
+            assert_eq!(
+                controller
+                    .tray_action_workspace(&TrayAction::FocusSession("first-session".into()), cx),
+                None
+            );
+            assert_eq!(
+                controller.tray_action_workspace(&TrayAction::Settings, cx),
+                Some(first_id)
+            );
+            assert!(controller.cloud_sync_pull_blocked_excluding(first_id, cx));
+        });
     }
 }

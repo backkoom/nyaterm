@@ -1,16 +1,26 @@
 {
   "tray": {
-    "show": "NyaTerm を表示",
+    "show": "メインウィンドウを表示",
     "newWindow": "新しいウィンドウ",
-    "newConnection": "新しい接続",
-    "push": "クラウドへ送信",
-    "pull": "クラウドから取得",
-    "minimizeToTray": "トレイへ最小化",
-    "lock": "ロック",
+    "newConnection": "新しい接続…",
+    "push": "今すぐプッシュ",
+    "pull": "今すぐプル",
+    "minimizeToTray": "閉じるときにトレイへ最小化",
+    "lock": "画面をロック",
     "update": "更新を確認",
-    "quit": "終了",
-    "unavailable": "このデスクトップではトレイに非表示にできません。通常の最小化を行いました。"
-},
+    "quit": "NyaTerm を終了",
+    "unavailable": "このデスクトップではトレイに非表示にできません。通常の最小化を行いました。",
+    "hide": "トレイに隠す",
+    "activeSessions": "アクティブなセッション (%{count})",
+    "noActiveSessions": "アクティブなセッションはありません",
+    "sessionLimit": "最初の 8 件のみ表示",
+    "openActiveSessions": "セッションパネルを開く",
+    "cloudSync": "クラウド同期 (%{status})",
+    "currentStatus": "現在の状態: %{status}",
+    "openSyncHistory": "クラウド同期履歴を開く",
+    "settings": "設定…",
+    "local": "ローカル"
+  },
   "appShell": {
     "savingBeforeClose": "終了前に変更を保存しています...",
     "preparingUpdate": "データを保存し、更新を準備しています..."

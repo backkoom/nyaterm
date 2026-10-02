@@ -1,16 +1,26 @@
 {
   "tray": {
-    "show": "显示 NyaTerm",
+    "show": "显示主窗口",
     "newWindow": "新建窗口",
-    "newConnection": "新建连接",
-    "push": "推送云同步",
-    "pull": "拉取云同步",
-    "minimizeToTray": "最小化到托盘",
-    "lock": "锁屏",
+    "newConnection": "新建连接…",
+    "push": "立即推送",
+    "pull": "立即拉取",
+    "minimizeToTray": "关闭时最小化到托盘",
+    "lock": "锁定界面",
     "update": "检查更新",
-    "quit": "退出",
-    "unavailable": "当前桌面会话不支持隐藏到托盘，窗口已正常最小化。"
-},
+    "quit": "退出 NyaTerm",
+    "unavailable": "当前桌面会话不支持隐藏到托盘，窗口已正常最小化。",
+    "hide": "隐藏到托盘",
+    "activeSessions": "活动会话 (%{count})",
+    "noActiveSessions": "暂无活动会话",
+    "sessionLimit": "仅显示前 8 个",
+    "openActiveSessions": "打开活动会话面板",
+    "cloudSync": "云同步（%{status}）",
+    "currentStatus": "当前状态：%{status}",
+    "openSyncHistory": "打开云同步历史",
+    "settings": "设置…",
+    "local": "本地终端"
+  },
   "appShell": {
     "savingBeforeClose": "正在保存数据...",
     "preparingUpdate": "正在保存数据并准备更新..."

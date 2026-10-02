@@ -685,6 +685,40 @@ mod tests {
         )
     }
 
+    #[test]
+    fn tray_preference_persists_without_saving_unrelated_settings_drafts() {
+        for draft_open in [false, true] {
+            let mut cx = TestAppContext::single();
+            let app = app(&mut cx);
+            let baseline = cx
+                .update_entity(&app, |app, _| {
+                    app.store_blocking_client()
+                        .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                            store.load_app_settings_summary()
+                        })
+                })
+                .unwrap();
+            cx.update_entity(&app, |app, cx| {
+                if draft_open {
+                    app.begin_settings_draft(cx);
+                    app.toggle_confirm_on_close(cx);
+                }
+                app.toggle_minimize_to_tray_from_tray(cx);
+            });
+            cx.run_until_parked();
+            let persisted = cx
+                .update_entity(&app, |app, _| {
+                    app.store_blocking_client()
+                        .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                            store.load_app_settings_summary()
+                        })
+                })
+                .unwrap();
+            assert_eq!(persisted.minimize_to_tray, !baseline.minimize_to_tray);
+            assert_eq!(persisted.confirm_on_close, baseline.confirm_on_close);
+        }
+    }
+
     /// Applying a draft must write the header-status mode it changed.
     ///
     /// `persist_header_status_settings` deliberately defers while a draft is open,

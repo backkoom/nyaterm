@@ -1,16 +1,26 @@
 {
   "tray": {
-    "show": "顯示 NyaTerm",
+    "show": "顯示主視窗",
     "newWindow": "新增視窗",
-    "newConnection": "新增連線",
-    "push": "推送雲端同步",
-    "pull": "拉取雲端同步",
-    "minimizeToTray": "最小化至系統匣",
-    "lock": "鎖定",
+    "newConnection": "新增連線…",
+    "push": "立即推送",
+    "pull": "立即拉取",
+    "minimizeToTray": "關閉時最小化到系統匣",
+    "lock": "鎖定介面",
     "update": "檢查更新",
-    "quit": "結束",
-    "unavailable": "目前桌面工作階段不支援隱藏至系統匣，視窗已正常最小化。"
-},
+    "quit": "結束 NyaTerm",
+    "unavailable": "目前桌面工作階段不支援隱藏至系統匣，視窗已正常最小化。",
+    "hide": "隱藏到系統匣",
+    "activeSessions": "使用中的工作階段 (%{count})",
+    "noActiveSessions": "目前沒有使用中的工作階段",
+    "sessionLimit": "僅顯示前 8 個",
+    "openActiveSessions": "開啟使用中工作階段面板",
+    "cloudSync": "雲端同步（%{status}）",
+    "currentStatus": "目前狀態：%{status}",
+    "openSyncHistory": "開啟雲端同步歷程",
+    "settings": "設定…",
+    "local": "本機終端"
+  },
   "appShell": {
     "savingBeforeClose": "正在儲存資料...",
     "preparingUpdate": "正在儲存資料並準備更新..."

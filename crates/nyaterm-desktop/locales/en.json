@@ -1,16 +1,26 @@
 {
   "tray": {
-    "show": "Show NyaTerm",
+    "show": "Show Main Window",
     "newWindow": "New Window",
-    "newConnection": "New connection",
-    "push": "Push cloud sync",
-    "pull": "Pull cloud sync",
-    "minimizeToTray": "Minimize to tray",
-    "lock": "Lock",
+    "newConnection": "New Connection…",
+    "push": "Push Now",
+    "pull": "Pull Now",
+    "minimizeToTray": "Minimize to Tray on Close",
+    "lock": "Lock Screen",
     "update": "Check for updates",
-    "quit": "Quit",
-    "unavailable": "Tray hiding is unavailable in this desktop session. The window was minimized normally."
-},
+    "quit": "Quit NyaTerm",
+    "unavailable": "Tray hiding is unavailable in this desktop session. The window was minimized normally.",
+    "hide": "Hide to Tray",
+    "activeSessions": "Active Sessions (%{count})",
+    "noActiveSessions": "No Active Sessions",
+    "sessionLimit": "Showing only the first 8",
+    "openActiveSessions": "Open Active Sessions Panel",
+    "cloudSync": "Cloud Sync (%{status})",
+    "currentStatus": "Current Status: %{status}",
+    "openSyncHistory": "Open Cloud Sync History",
+    "settings": "Settings…",
+    "local": "Local"
+  },
   "appShell": {
     "savingBeforeClose": "Saving changes before closing...",
     "preparingUpdate": "Saving data and preparing the update..."

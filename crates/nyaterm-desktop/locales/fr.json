@@ -1,16 +1,26 @@
 {
   "tray": {
-    "show": "Afficher NyaTerm",
+    "show": "Afficher la fenêtre principale",
     "newWindow": "Nouvelle fenêtre",
-    "newConnection": "Nouvelle connexion",
-    "push": "Envoyer vers le cloud",
-    "pull": "Récupérer du cloud",
-    "minimizeToTray": "Réduire dans la zone de notification",
-    "lock": "Verrouiller",
+    "newConnection": "Nouvelle connexion…",
+    "push": "Envoyer maintenant",
+    "pull": "Récupérer maintenant",
+    "minimizeToTray": "Réduire dans la zone de notification à la fermeture",
+    "lock": "Verrouiller l’écran",
     "update": "Rechercher des mises à jour",
-    "quit": "Quitter",
-    "unavailable": "Le masquage dans la zone de notification est indisponible. La fenêtre a été réduite normalement."
-},
+    "quit": "Quitter NyaTerm",
+    "unavailable": "Le masquage dans la zone de notification est indisponible. La fenêtre a été réduite normalement.",
+    "hide": "Masquer dans la zone de notification",
+    "activeSessions": "Sessions actives (%{count})",
+    "noActiveSessions": "Aucune session active",
+    "sessionLimit": "Seules les 8 premières sont affichées",
+    "openActiveSessions": "Ouvrir le panneau des sessions actives",
+    "cloudSync": "Synchronisation cloud (%{status})",
+    "currentStatus": "État actuel : %{status}",
+    "openSyncHistory": "Ouvrir l’historique de synchronisation cloud",
+    "settings": "Paramètres…",
+    "local": "Local"
+  },
   "appShell": {
     "savingBeforeClose": "Enregistrement des modifications avant la fermeture...",
     "preparingUpdate": "Enregistrement des données et préparation de la mise à jour..."
