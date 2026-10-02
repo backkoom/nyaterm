@@ -24,7 +24,7 @@ import {
   SERIAL_BAUD_RATE_OPTIONS,
 } from "@/lib/serial";
 import { cn } from "@/lib/utils";
-import type { RecordingMode } from "@/types/global";
+import type { RecordingMode, SerialFlowControl } from "@/types/global";
 
 interface SerialPortOption {
   unavailable?: boolean;
@@ -46,6 +46,8 @@ interface SerialFormProps {
   setParity: (v: string) => void;
   stopBits: string;
   setStopBits: (v: string) => void;
+  flowControl: SerialFlowControl;
+  setFlowControl: (v: SerialFlowControl) => void;
   backspaceMode: string;
   setBackspaceMode: (v: string) => void;
   modemUploadProtocol: "xmodem" | "ymodem" | "zmodem";
@@ -215,6 +217,8 @@ export function SerialForm({
   setParity,
   stopBits,
   setStopBits,
+  flowControl,
+  setFlowControl,
   backspaceMode,
   setBackspaceMode,
   modemUploadProtocol,
@@ -341,6 +345,29 @@ export function SerialForm({
           </Select>
         </div>
       </div>
+      <div>
+        <Label htmlFor="serial-flow-control" className="text-xs font-medium text-foreground/80">
+          {t("dialog.serialFlowControl")}
+        </Label>
+        <Select
+          value={flowControl}
+          onValueChange={(value) => setFlowControl(value as SerialFlowControl)}
+        >
+          <SelectTrigger id="serial-flow-control" className="mt-1 h-8 w-full text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">{t("dialog.serialFlowControlNone")}</SelectItem>
+            <SelectItem value="software">{t("dialog.serialFlowControlSoftware")}</SelectItem>
+            <SelectItem value="hardware">{t("dialog.serialFlowControlHardware")}</SelectItem>
+          </SelectContent>
+        </Select>
+        {flowControl === "software" && (
+          <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+            {t("dialog.serialSoftwareFlowControlModemDisabled")}
+          </p>
+        )}
+      </div>
       <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
         <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
           <MdChevronRight
@@ -370,7 +397,9 @@ export function SerialForm({
                         <SelectItem value="ctrl_h">
                           {t("dialog.backspaceCtrlH", "Ctrl+H (BS)")}
                         </SelectItem>
-                        <SelectItem value="del">{t("dialog.backspaceDel", "DEL (0x7F)")}</SelectItem>
+                        <SelectItem value="del">
+                          {t("dialog.backspaceDel", "DEL (0x7F)")}
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -399,6 +428,7 @@ export function SerialForm({
                     </Label>
                     <Select
                       value={modemUploadProtocol}
+                      disabled={flowControl === "software"}
                       onValueChange={(value) =>
                         setModemUploadProtocol(value as "xmodem" | "ymodem" | "zmodem")
                       }

@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SavedAccount, SavedConnection } from "@/types/global";
+import type { SavedAccount, SavedConnection, SerialFlowControl } from "@/types/global";
 import NewSessionPage from "./NewSessionPage";
 
 const {
@@ -59,14 +59,27 @@ vi.mock("@/components/sessions/SerialForm", () => ({
   SerialForm: (props: Record<string, unknown>) => {
     serialFormMock(props);
     return (
-      <button
-        type="button"
-        onClick={() =>
-          (props.setModemUploadProtocol as ((value: "xmodem") => void) | undefined)?.("xmodem")
-        }
-      >
-        choose-xmodem
-      </button>
+      <>
+        {(["none", "software", "hardware"] as const).map((flowControl) => (
+          <button
+            key={flowControl}
+            type="button"
+            onClick={() =>
+              (props.setFlowControl as (value: SerialFlowControl) => void)(flowControl)
+            }
+          >
+            choose-{flowControl}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() =>
+            (props.setModemUploadProtocol as ((value: "xmodem") => void) | undefined)?.("xmodem")
+          }
+        >
+          choose-xmodem
+        </button>
+      </>
     );
   },
 }));
@@ -367,6 +380,66 @@ describe("NewSessionPage", () => {
         "save_connection",
         expect.objectContaining({
           connection: expect.objectContaining({ tags: ["gpu"] }),
+        }),
+      );
+    });
+  });
+
+  it("defaults new Serial connections to no flow control and saves the selected mode", async () => {
+    window.history.replaceState({}, "", "/");
+    render(<NewSessionPage />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "dialog.serial" }), { button: 0 });
+    await waitFor(() => {
+      expect(serialFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ flowControl: "none" }),
+      );
+    });
+    const form = serialFormMock.mock.lastCall?.[0];
+    act(() => form.setSerialPortName("COM3"));
+    fireEvent.click(screen.getByRole("button", { name: "choose-hardware" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            type: "serial",
+            port_name: "COM3",
+            flow_control: "hardware",
+          }),
+        }),
+      );
+    });
+  });
+
+  it.each([
+    [undefined, "hardware"],
+    ["none", "software"],
+    ["software", "none"],
+    ["hardware", "hardware"],
+  ] as const)("restores Serial flow control %s and saves %s", async (initial, selected) => {
+    const baseInvoke = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((command: string, ...args: unknown[]) => {
+      if (command === "get_saved_connections") {
+        return Promise.resolve([{ ...serialConnection, flow_control: initial }]);
+      }
+      return baseInvoke?.(command, ...args);
+    });
+    window.history.replaceState({}, "", `/?edit=${serialConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(serialFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ flowControl: initial ?? "none" }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: `choose-${selected}` }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({ type: "serial", flow_control: selected }),
         }),
       );
     });

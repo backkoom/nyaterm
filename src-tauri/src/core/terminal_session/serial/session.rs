@@ -1,5 +1,20 @@
 use self::xymodem::{XyModemAction, XyModemTransfer};
 
+fn detect_serial_zmodem(
+    detector: &mut ZmodemDetector,
+    raw: &[u8],
+    flow_control: crate::config::SerialFlowControl,
+) -> ZmodemDetectResult {
+    // XON/XOFF consumes binary payload bytes in the OS serial layer. Keep incoming
+    // data on the terminal path rather than automatically starting a transfer.
+    if flow_control == crate::config::SerialFlowControl::Software {
+        return ZmodemDetectResult::NoMatch {
+            passthrough: raw.to_vec(),
+        };
+    }
+    detector.feed(raw)
+}
+
 fn process_xymodem_actions(
     app: &AppHandle,
     event_name: &str,
@@ -90,6 +105,7 @@ fn serial_session_thread(
     let serial_modem_event_name = format!("serial-modem-event-{session_id}");
     let serial_modem_event_reader = serial_modem_event_name.clone();
     let modem_upload_protocol = config.modem_upload_protocol;
+    let flow_control = config.flow_control;
 
     // Reader thread
     let app_reader = app.clone();
@@ -178,7 +194,8 @@ fn serial_session_thread(
                     }
 
                     // ZMODEM: detect header.
-                    let process_raw = match zmodem_detector.feed(raw) {
+                    let detected = detect_serial_zmodem(&mut zmodem_detector, raw, flow_control);
+                    let process_raw = match detected {
                         ZmodemDetectResult::Detected {
                             direction,
                             passthrough,
@@ -423,6 +440,10 @@ fn serial_session_thread(
                 preserve_timestamps,
                 result_tx,
             } => {
+                if let Err(error) = validate_serial_modem_flow_control(flow_control) {
+                    let _ = result_tx.send(Err(error));
+                    continue;
+                }
                 let result = match modem_upload_protocol {
                     crate::config::SerialModemUploadProtocol::Xmodem
                     | crate::config::SerialModemUploadProtocol::Ymodem => {
@@ -644,6 +665,51 @@ mod serial_modem_bootstrap_tests {
             .expect("write ZRINIT")
             .expect("complete ZRINIT");
         wire
+    }
+
+    #[test]
+    fn serial_flow_control_rejects_modem_uploads_only_for_software() {
+        use crate::config::SerialFlowControl;
+        assert!(validate_serial_modem_flow_control(SerialFlowControl::None).is_ok());
+        assert!(validate_serial_modem_flow_control(SerialFlowControl::Hardware).is_ok());
+        let reason = validate_serial_modem_flow_control(SerialFlowControl::Software).unwrap_err();
+        assert!(reason.contains("XMODEM/YMODEM/ZMODEM"));
+        assert!(reason.contains("XON/XOFF"));
+    }
+
+    #[test]
+    fn serial_flow_control_software_passes_through_split_zmodem_headers() {
+        for frame in [Frame::ZRINIT, Frame::ZRQINIT] {
+            let mut wire = Vec::new();
+            Header::new(Encoding::ZHEX, frame, &[0; 4])
+                .write(&mut wire)
+                .unwrap()
+                .unwrap();
+            let mut detector = ZmodemDetector::new();
+            for chunk in wire.chunks(3) {
+                let result = detect_serial_zmodem(
+                    &mut detector,
+                    chunk,
+                    crate::config::SerialFlowControl::Software,
+                );
+                assert!(
+                    matches!(result, ZmodemDetectResult::NoMatch { passthrough } if passthrough == chunk)
+                );
+            }
+            assert!(!detector.has_pending_prefix());
+        }
+        for flow_control in [
+            crate::config::SerialFlowControl::None,
+            crate::config::SerialFlowControl::Hardware,
+        ] {
+            assert!(matches!(
+                detect_serial_zmodem(&mut ZmodemDetector::new(), &zrinit(), flow_control),
+                ZmodemDetectResult::Detected {
+                    direction: ZmodemDirection::Upload,
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]

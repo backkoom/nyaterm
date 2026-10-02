@@ -159,6 +159,8 @@ enum NyatermJsonSession {
         parity: String,
         #[serde(default = "default_serial_stop_bits")]
         stop_bits: String,
+        #[serde(default)]
+        flow_control: config::SerialFlowControl,
         #[serde(default = "default_serial_backspace_mode")]
         backspace_mode: String,
         #[serde(default)]

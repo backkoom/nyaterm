@@ -645,6 +645,7 @@ mod tests {
                         data_bits: 8,
                         parity: "none".to_string(),
                         stop_bits: "1".to_string(),
+                        flow_control: config::SerialFlowControl::None,
                         ai_execution_profile: config::AiExecutionProfile::Auto,
                         backspace_mode: "del".to_string(),
                         modem_upload_protocol: config::SerialModemUploadProtocol::Zmodem,
@@ -795,6 +796,34 @@ mod tests {
         right.payload_hash = calculate_payload_hash(&right).expect("right hash");
 
         assert_ne!(left.payload_hash, right.payload_hash);
+    }
+
+    #[test]
+    fn serial_flow_control_survives_portable_snapshot_roundtrip() {
+        for flow_control in [
+            config::SerialFlowControl::None,
+            config::SerialFlowControl::Software,
+            config::SerialFlowControl::Hardware,
+        ] {
+            let mut snapshot = sample_snapshot();
+            snapshot.sessions = sample_sessions_with_device_local_connections();
+            let config::ConnectionType::Serial {
+                flow_control: saved_flow_control,
+                ..
+            } = &mut snapshot.sessions.connections[1].config
+            else {
+                panic!("expected serial");
+            };
+            *saved_flow_control = flow_control;
+            snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("snapshot hash");
+            let encoded = encode_portable_snapshot(&snapshot).expect("encode .nya snapshot");
+            let decoded = super::decode_portable_snapshot(&encoded).expect("decode .nya snapshot");
+            assert_eq!(
+                decoded.sessions.connections[1].config,
+                snapshot.sessions.connections[1].config
+            );
+            assert_eq!(decoded.payload_hash, snapshot.payload_hash);
+        }
     }
 
     #[test]

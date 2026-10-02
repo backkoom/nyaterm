@@ -413,6 +413,7 @@ pub async fn create_serial_session(
     data_bits: Option<u8>,
     parity: Option<String>,
     stop_bits: Option<String>,
+    flow_control: Option<config::SerialFlowControl>,
     name: Option<String>,
     create_request_id: Option<String>,
     recording_scope_id: Option<String>,
@@ -434,6 +435,7 @@ pub async fn create_serial_session(
                 stop_bits,
                 backspace_mode,
                 modem_upload_protocol,
+                flow_control,
                 ..
             } => core::SerialConfig {
                 port_name,
@@ -444,6 +446,7 @@ pub async fn create_serial_session(
                 name: conn.name,
                 backspace_mode,
                 modem_upload_protocol,
+                flow_control,
                 encoding,
             },
             _ => {
@@ -463,6 +466,7 @@ pub async fn create_serial_session(
             data_bits: data_bits.unwrap_or(8),
             parity: parity.unwrap_or_else(|| "none".to_string()),
             stop_bits: stop_bits.unwrap_or_else(|| "1".to_string()),
+            flow_control: flow_control.unwrap_or_default(),
             name: name.unwrap_or_else(|| "Serial".to_string()),
             backspace_mode: "ctrl_h".to_string(),
             modem_upload_protocol: config::SerialModemUploadProtocol::Zmodem,

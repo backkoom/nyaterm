@@ -597,6 +597,19 @@ pub enum SerialModemUploadProtocol {
     Zmodem,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SerialFlowControl {
+    #[default]
+    None,
+    Software,
+    Hardware,
+}
+
+fn is_default_serial_flow_control(value: &SerialFlowControl) -> bool {
+    *value == SerialFlowControl::None
+}
+
 fn is_default_serial_modem_upload_protocol(value: &SerialModemUploadProtocol) -> bool {
     *value == SerialModemUploadProtocol::Zmodem
 }
@@ -690,6 +703,8 @@ pub enum ConnectionType {
         parity: String,
         #[serde(default = "default_stop_bits")]
         stop_bits: String,
+        #[serde(default, skip_serializing_if = "is_default_serial_flow_control")]
+        flow_control: SerialFlowControl,
         #[serde(default, skip_serializing_if = "is_ai_execution_profile_auto")]
         ai_execution_profile: AiExecutionProfile,
         #[serde(default = "default_backspace_mode_serial")]
@@ -1488,13 +1503,61 @@ mod tests {
         MAX_SFTP_PIPELINE_DEPTH, MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN,
         MAX_SSH_AGENT_FORWARDING_ENDPOINTS, MAX_SSH_AGENT_FORWARDING_IDENTITIES,
         MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN, MIN_SFTP_PIPELINE_DEPTH, SavedConnection,
-        SerialModemUploadProtocol, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint,
-        SshAgentForwardingConfig, SshAgentForwardingPolicy, SshAgentForwardingSources,
-        SshAlgorithmMode, SshProfile, SshTerminalType, effective_cwd_follow_mode,
-        effective_cwd_follow_mode_for_profile, migrate_legacy_asset_tags,
-        migrate_legacy_ssh_agent_settings, normalize_connection_tags, resolve_ssh_terminal_type,
-        validate_ssh_agent_endpoint, validate_ssh_agent_settings,
+        SerialFlowControl, SerialModemUploadProtocol, SftpCwdFollowMode, SftpSettings,
+        SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
+        SshAgentForwardingSources, SshAlgorithmMode, SshProfile, SshTerminalType,
+        effective_cwd_follow_mode, effective_cwd_follow_mode_for_profile,
+        migrate_legacy_asset_tags, migrate_legacy_ssh_agent_settings, normalize_connection_tags,
+        resolve_ssh_terminal_type, validate_ssh_agent_endpoint, validate_ssh_agent_settings,
     };
+
+    #[test]
+    fn serial_flow_control_defaults_to_none_for_legacy_connections() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "serial-1", "name": "Serial", "type": "serial", "port_name": "COM3"
+        }))
+        .expect("legacy serial connection");
+        assert!(matches!(
+            connection.config,
+            ConnectionType::Serial {
+                flow_control: SerialFlowControl::None,
+                ..
+            }
+        ));
+        let encoded = serde_json::to_value(&connection).expect("serialized connection");
+        assert!(encoded.get("flow_control").is_none());
+    }
+
+    #[test]
+    fn serial_flow_control_round_trips_all_values() {
+        for (wire, expected) in [
+            ("none", SerialFlowControl::None),
+            ("software", SerialFlowControl::Software),
+            ("hardware", SerialFlowControl::Hardware),
+        ] {
+            let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+                "id": "serial-1", "name": "Serial", "type": "serial", "port_name": "COM3", "flow_control": wire
+            })).expect("serial connection");
+            let encoded = serde_json::to_value(&connection).expect("serialized connection");
+            if expected == SerialFlowControl::None {
+                assert!(encoded.get("flow_control").is_none());
+            } else {
+                assert_eq!(encoded["flow_control"], wire);
+            }
+            let decoded: SavedConnection = serde_json::from_value(encoded).expect("round trip");
+            assert!(
+                matches!(decoded.config, ConnectionType::Serial { flow_control, .. } if flow_control == expected)
+            );
+        }
+    }
+
+    #[test]
+    fn serial_flow_control_rejects_unknown_values() {
+        let connection = serde_json::from_value::<SavedConnection>(serde_json::json!({
+            "id": "serial-1", "name": "Serial", "type": "serial", "port_name": "COM3", "flow_control": "rtscts"
+        }));
+        assert!(connection.is_err());
+    }
 
     #[test]
     fn serial_modem_protocol_defaults_to_zmodem_for_legacy_connections() {

@@ -529,6 +529,8 @@ export interface ConnectionCustomIcon {
   updated_at_ms: number;
 }
 
+export type SerialFlowControl = "none" | "software" | "hardware";
+
 /** Unified saved connection with type-discriminated config. */
 export interface SavedConnection {
   id: string;
@@ -573,6 +575,7 @@ export interface SavedConnection {
   data_bits?: number;
   parity?: string;
   stop_bits?: string;
+  flow_control?: SerialFlowControl;
   modem_upload_protocol?: "xmodem" | "ymodem" | "zmodem";
   /** Backspace key mode for SSH/Telnet/Serial connections ("ctrl_h" or "del"). */
   backspace_mode?: string;

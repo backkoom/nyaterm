@@ -654,6 +654,34 @@ mod tests {
     }
 
     #[test]
+    fn nyaterm_json_serial_flow_control_import_preserves_values_and_legacy_default() {
+        for wire in [None, Some("none"), Some("software"), Some("hardware")] {
+            let mut session = serde_json::json!({
+                "name": "Serial", "type": "serial", "port_name": "COM3"
+            });
+            if let Some(wire) = wire {
+                session["flow_control"] = serde_json::json!(wire);
+            }
+            let content = serde_json::json!({ "version": 1, "sessions": [session] }).to_string();
+            let prepared = parse_nyaterm_json_content(&content).expect("import serial");
+            let encoded =
+                serde_json::to_value(&prepared.connections[0].config).expect("serialize serial");
+            assert_eq!(
+                encoded
+                    .get("flow_control")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("none"),
+                wire.unwrap_or("none")
+            );
+            let decoded: ConnectionType =
+                serde_json::from_value(encoded).expect("round trip imported serial");
+            assert_eq!(decoded, prepared.connections[0].config);
+        }
+        let invalid = r#"{"version":1,"sessions":[{"name":"Serial","type":"serial","port_name":"COM3","flow_control":"rtscts"}]}"#;
+        assert!(parse_nyaterm_json_content(invalid).is_err());
+    }
+
+    #[test]
     fn nyaterm_json_sample_import_prepares_supported_shapes() {
         crate::utils::crypto::set_master_password(None);
 

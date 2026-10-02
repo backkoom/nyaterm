@@ -48,6 +48,7 @@ import type {
   RecordingMode,
   SavedAccount,
   SavedConnection,
+  SerialFlowControl,
   SftpSettings,
   SshAgentEndpoint,
   SshAgentForwardingConfig,
@@ -271,6 +272,7 @@ export default function NewSessionPage() {
   const [dataBits, setDataBits] = useState("8");
   const [parity, setParity] = useState("none");
   const [stopBits, setStopBits] = useState("1");
+  const [serialFlowControl, setSerialFlowControl] = useState<SerialFlowControl>("none");
   const [serialModemUploadProtocol, setSerialModemUploadProtocol] = useState<
     "xmodem" | "ymodem" | "zmodem"
   >("zmodem");
@@ -415,6 +417,7 @@ export default function NewSessionPage() {
           setStopBits(found.stop_bits || "1");
           setSerialBackspaceMode(found.backspace_mode || "ctrl_h");
           setSerialModemUploadProtocol(found.modem_upload_protocol || "zmodem");
+          setSerialFlowControl(found.flow_control ?? "none");
         } else if (found.type === "rdp") {
           setHost(found.host || "");
           setRdpPort(found.port || 3389);
@@ -528,6 +531,7 @@ export default function NewSessionPage() {
     setParity("none");
     setStopBits("1");
     setSerialModemUploadProtocol("zmodem");
+    setSerialFlowControl("none");
     setShellPath(defaultLocalShell);
     setShellArgs("");
     setWorkingDir("");
@@ -564,7 +568,12 @@ export default function NewSessionPage() {
     setShowIconPicker(false);
     setError("");
     setConnecting(false);
-  }, [appSettings.recording.auto_start, appSettings.recording.default_mode, currentTab, defaultLocalShell]);
+  }, [
+    appSettings.recording.auto_start,
+    appSettings.recording.default_mode,
+    currentTab,
+    defaultLocalShell,
+  ]);
 
   const handleTabChange = useCallback((value: string) => {
     setCurrentTab(value);
@@ -1158,6 +1167,7 @@ export default function NewSessionPage() {
               stop_bits: stopBits,
               backspace_mode: serialBackspaceMode,
               modem_upload_protocol: serialModemUploadProtocol,
+              flow_control: serialFlowControl,
             }
           : {}),
         ...(currentTab === "rdp"
@@ -1763,6 +1773,8 @@ export default function NewSessionPage() {
               setBackspaceMode={setSerialBackspaceMode}
               modemUploadProtocol={serialModemUploadProtocol}
               setModemUploadProtocol={setSerialModemUploadProtocol}
+              flowControl={serialFlowControl}
+              setFlowControl={setSerialFlowControl}
               recordingUseGlobal={recordingUseGlobal}
               setRecordingUseGlobal={setRecordingUseGlobal}
               recordingAutoStart={recordingAutoStart}
