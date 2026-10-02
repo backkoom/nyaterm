@@ -307,9 +307,7 @@ impl NyaTermApp {
                 },
                 AiFeatureFocus {
                     chat: cx.focus_handle(),
-                    action: cx.focus_handle(),
                     manual_model: cx.focus_handle(),
-                    credential: cx.focus_handle(),
                 },
             ),
             ai_panel,

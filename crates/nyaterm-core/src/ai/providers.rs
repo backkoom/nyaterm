@@ -10,10 +10,10 @@ use super::agent::{agent_anthropic_tools, agent_gemini_tools, agent_openai_tools
 use super::{
     AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiCommandCard, AiMessage, AiMessageRole,
     AiMode, AiModelDiscovery, AiModelError, AiModelOutput, AiModelSource, AiProviderCredential,
-    AiProviderKind, AiSettings, AiToolCall, AiToolCallDelta, ResolvedAiModel,
-    ai_model_id_for_credential, chat_history_for_request, extract_json_object,
-    extract_text_from_assistant, extract_think_block, genai_model_name, request_system_prompt,
-    request_user_prompt, trim_optional_to_option, trim_string_to_option,
+    AiSettings, AiToolCall, AiToolCallDelta, ResolvedAiModel, ai_model_id_for_credential,
+    chat_history_for_request, extract_json_object, extract_text_from_assistant,
+    extract_think_block, genai_model_name, request_system_prompt, request_user_prompt,
+    trim_optional_to_option, trim_string_to_option,
 };
 
 pub fn openai_compatible_models_url(base_url: &str) -> Result<String, AiModelError> {
@@ -154,10 +154,7 @@ pub fn build_openai_compatible_chat_request_body_with_stream(
         "messages": messages,
         "stream": stream,
     });
-    if matches!(
-        resolved_model.provider_kind,
-        AiProviderKind::Openai | AiProviderKind::OpenaiCompatible | AiProviderKind::Xai
-    ) && let Some(effort) =
+    if let Some(effort) =
         super::responses::responses_reasoning_effort(&settings.default_reasoning_effort)
     {
         body["reasoning_effort"] = serde_json::json!(effort);
@@ -165,6 +162,23 @@ pub fn build_openai_compatible_chat_request_body_with_stream(
     if request.mode == AiMode::Agent && !request.options.agent_json_protocol {
         body["tools"] = agent_openai_tools();
         body["tool_choice"] = serde_json::json!("required");
+    }
+    if request.options.connectivity_test {
+        body.as_object_mut().expect("request body").remove("tools");
+        body.as_object_mut()
+            .expect("request body")
+            .remove("tool_choice");
+        let name = resolved_model.model_name.as_str();
+        let cap = if name.starts_with("gpt-5")
+            || name.starts_with("o1")
+            || name.starts_with("o3")
+            || name.starts_with("o4")
+        {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        body[cap] = serde_json::json!(64);
     }
     body
 }
@@ -196,6 +210,14 @@ pub fn build_anthropic_chat_request_body_with_stream(
     if request.mode == AiMode::Agent && !request.options.agent_json_protocol {
         body["tools"] = agent_anthropic_tools();
         body["tool_choice"] = serde_json::json!({ "type": "any" });
+    }
+    if request.options.connectivity_test {
+        body.as_object_mut().expect("request body").remove("tools");
+        if body.get("generationConfig").is_some() {
+            body["generationConfig"]["maxOutputTokens"] = serde_json::json!(64);
+        } else {
+            body["max_tokens"] = serde_json::json!(64);
+        }
     }
     body
 }
@@ -236,6 +258,14 @@ pub fn build_gemini_chat_request_body(
                 "allowedFunctionNames": ["execute_command", "final_answer"],
             }
         });
+    }
+    if request.options.connectivity_test {
+        body.as_object_mut().expect("request body").remove("tools");
+        if body.get("generationConfig").is_some() {
+            body["generationConfig"]["maxOutputTokens"] = serde_json::json!(64);
+        } else {
+            body["max_tokens"] = serde_json::json!(64);
+        }
     }
     body
 }
@@ -911,6 +941,8 @@ mod tests {
     #[test]
     fn parses_and_deduplicates_openai_compatible_model_discovery() {
         let credential = AiProviderCredential {
+            icon_data_url: None,
+            api_protocol: None,
             api_format: Default::default(),
             id: "custom".to_string(),
             name: "Custom".to_string(),
@@ -948,6 +980,8 @@ mod tests {
             model_name: "deepseek-chat-none".to_string(),
             provider_kind: AiProviderKind::Deepseek,
             credential: Some(AiProviderCredential {
+                icon_data_url: None,
+                api_protocol: None,
                 api_format: Default::default(),
                 id: "deepseek".to_string(),
                 name: "DeepSeek".to_string(),
@@ -1149,6 +1183,8 @@ mod tests {
             model_name: "claude-3-haiku-20240307".to_string(),
             provider_kind: AiProviderKind::Anthropic,
             credential: Some(AiProviderCredential {
+                icon_data_url: None,
+                api_protocol: None,
                 api_format: Default::default(),
                 id: "anthropic".to_string(),
                 name: "Anthropic".to_string(),

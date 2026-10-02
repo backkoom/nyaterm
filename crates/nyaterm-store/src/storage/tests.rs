@@ -6274,3 +6274,123 @@ fn editing_keywords_preserves_both_values_of_the_retired_soft_wrap_setting() {
     drop(store);
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
+
+#[test]
+fn tauri_ai_extensions_follow_account_and_model_ids_through_reorder_delete_and_backup() {
+    let dir = unique_temp_dir("ai-tauri-fields");
+    let restore_dir = unique_temp_dir("ai-tauri-restore");
+    let backup = dir.join("tauri-ai.nya");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut raw = default_settings_value();
+    raw["ai"] = serde_json::json!({
+        "provider_credentials": [
+            {"id":"first","name":"First","provider_kind":"openai","api_protocol":"openai_compatible","icon_data_url":"data:image/png;base64,fixture","future_account":"first-extension"},
+            {"id":"second","name":"Second","provider_kind":"openai","api_protocol":"anthropic","future_account":"second-extension"}
+        ],
+        "models": [
+            {"id":"first:model","name":"model","credential_id":"first","provider_kind":"openai","supported_reasoning_efforts":["minimal","max","ultra"],"future_model":"first-extension"},
+            {"id":"second:model","name":"model","credential_id":"second","provider_kind":"openai","supported_reasoning_efforts":[],"future_model":"second-extension"}
+        ],"default_model_id":"first:model","future_ai":{"keep":true}
+    });
+    store.save_settings_value(&raw).unwrap();
+    let mut settings = store.load_ai_settings().unwrap();
+    settings.provider_credentials[0].api_key = Some("fixture-first".into());
+    settings.provider_credentials[1].api_key = Some("fixture-second".into());
+    let mut settings = store.save_ai_settings(settings).unwrap();
+    settings.provider_credentials.reverse();
+    settings.models.reverse();
+    let saved = store
+        .save_ai_settings(nyaterm_core::mask_ai_settings(settings))
+        .unwrap();
+    assert_eq!(
+        saved.provider_credentials[0].api_key.as_deref(),
+        Some("fixture-second")
+    );
+    assert_eq!(
+        saved.provider_credentials[1].api_key.as_deref(),
+        Some("fixture-first")
+    );
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(
+        raw["ai"]["provider_credentials"][0]["future_account"],
+        "second-extension"
+    );
+    assert_eq!(
+        raw["ai"]["provider_credentials"][1]["future_account"],
+        "first-extension"
+    );
+    assert_eq!(raw["ai"]["models"][0]["future_model"], "second-extension");
+    assert_eq!(raw["ai"]["models"][1]["future_model"], "first-extension");
+    assert_ne!(
+        raw["ai"]["provider_credentials"][0]["api_key"].as_str(),
+        Some("fixture-second")
+    );
+    assert_eq!(
+        raw["ai"]["provider_credentials"][1]["icon_data_url"],
+        "data:image/png;base64,fixture"
+    );
+    assert_eq!(
+        raw["ai"]["provider_credentials"][0]["api_protocol"],
+        "anthropic"
+    );
+    assert_eq!(
+        raw["ai"]["models"][1]["supported_reasoning_efforts"],
+        serde_json::json!(["minimal", "max", "ultra"])
+    );
+    let sync_dir = unique_temp_dir("ai-tauri-sync");
+    store
+        .save_master_password(Some("fixture-sync-password"))
+        .unwrap();
+    let mut snapshot = store
+        .build_raw_portable_snapshot(nyaterm_core::PortableSnapshotKind::Sync, "fixture", "2.0.0")
+        .unwrap();
+    snapshot.recalculate_hash().unwrap();
+    let synced = ConnectionStore::open(&sync_dir).unwrap();
+    synced
+        .save_master_password(Some("fixture-local-password"))
+        .unwrap();
+    assert!(
+        synced
+            .apply_cloud_sync_snapshot(&sync_dir, &snapshot, "fixture-wrong-password")
+            .is_err()
+    );
+    synced
+        .apply_cloud_sync_snapshot(&sync_dir, &snapshot, "fixture-sync-password")
+        .unwrap();
+    assert_eq!(synced.load_ai_settings().unwrap(), saved);
+    assert_eq!(
+        synced.load_settings_value().unwrap()["ai"]["models"][1]["future_model"],
+        "first-extension"
+    );
+    drop(synced);
+    std::fs::remove_dir_all(sync_dir).ok();
+    store.save_master_password(None).unwrap();
+    let mut updated = saved;
+    updated
+        .provider_credentials
+        .retain(|item| item.id != "first");
+    updated
+        .models
+        .retain(|item| item.credential_id.as_deref() != Some("first"));
+    let saved = store.save_ai_settings(updated).unwrap();
+    assert_eq!(saved.default_model_id.as_deref(), Some("second:model"));
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(
+        raw["ai"]["provider_credentials"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(raw["ai"]["models"][0]["future_model"], "second-extension");
+    assert_eq!(raw["ai"]["future_ai"]["keep"], true);
+    drop(store);
+    ConnectionStore::export_config_database(&dir, None, &backup).unwrap();
+    ConnectionStore::import_config_database(&restore_dir, None, &backup).unwrap();
+    let restored = ConnectionStore::open(&restore_dir).unwrap();
+    assert_eq!(restored.load_ai_settings().unwrap(), saved);
+    assert_eq!(
+        restored.load_settings_value().unwrap()["ai"]["models"][0]["future_model"],
+        "second-extension"
+    );
+    drop(restored);
+    std::fs::remove_dir_all(dir).ok();
+    std::fs::remove_dir_all(restore_dir).ok();
+}

@@ -10,6 +10,7 @@ mod claude_code_runtime;
 mod codex_runtime;
 mod helper_resolver;
 mod panel;
+mod provider_runtime;
 mod state;
 
 pub(in crate::features) use ai_jobs::{ai_active_profile_drafts, is_agent_command_card};
@@ -17,6 +18,7 @@ pub(in crate::features) use helper_resolver::{McpHelperStatus, mcp_helper_status
 pub(in crate::features) use panel::AiPanel;
 pub(in crate::features) use state::{
     AiFeatureFocus, AiFeatureInit, AiFeatureState, AiFullAccessSetting, AiSettingsMutation,
+    ConnectionStatus, ProviderSettingsView,
 };
 
 const AGENT_OBSERVATION_MIN_WAIT: Duration = Duration::from_millis(700);

@@ -37,7 +37,7 @@
     "wholeWord": "単語単位",
     "regex": "正規表現",
     "invalidRegex": "無効な正規表現"
-},
+  },
   "about": {
     "conpty": "ローカル端末 ConPTY",
     "conptyBundled": "同梱 ConPTY %{version}",
@@ -114,11 +114,26 @@
     "actionName": "アクション名",
     "actionPrompt": "アクションのプロンプト",
     "activeProfile": "有効なプロファイル",
-    "agent": {"claudeCode":"Claude Code","codex":"Codex","mcpIntegration":"NyaTerm MCP tool integration","mcpOnly":"Terminal and remote-file access is available only through NyaTerm MCP.","nyaterm":"NyaTerm Agent"},
-    "claude": {"account":"アカウント","title":"Claude Code"},
-    "codex": {"account":"アカウント","ephemeral":"Ephemeral","persistent":"Persistent","threadMode":"Thread mode","title":"Codex"},
+    "agent": {
+      "claudeCode": "Claude Code",
+      "codex": "Codex",
+      "mcpIntegration": "NyaTerm MCP tool integration",
+      "mcpOnly": "Terminal and remote-file access is available only through NyaTerm MCP.",
+      "nyaterm": "NyaTerm Agent"
+    },
+    "claude": {
+      "account": "アカウント",
+      "title": "Claude Code"
+    },
+    "codex": {
+      "account": "アカウント",
+      "ephemeral": "Ephemeral",
+      "persistent": "Persistent",
+      "threadMode": "Thread mode",
+      "title": "Codex"
+    },
     "configDirectory": "Configuration directory",
-    "localAgents": "AI エージェント",
+    "localAgents": "Agent",
     "notInstalled": "未インストール",
     "codexConnected": "接続済み",
     "claudeAvailable": "CLI は利用可能です。OAuth トークンは確認しません",
@@ -141,9 +156,44 @@
     "externalAgents": "External Agents",
     "externalAgentsDesc": "Codex and Claude Code run as guarded child processes and can access terminals only through scoped MCP credentials.",
     "externalPermission": "External Agent permission",
-    "fullAccess": {"confirmMessage":"Full Access can execute high-risk and destructive operations without routine confirmation. This never enables bypassPermissions. Continue only if you understand the risk.","confirmTitle":"Enable Full Access?","warning":"High risk: one or more AI/MCP integrations currently use Full Access. Destructive operations remain visible in audit history but may run without a prompt."},
-    "mcp": {"allSessions":"All sessions","allowOnce":"Allow Once","allowSession":"Allow for Session","approvalTitle":"MCP capability approval","capability":"Capability","client":"Client","currentWindow":"Current window","copyConfig":"クライアント設定をコピー","deny":"Deny","desc":"Public Host discovery can be disabled independently; scoped internal Hosts remain available to running external Agents.","destructiveWarning":"Destructive request: a session-wide grant is never available.","disabled":"Public Host disabled","helperAvailable":"MCP helper available","helperMissing":"MCP helper missing; reinstall NyaTerm or build nyaterm-mcp","helperStatus":"Helper status","parameters":"Parameters","risk":"Risk","running":"Public Host running","sessionScope":"Session scope","status":"Host status","target":"Target","title":"NyaTerm MCP Host","unavailable":"Public Host unavailable"},
-    "permission": {"auto":"Auto","confirm":"Confirm","desc":"Full Access always requires a separate high-risk confirmation.","fullAccess":"Full Access","observer":"Observer","title":"Permission mode"},
+    "fullAccess": {
+      "confirmMessage": "Full Access can execute high-risk and destructive operations without routine confirmation. This never enables bypassPermissions. Continue only if you understand the risk.",
+      "confirmTitle": "Enable Full Access?",
+      "warning": "High risk: one or more AI/MCP integrations currently use Full Access. Destructive operations remain visible in audit history but may run without a prompt."
+    },
+    "mcp": {
+      "allSessions": "All sessions",
+      "allowOnce": "Allow Once",
+      "allowSession": "Allow for Session",
+      "approvalTitle": "MCP capability approval",
+      "capability": "Capability",
+      "client": "Client",
+      "currentWindow": "Current window",
+      "copyConfig": "クライアント設定をコピー",
+      "deny": "Deny",
+      "desc": "Public Host discovery can be disabled independently; scoped internal Hosts remain available to running external Agents.",
+      "destructiveWarning": "Destructive request: a session-wide grant is never available.",
+      "disabled": "Public Host disabled",
+      "helperAvailable": "MCP helper available",
+      "helperMissing": "MCP helper missing; reinstall NyaTerm or build nyaterm-mcp",
+      "helperStatus": "Helper status",
+      "parameters": "Parameters",
+      "risk": "Risk",
+      "running": "Public Host running",
+      "sessionScope": "Session scope",
+      "status": "Host status",
+      "target": "Target",
+      "title": "NyaTerm MCP Host",
+      "unavailable": "Public Host unavailable"
+    },
+    "permission": {
+      "auto": "Auto",
+      "confirm": "Confirm",
+      "desc": "Full Access always requires a separate high-risk confirmation.",
+      "fullAccess": "Full Access",
+      "observer": "Observer",
+      "title": "Permission mode"
+    },
     "agentApproveExecute": "実行",
     "agentAwaitingApproval": "承認待ち...",
     "agentCommandExecutionMode": "コマンド実行ポリシー",
@@ -298,7 +348,51 @@
     "thinking": "思考中",
     "thoughtComplete": "思考",
     "timeoutMs": "タイムアウト (ms)",
-    "title": "AI"
+    "title": "AI",
+    "refreshProviders": "供給元を更新",
+    "providerProtocolChatCompletions": "OpenAI Chat Completions",
+    "showApiKey": "API キーを表示",
+    "deleteProvider": "供給元を削除",
+    "externalMcpDesc": "外部クライアントから NyaTerm のツールを使用します。",
+    "addProvider": "供給元を追加",
+    "providerProtocolGemini": "Gemini",
+    "deleteModel": "モデルを削除",
+    "providerProtocolOllama": "Ollama",
+    "providerEndpoint": "API エンドポイント",
+    "connectionTest": "接続テスト",
+    "externalMcpEnabled": "MCP を有効にする",
+    "providerNameDuplicate": "同じ名前の供給元が存在します",
+    "editModelConfig": "モデル設定を編集",
+    "externalMcp": "外部 MCP",
+    "hideApiKey": "API キーを隠す",
+    "providerApiKeyRequired": "API キーを入力してください",
+    "deleteProviderConfirm": "「%{name}」を削除しますか？関連するモデル設定も削除されます。",
+    "customProviderOption": "カスタム供給元",
+    "codexVersion": "バージョン",
+    "codexAuthMode": "認証方式",
+    "installed": "インストール済み",
+    "providerEndpointRequired": "API エンドポイントを入力してください",
+    "providerProtocolAnthropic": "Anthropic",
+    "useCodexDefaultModel": "Codex の既定モデルを使用",
+    "supportedReasoningEfforts": "対応する推論レベル",
+    "codexDesc": "Codex CLI を使用してタスクを実行します。",
+    "codexPath": "Codex の実行ファイル",
+    "codexDefaultModel": "既定モデル",
+    "claudeCodeVersion": "バージョン",
+    "providerProtocolResponses": "OpenAI Responses",
+    "claudeCodeDefaultModel": "既定モデル",
+    "changeProviderIcon": "供給元のアイコンを変更",
+    "providerProtocol": "API プロトコル",
+    "providerReturnedBadge": "供給元から取得",
+    "claudeCodePath": "Claude Code の実行ファイル",
+    "claudeCodeDesc": "Claude Code CLI を使用してタスクを実行します。",
+    "providerList": "供給元一覧",
+    "testModel": "モデルをテスト",
+    "externalMcpCopyConfig": "クライアント設定をコピー",
+    "connected": "接続済み",
+    "disconnected": "未接続",
+    "providerNameRequired": "供給元名を入力してください",
+    "providerEndpointInvalid": "有効な HTTP または HTTPS アドレスを入力してください"
   },
   "app": {
     "newConnection": "新規接続",
@@ -390,7 +484,6 @@
     "usernamePlaceholder": "送信するユーザー名",
     "usernameRegexPlaceholder": "ユーザー名プロンプト用の正規表現"
   },
-
   "dialog": {
     "tags": "タグ",
     "newTag": "新しいタグ",
@@ -723,7 +816,6 @@
     "dynamicTabTitleCustomArgsHint": "カスタムシェルオプションを使用すると、フォルダーの自動追跡ができない場合があります。アプリ名と既存のフォルダー情報は引き続き表示できます。",
     "x11ForwardingDesc": "SSH 経由でリモートのグラフィカルアプリケーションをローカルの X サーバーに表示できるようにします。"
   },
-
   "dockerManager": {
     "actionRunning": "Docker アクションを実行中...",
     "actionSuccess": "Docker アクションが完了しました。",
@@ -853,7 +945,6 @@
     "unsavedFilesDesc": "未保存の変更があるファイルが %{count} 件あります。",
     "unsavedTitle": "変更を破棄しますか？"
   },
-
   "filePreview": {
     "categoryImage": "画像",
     "categoryText": "テキスト",
@@ -1127,7 +1218,6 @@
     "errorResolveTargetHome": "ターゲットのホームディレクトリの解決に失敗しました: %{error}",
     "errorSend": "送信に失敗しました: %{error}"
   },
-
   "lockScreen": {
     "message": "非アクティブのためロックされました",
     "passwordPlaceholder": "ロック解除パスワード",
@@ -1549,7 +1639,6 @@
     "users": "ユーザー",
     "visible": "表示中"
   },
-
   "quickCommands": {
     "add": "追加",
     "addCategory": "カテゴリを追加",
@@ -1906,7 +1995,6 @@
     "title": "コマンドパレット",
     "unread": "未読"
   },
-
   "settings": {
     "keywordHighlightLogicalLinesDesc": "キーワードは自動折り返しをまたいで一致しますが、明示的な改行はまたぎません。",
     "shortcutConflictMessage": "ショートカットが %{shortcut} と競合しています",
@@ -2371,7 +2459,6 @@
     "recordingSettings": "セッション記録",
     "recordingSettingsDesc": "記録ファイルと保存されるセッションテキスト出力を設定します。",
     "remoteDeviceLabel": "リモート",
-
     "remoteNamespace": "リモート名前空間",
     "remoteNamespaceDesc": "選択したプロバイダー内の NyaTerm スナップショットの最上位パスプレフィックス。",
     "remoteSnapshot": "リモート",
@@ -2660,9 +2747,10 @@
     "wordSeparatorsDesc": "ダブルクリック時に単語を分割する文字。",
     "x11Display": "ローカル X11 DISPLAY",
     "x11DisplayDesc": "ローカルの X サーバーが必要です。Windows は VcXsrv/Xming、macOS は XQuartz、Linux は通常 Xorg/Xwayland を使用できます。",
-    "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
+    "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0",
+    "advanced": "詳細設定",
+    "unappliedChanges": "未適用の変更があります"
   },
-
   "sshAuth": {
     "dockerElevation": "Docker には sudo 認証が必要です。sudo パスワードを入力してください。",
     "keyRejectedPasswordFallback": "サーバーが鍵を拒否しました。続行するにはパスワードを入力してください。",
@@ -2787,7 +2875,6 @@
     "username": "ユーザー名",
     "workingDir": "作業ディレクトリ"
   },
-
   "tabActions": {
     "bufferErrors": "バッファエラー",
     "clipboardTitle": "タイトルをクリップボードにコピー",
@@ -3114,7 +3201,6 @@
     "later": "後で",
     "downloadFailed": "ダウンロードに失敗しました。再試行してください。",
     "downloadUpdate": "更新をダウンロード",
-
     "checking": "更新を確認中...",
     "currentVersion": "現在",
     "downloading": "更新をダウンロード中...",

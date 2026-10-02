@@ -5,7 +5,9 @@
 //! agent loop. They were seventy `ai_*` fields on `NyaTermApp`, which made it
 //! impossible to see which ones move together.
 
+mod providers;
 mod settings;
+pub(in crate::features) use providers::{ConnectionStatus, ProviderSettingsView};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,7 +23,7 @@ use nyaterm_core::{
 };
 
 use super::agent_management::{
-    AgentCommand, AgentEvent, AgentManagementState, AgentManagementView,
+    AgentCommand, AgentJobEvent, AgentManagementState, AgentManagementView,
 };
 use crate::features::{
     runtime_jobs::AiAgentLoopState, runtime_jobs::AiAgentStepStatus, runtime_jobs::AiAgentStepView,
@@ -50,9 +52,7 @@ pub(in crate::features) struct AiFeatureState {
 /// Focus handles the AI feature needs at construction time.
 pub(in crate::features) struct AiFeatureFocus {
     pub chat: FocusHandle,
-    pub action: FocusHandle,
     pub manual_model: FocusHandle,
-    pub credential: FocusHandle,
 }
 
 pub(in crate::features) struct AiFeatureInit {
@@ -67,20 +67,17 @@ pub(in crate::features) struct AiFeatureInit {
 
 /// Provider settings, model catalog editing and credential drafts.
 struct AiSettingsState {
+    providers: ProviderSettingsView,
     config: AiSettings,
     model_draft: String,
     base_url_draft: String,
     secret_draft: nyaterm_core::SecretString,
-    model_collapsed_groups: HashSet<String>,
-    model_query: String,
     manual_model_drafts: HashMap<String, String>,
     manual_model_focus: FocusHandle,
     manual_model_edit_group: Option<String>,
     /// Per-credential API-key drafts; empty means keep the stored secret.
     credential_secret_drafts: HashMap<String, String>,
-    credential_focus: FocusHandle,
     action_edit: Option<(AiActionListKind, String, AiActionEditorField)>,
-    action_focus: FocusHandle,
     persistence_generation: u64,
     persistence_in_flight: Option<u64>,
     persistence_pending: Option<AiSettings>,
@@ -186,6 +183,7 @@ struct AiHistoryState {
 
 /// Model discovery job and the model picker it feeds.
 struct AiDiscoveryState {
+    #[cfg(test)]
     tx: UnboundedSender<AiDiscoveryJobResult>,
     /// Taken once by `NyaTermApp::start_ai_discovery_event_drain`, which owns
     /// delivery from then on. `None` afterwards, so a second start is a no-op.
@@ -289,24 +287,21 @@ impl AiFeatureState {
             audit_count,
         } = init;
         let (chat_tx, chat_rx) = unbounded();
-        let (discovery_tx, discovery_rx) = unbounded();
+        let (_discovery_tx, discovery_rx) = unbounded();
         let default_mode = settings.default_mode.clone();
         let default_agent_kind = settings.default_agent_kind.clone();
         Self {
             settings: AiSettingsState {
+                providers: ProviderSettingsView::default(),
                 config: settings,
                 model_draft,
                 base_url_draft,
                 secret_draft: nyaterm_core::SecretString::default(),
-                model_collapsed_groups: HashSet::new(),
-                model_query: String::new(),
                 manual_model_drafts: HashMap::new(),
                 manual_model_focus: focus.manual_model,
                 manual_model_edit_group: None,
                 credential_secret_drafts: HashMap::new(),
-                credential_focus: focus.credential,
                 action_edit: None,
-                action_focus: focus.action,
                 persistence_generation: 0,
                 persistence_in_flight: None,
                 persistence_pending: None,
@@ -354,7 +349,8 @@ impl AiFeatureState {
                 audit_write_lock: Arc::new(Mutex::new(())),
             },
             discovery: AiDiscoveryState {
-                tx: discovery_tx,
+                #[cfg(test)]
+                tx: _discovery_tx,
                 rx: Some(discovery_rx),
                 pending: false,
                 menu_open: false,
@@ -1600,6 +1596,7 @@ impl AiFeatureState {
         true
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn discovery_is_pending(&self) -> bool {
         self.discovery.pending
     }
@@ -1649,6 +1646,7 @@ impl AiFeatureState {
         self.discovery.index = 0;
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn begin_discovery_job(
         &mut self,
     ) -> Option<UnboundedSender<AiDiscoveryJobResult>> {
@@ -2069,6 +2067,15 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn apply_settings_input(&mut self, field: AiInputField, text: String) {
+        if matches!(
+            field,
+            AiInputField::CodexExecutable
+                | AiInputField::CodexConfigDirectory
+                | AiInputField::ClaudeExecutable
+                | AiInputField::ClaudeConfigDirectory
+        ) {
+            self.agent_management.invalidate();
+        }
         self.panel.focused_field = field;
         match field {
             AiInputField::Model => self.settings.model_draft = text,
@@ -2219,12 +2226,15 @@ impl AiFeatureState {
 
     pub(in crate::features) fn take_agent_events(
         &mut self,
-    ) -> Option<UnboundedReceiver<AgentEvent>> {
+    ) -> Option<UnboundedReceiver<AgentJobEvent>> {
         self.agent_management.take_events()
     }
 
-    pub(in crate::features) fn apply_agent_event(&mut self, event: AgentEvent) -> Option<String> {
-        self.agent_management.apply(event)
+    pub(in crate::features) fn apply_agent_event(
+        &mut self,
+        event: AgentJobEvent,
+    ) -> Option<String> {
+        self.agent_management.apply_job(event)
     }
 
     pub(in crate::features) fn clear_quote(&mut self) {

@@ -15,10 +15,10 @@ const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
 
 pub fn uses_responses_api(model: &ResolvedAiModel) -> bool {
     model.api_format == AiApiFormat::Responses
-        && matches!(
-            model.provider_kind,
-            AiProviderKind::Openai | AiProviderKind::OpenaiCompatible
-        )
+        && model.credential.as_ref().is_none_or(|credential| {
+            super::provider_settings::effective_protocol(credential)
+                == super::AiProviderApiProtocol::OpenaiCompatible
+        })
 }
 
 pub fn openai_responses_url(model: &ResolvedAiModel) -> Result<String, AiModelError> {
@@ -77,6 +77,9 @@ pub fn build_openai_responses_request_body(
     if request.mode == AiMode::Agent && !request.options.agent_json_protocol {
         body["tools"] = responses_tools();
         body["tool_choice"] = serde_json::json!("required");
+    }
+    if request.options.connectivity_test {
+        body["max_output_tokens"] = serde_json::json!(64);
     }
     body
 }
@@ -198,6 +201,9 @@ pub fn responses_reasoning_effort(value: &AiReasoningEffort) -> Option<&'static 
     match value {
         AiReasoningEffort::Auto => None,
         AiReasoningEffort::None => Some("none"),
+        AiReasoningEffort::Minimal => Some("minimal"),
+        AiReasoningEffort::Max => Some("max"),
+        AiReasoningEffort::Ultra => Some("ultra"),
         AiReasoningEffort::Low => Some("low"),
         AiReasoningEffort::Medium => Some("medium"),
         AiReasoningEffort::High => Some("high"),
@@ -389,6 +395,8 @@ mod tests {
             provider_kind: AiProviderKind::OpenaiCompatible,
             api_format: AiApiFormat::Responses,
             credential: Some(AiProviderCredential {
+                icon_data_url: None,
+                api_protocol: None,
                 id: "credential-test".to_string(),
                 name: "Test".to_string(),
                 provider_kind: AiProviderKind::OpenaiCompatible,

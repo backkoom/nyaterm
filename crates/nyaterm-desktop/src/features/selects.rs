@@ -227,6 +227,10 @@ impl NyaTermApp {
             return;
         }
 
+        if let Some(credential_id) = id.strip_prefix("ai-provider-protocol.") {
+            self.set_ai_provider_protocol(credential_id.to_string(), value.to_string(), cx);
+            return;
+        }
         match id {
             "appearance-ui-theme" => self.update_appearance_theme(value, cx),
             "appearance-terminal-theme" => {
@@ -423,6 +427,16 @@ impl NyaTermApp {
                 if let Some(mode) = ai_permission_mode(value) {
                     self.request_ai_permission_mode(AiFullAccessSetting::ExternalAgent, mode, cx);
                 }
+            }
+            "ai-codex-default-model" => {
+                self.ai.settings_config_mut().codex.default_model =
+                    (value != "__none__").then(|| value.to_string());
+                self.reset_text_input(
+                    "ai.input.codex-default-model",
+                    if value == "__none__" { "" } else { value },
+                    cx,
+                );
+                self.persist_ai_settings_now(cx);
             }
             "ai-codex-permission" => {
                 if let Some(mode) = ai_permission_mode(value) {

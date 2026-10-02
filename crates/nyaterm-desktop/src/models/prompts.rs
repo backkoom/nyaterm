@@ -329,13 +329,6 @@ pub(crate) enum AiActionEditorField {
 }
 
 impl AiActionEditorField {
-    pub(crate) fn next(self) -> Self {
-        match self {
-            Self::Name => Self::Prompt,
-            Self::Prompt => Self::Name,
-        }
-    }
-
     pub(crate) fn input_key(self) -> &'static str {
         match self {
             Self::Name => "name",

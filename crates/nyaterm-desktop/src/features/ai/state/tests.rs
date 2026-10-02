@@ -19,9 +19,7 @@ use super::{AiFeatureFocus, AiFeatureInit, AiFeatureState, AiSettingsMutation};
 fn state(cx: &TestAppContext) -> AiFeatureState {
     let focus = cx.update(|cx| AiFeatureFocus {
         chat: cx.focus_handle(),
-        action: cx.focus_handle(),
         manual_model: cx.focus_handle(),
-        credential: cx.focus_handle(),
     });
     AiFeatureState::new(
         AiFeatureInit {
@@ -154,6 +152,7 @@ fn model_catalog_mutations_keep_default_model_valid() {
     let fallback = "openai:model-b".to_string();
     state.settings.config.models = vec![
         AiModelConfigItem {
+            supported_reasoning_efforts: None,
             backend: Default::default(),
             id: first.clone(),
             name: "model-a".to_string(),
@@ -164,6 +163,7 @@ fn model_catalog_mutations_keep_default_model_valid() {
             last_seen_at: None,
         },
         AiModelConfigItem {
+            supported_reasoning_efforts: None,
             backend: Default::default(),
             id: fallback.clone(),
             name: "model-b".to_string(),
@@ -188,6 +188,8 @@ fn model_catalog_mutations_keep_default_model_valid() {
         .config
         .provider_credentials
         .push(AiProviderCredential {
+            icon_data_url: None,
+            api_protocol: None,
             api_format: Default::default(),
             id: "custom".to_string(),
             name: "Custom".to_string(),
@@ -242,6 +244,7 @@ fn credential_catalog_changes_preserve_an_absent_default_model() {
     let mut state = state(&cx);
     state.settings.config.default_model_id = None;
     state.settings.config.models.push(AiModelConfigItem {
+        supported_reasoning_efforts: None,
         backend: Default::default(),
         id: "openai:model-a".to_string(),
         name: "model-a".to_string(),
@@ -263,6 +266,8 @@ fn credential_catalog_changes_preserve_an_absent_default_model() {
         .config
         .provider_credentials
         .push(AiProviderCredential {
+            icon_data_url: None,
+            api_protocol: None,
             api_format: Default::default(),
             id: "custom".to_string(),
             name: "Custom".to_string(),
@@ -955,4 +960,234 @@ fn panel_status_and_error_banner_change_only_through_owner_operations() {
     state.clear_detected_error();
     assert!(state.panel_detected_error().is_none());
     assert_eq!(state.panel_status(), "terminal error detected");
+}
+
+#[test]
+fn provider_presets_keep_accounts_models_and_secret_drafts_isolated() {
+    use nyaterm_core::ai::provider_settings::model_belongs_to_provider;
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    state.settings.config.provider_credentials.clear();
+    state.settings.config.models.clear();
+    let first = state.add_settings_provider_preset(AiProviderKind::Openai);
+    let second = state.add_settings_provider_preset(AiProviderKind::Openai);
+    assert_ne!(first, second);
+    let credentials = &state.settings.config.provider_credentials;
+    assert_ne!(credentials[0].name, credentials[1].name);
+    assert!(
+        state
+            .settings
+            .config
+            .models
+            .iter()
+            .filter(|model| model_belongs_to_provider(model, &credentials[0]))
+            .all(|model| !model_belongs_to_provider(model, &credentials[1]))
+    );
+    state.apply_settings_credential_input(&format!("{first}.api-key"), "fixture-first".into());
+    state.apply_settings_credential_input(&format!("{second}.api-key"), "fixture-second".into());
+    let pending = state.pending_settings();
+    assert_eq!(
+        pending
+            .provider_credentials
+            .iter()
+            .find(|item| item.id == first)
+            .unwrap()
+            .api_key
+            .as_deref(),
+        Some("fixture-first")
+    );
+    assert_eq!(
+        pending
+            .provider_credentials
+            .iter()
+            .find(|item| item.id == second)
+            .unwrap()
+            .api_key
+            .as_deref(),
+        Some("fixture-second")
+    );
+    state.remove_settings_credential(&first);
+    assert!(
+        !state
+            .settings
+            .config
+            .models
+            .iter()
+            .any(|model| model.credential_id.as_deref() == Some(&first))
+    );
+    assert!(
+        state
+            .settings
+            .config
+            .models
+            .iter()
+            .any(|model| model.credential_id.as_deref() == Some(&second))
+    );
+}
+
+#[test]
+fn manual_model_add_updates_visible_rows_and_preserves_a_valid_default() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    state.settings.config.provider_credentials.clear();
+    state.settings.config.models.clear();
+    let id = state.add_settings_provider_preset(AiProviderKind::OpenaiCompatible);
+    state.add_settings_manual_model(&id, "first");
+    let default = state.settings.config.default_model_id.clone();
+    state.add_settings_manual_model(&id, "second");
+    assert_eq!(state.provider_view().model_order.len(), 2);
+    assert_eq!(state.settings.config.default_model_id, default);
+    let second = state
+        .settings
+        .config
+        .models
+        .iter()
+        .find(|model| model.name == "second")
+        .unwrap()
+        .id
+        .clone();
+    let order = state.provider_view().model_order.clone();
+    state.toggle_settings_model_enabled(&second);
+    state.add_settings_manual_model(&id, "second");
+    assert_eq!(state.provider_view().model_order, order);
+    assert_eq!(state.settings.config.default_model_id, default);
+    assert_eq!(
+        state.add_settings_manual_model(&id, "second"),
+        AiSettingsMutation::Notify
+    );
+}
+
+#[test]
+fn provider_model_rows_keep_order_when_toggled_and_deleted_default_falls_back() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    state.settings.config.provider_credentials.clear();
+    state.settings.config.models.clear();
+    let id = state.add_settings_provider_preset(AiProviderKind::Openai);
+    state.add_settings_manual_model(&id, "first");
+    state.add_settings_manual_model(&id, "second");
+    state.select_settings_provider(Some(id));
+    let before = state.provider_view().model_order.clone();
+    let first = before[0].clone();
+    let second = before[1].clone();
+    state.toggle_settings_model_enabled(&first);
+    state.refresh_provider_model_order();
+    assert_eq!(state.provider_view().model_order, before);
+    state.toggle_settings_model_enabled(&first);
+    state.set_settings_default_model(&first);
+    state.remove_settings_model(&first);
+    assert_eq!(
+        state.settings.config.default_model_id.as_deref(),
+        Some(second.as_str())
+    );
+}
+
+#[test]
+fn provider_changes_and_cancel_invalidate_background_results_and_secret_drafts() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let baseline = state.settings_draft_snapshot();
+    assert!(state.settings_draft_matches(&baseline.0, &baseline.1, &baseline.2, &baseline.3));
+    state.add_settings_provider_preset(AiProviderKind::Openai);
+    state.prepare_provider_settings();
+    let id = state.provider_view().selected_id.clone().unwrap();
+    let generation = state.provider_view().generation;
+    state.apply_settings_credential_input(
+        &format!("{id}.base-url"),
+        "http://example.invalid/".into(),
+    );
+    assert_ne!(state.provider_view().generation, generation);
+    let generation = state.provider_view().generation;
+    state.apply_settings_credential_input(&format!("{id}.api-key"), "fixture-draft".into());
+    assert_ne!(state.provider_view().generation, generation);
+    assert!(!state.settings_draft_matches(&baseline.0, &baseline.1, &baseline.2, &baseline.3));
+    let generation = state.provider_view().generation;
+    state.restore_settings_draft(baseline.0, baseline.1, baseline.2, baseline.3);
+    assert_ne!(state.provider_view().generation, generation);
+    assert!(state.settings_credential_secret_drafts().is_empty());
+    let restored = state.settings_draft_snapshot();
+    state.replace_settings_config(restored.0, true);
+    assert!(state.settings_credential_secret_drafts().is_empty());
+}
+
+#[test]
+fn provider_batch_keeps_successes_when_an_account_fails_and_ignores_stale_results() {
+    use crate::features::ai::ConnectionStatus;
+    use nyaterm_core::ai::AiModelDiscovery;
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let id = state.add_settings_provider_preset(AiProviderKind::OpenaiCompatible);
+    let generation = state.provider_view().generation;
+    let discovery = AiModelDiscovery {
+        id: format!("{id}:fixture"),
+        name: "fixture".into(),
+        provider_kind: Some(AiProviderKind::OpenaiCompatible),
+        credential_id: Some(id.clone()),
+        source: AiModelSource::RustGenai,
+    };
+    assert!(state.complete_provider_discoveries(
+        generation,
+        vec![
+            (id.clone(), Ok(vec![discovery.clone()])),
+            ("failed-account".into(), Err("fixture failure".into()))
+        ],
+        true
+    ));
+    assert!(
+        state
+            .settings
+            .config
+            .models
+            .iter()
+            .any(|model| model.id == discovery.id)
+    );
+    assert!(state.provider_view().statuses[&id] == ConnectionStatus::Success);
+    assert!(state.provider_view().statuses["failed-account"] == ConnectionStatus::Error);
+    state.remove_settings_model(&discovery.id);
+    assert!(!state.complete_provider_discoveries(
+        generation,
+        vec![(id, Ok(vec![discovery.clone()]))],
+        true
+    ));
+    assert!(
+        !state
+            .settings
+            .config
+            .models
+            .iter()
+            .any(|model| model.id == discovery.id)
+    );
+}
+
+#[test]
+fn connection_checks_do_not_modify_settings_and_reasoning_edits_fall_back_to_auto() {
+    use nyaterm_core::ai::{AiModelDiscovery, AiModelReasoningEffort, AiReasoningEffort};
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let id = state.add_settings_provider_preset(AiProviderKind::OpenaiCompatible);
+    state.add_settings_manual_model(&id, "fixture");
+    let before = state.settings.config.clone();
+    assert!(state.complete_provider_discoveries(
+        state.provider_view().generation,
+        vec![(
+            id.clone(),
+            Ok(vec![AiModelDiscovery {
+                id: format!("{id}:other"),
+                name: "other".into(),
+                provider_kind: Some(AiProviderKind::OpenaiCompatible),
+                credential_id: Some(id.clone()),
+                source: AiModelSource::RustGenai
+            }])
+        )],
+        false
+    ));
+    assert_eq!(state.settings.config, before);
+    let model_id = format!("{id}:fixture");
+    state.set_settings_default_model(&model_id);
+    state.set_settings_reasoning_effort(AiReasoningEffort::High);
+    state.toggle_model_reasoning(&model_id, AiModelReasoningEffort::High);
+    assert_eq!(
+        state.settings.config.default_reasoning_effort,
+        AiReasoningEffort::Auto
+    );
 }

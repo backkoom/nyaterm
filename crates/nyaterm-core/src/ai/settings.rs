@@ -75,7 +75,9 @@ pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
             .collect();
     }
     for credential in &mut settings.provider_credentials {
-        if is_builtin_ollama_provider(&credential.id, &credential.provider_kind) {
+        if credential.api_protocol.is_none()
+            && is_builtin_ollama_provider(&credential.id, &credential.provider_kind)
+        {
             migrate_legacy_ollama_base_url(&mut credential.base_url);
         }
     }
@@ -432,6 +434,8 @@ pub(super) fn provider_kind_key(kind: &AiProviderKind) -> &'static str {
 
 fn credential_from_profile(profile: &AiProviderProfile) -> AiProviderCredential {
     AiProviderCredential {
+        icon_data_url: None,
+        api_protocol: None,
         id: profile.id.clone(),
         name: profile.name.clone(),
         provider_kind: profile.provider_kind.clone(),
@@ -460,6 +464,7 @@ fn model_from_profile(profile: &AiProviderProfile) -> Option<AiModelConfigItem> 
     };
 
     Some(AiModelConfigItem {
+        supported_reasoning_efforts: None,
         id,
         name: name.to_string(),
         backend: AiBackendKind::Genai,

@@ -16,6 +16,7 @@ use crate::thread_owner::spawn_joinable;
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(in crate::features) struct AgentManagementView {
     pub codex_version: Option<String>,
+    pub codex_models: Vec<String>,
     pub claude_version: Option<String>,
     pub claude_connected: bool,
     pub mcp_helper_path: Option<PathBuf>,
@@ -32,6 +33,9 @@ pub(in crate::features) struct AgentManagementView {
 }
 
 pub(in crate::features) enum AgentCommand {
+    Models {
+        codex: Option<String>,
+    },
     Refresh {
         codex: Option<String>,
         claude: Option<String>,
@@ -56,9 +60,11 @@ pub(in crate::features) enum AgentCommand {
 }
 
 pub(in crate::features) enum AgentEvent {
+    Models(Result<Value, String>),
     Detected {
         codex: Option<String>,
         claude: Option<String>,
+        claude_connected: bool,
         mcp_helper_path: Option<PathBuf>,
         account: Result<Value, String>,
     },
@@ -72,15 +78,22 @@ pub(in crate::features) enum AgentEvent {
 
 pub(in crate::features) struct AgentManagementState {
     view: AgentManagementView,
-    commands: Option<mpsc::Sender<AgentCommand>>,
-    events: Option<UnboundedReceiver<AgentEvent>>,
+    generation: u64,
+    commands: Option<mpsc::Sender<(u64, AgentCommand)>>,
+    events: Option<UnboundedReceiver<AgentJobEvent>>,
     worker: Option<JoinHandle<()>>,
+}
+
+pub(in crate::features) struct AgentJobEvent {
+    generation: u64,
+    event: AgentEvent,
 }
 
 impl AgentManagementState {
     pub fn new() -> Self {
         Self {
             view: AgentManagementView::default(),
+            generation: 0,
             commands: None,
             events: None,
             worker: None,
@@ -96,6 +109,7 @@ impl AgentManagementState {
     }
 
     pub fn submit(&mut self, command: AgentCommand) -> bool {
+        self.generation = self.generation.wrapping_add(1);
         if self.commands.is_none() {
             let (command_tx, command_rx) = mpsc::channel();
             let (event_tx, event_rx) = unbounded();
@@ -117,7 +131,7 @@ impl AgentManagementState {
         if self
             .commands
             .as_ref()
-            .is_some_and(|tx| tx.send(command).is_ok())
+            .is_some_and(|tx| tx.send((self.generation, command)).is_ok())
         {
             true
         } else {
@@ -128,8 +142,21 @@ impl AgentManagementState {
         }
     }
 
-    pub fn take_events(&mut self) -> Option<UnboundedReceiver<AgentEvent>> {
+    pub fn take_events(&mut self) -> Option<UnboundedReceiver<AgentJobEvent>> {
         self.events.take()
+    }
+
+    pub fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.view.pending = false;
+        self.clear_login();
+    }
+
+    pub fn apply_job(&mut self, event: AgentJobEvent) -> Option<String> {
+        if event.generation != self.generation {
+            return None;
+        }
+        self.apply(event.event)
     }
 
     pub fn apply(&mut self, event: AgentEvent) -> Option<String> {
@@ -139,15 +166,24 @@ impl AgentManagementState {
         }
         let open_login_url = matches!(event, AgentEvent::Login(Ok(_)));
         let result = match event {
+            AgentEvent::Models(result) => result.map(|value| {
+                self.view.codex_models = value["data"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|item| item["model"].as_str().map(str::to_owned))
+                    .collect();
+            }),
             AgentEvent::Detected {
                 codex,
                 claude,
+                claude_connected,
                 mcp_helper_path,
                 account,
             } => {
                 self.view.codex_version = codex;
                 self.view.claude_version = claude;
-                self.view.claude_connected = self.view.claude_version.is_some();
+                self.view.claude_connected = claude_connected;
                 self.view.mcp_helper_path = mcp_helper_path;
                 account.map(|value| self.set_account(&value))
             }
@@ -225,8 +261,12 @@ impl Drop for AgentManagementState {
     }
 }
 
-fn run_agent_worker(commands: mpsc::Receiver<AgentCommand>, events: UnboundedSender<AgentEvent>) {
+fn run_agent_worker(
+    commands: mpsc::Receiver<(u64, AgentCommand)>,
+    events: UnboundedSender<AgentJobEvent>,
+) {
     let mut codex_client: Option<CodexAccountClient> = None;
+    let mut generation = 0;
     loop {
         let command = match commands.recv_timeout(Duration::from_millis(250)) {
             Ok(command) => command,
@@ -234,7 +274,10 @@ fn run_agent_worker(commands: mpsc::Receiver<AgentCommand>, events: UnboundedSen
                 if let Some(client) = codex_client.as_mut()
                     && let Some(account) = client.poll_account_update()
                     && events
-                        .unbounded_send(AgentEvent::AccountUpdated(account))
+                        .unbounded_send(AgentJobEvent {
+                            generation,
+                            event: AgentEvent::AccountUpdated(account),
+                        })
                         .is_err()
                 {
                     break;
@@ -243,7 +286,8 @@ fn run_agent_worker(commands: mpsc::Receiver<AgentCommand>, events: UnboundedSen
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        let event = match command {
+        generation = command.0;
+        let event = match command.1 {
             AgentCommand::Refresh { codex, claude } => {
                 let codex_path = resolve_codex_executable(codex.as_deref()).ok();
                 let codex_version = codex_path.as_deref().and_then(cli_version);
@@ -259,22 +303,26 @@ fn run_agent_worker(commands: mpsc::Receiver<AgentCommand>, events: UnboundedSen
                 AgentEvent::Detected {
                     codex: codex_version,
                     claude: claude_version,
+                    claude_connected: claude_auth_status(claude.as_deref()),
                     mcp_helper_path: resolve_mcp_helper().ok(),
                     account,
                 }
             }
+            AgentCommand::Models { codex } => AgentEvent::Models(request_codex(
+                &mut codex_client,
+                resolve_codex_executable(codex.as_deref()).ok(),
+                "model/list",
+                json!({"limit": 100}),
+            )),
             AgentCommand::Account { codex } => AgentEvent::Account(request_codex(
                 &mut codex_client,
                 resolve_codex_executable(codex.as_deref()).ok(),
                 "account/read",
                 json!({ "refreshToken": false }),
             )),
-            AgentCommand::ClaudeAccount { claude } => AgentEvent::ClaudeAccount(
-                resolve_claude_executable(claude.as_deref())
-                    .as_deref()
-                    .and_then(cli_version)
-                    .is_some(),
-            ),
+            AgentCommand::ClaudeAccount { claude } => {
+                AgentEvent::ClaudeAccount(claude_auth_status(claude.as_deref()))
+            }
             AgentCommand::Login { codex, device_code } => AgentEvent::Login(request_codex(
                 &mut codex_client,
                 resolve_codex_executable(codex.as_deref()).ok(),
@@ -304,7 +352,10 @@ fn run_agent_worker(commands: mpsc::Receiver<AgentCommand>, events: UnboundedSen
                 .map(|_| ()),
             ),
         };
-        if events.unbounded_send(event).is_err() {
+        if events
+            .unbounded_send(AgentJobEvent { generation, event })
+            .is_err()
+        {
             break;
         }
     }
@@ -361,9 +412,25 @@ fn resolve_claude_executable(configured: Option<&str>) -> Option<PathBuf> {
 }
 
 fn cli_version(path: &Path) -> Option<String> {
+    cli_output(path, &["--version"])?
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+}
+
+fn claude_auth_status(configured: Option<&str>) -> bool {
+    resolve_claude_executable(configured)
+        .and_then(|path| cli_output(&path, &["auth", "status", "--json"]))
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .is_some_and(|value| value["loggedIn"] == true)
+}
+
+fn cli_output(path: &Path, args: &[&str]) -> Option<String> {
     let mut command = Command::new(path);
     command
-        .arg("--version")
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     hide_window(&mut command);
@@ -374,13 +441,13 @@ fn cli_version(path: &Path) -> Option<String> {
             Ok(Some(status)) if status.success() => {
                 let mut output = String::new();
                 use std::io::Read as _;
-                child.stdout.take()?.read_to_string(&mut output).ok()?;
-                return output
-                    .lines()
-                    .next()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(str::to_owned);
+                child
+                    .stdout
+                    .take()?
+                    .take(64 * 1024)
+                    .read_to_string(&mut output)
+                    .ok()?;
+                return Some(output);
             }
             Ok(Some(_)) | Err(_) => return None,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
@@ -562,7 +629,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AgentEvent, AgentManagementState, CodexAccountClient, account_update_from_notification,
+        AgentEvent, AgentJobEvent, AgentManagementState, CodexAccountClient,
+        account_update_from_notification,
     };
 
     #[test]
@@ -669,16 +737,46 @@ mod tests {
     }
 
     #[test]
+    fn stale_agent_results_cannot_restore_login_or_account_state() {
+        let mut state = AgentManagementState::new();
+        let generation = state.generation;
+        state.invalidate();
+        assert!(
+            state
+                .apply_job(AgentJobEvent {
+                    generation,
+                    event: AgentEvent::Login(Ok(
+                        json!({ "loginId": "stale", "authUrl": "https://example.invalid/login" })
+                    )),
+                })
+                .is_none()
+        );
+        state.apply_job(AgentJobEvent {
+            generation,
+            event: AgentEvent::AccountUpdated(json!({ "account": { "type": "chatgpt" } })),
+        });
+        assert!(state.view().login_id.is_none());
+        assert!(!state.view().codex_connected);
+        state.apply_job(AgentJobEvent {
+            generation: state.generation,
+            event: AgentEvent::Account(Ok(json!({ "account": { "type": "chatgpt" } }))),
+        });
+        assert!(state.view().codex_connected);
+    }
+
+    #[test]
     fn account_login_cancel_and_logout_update_only_transient_state() {
         let mut state = AgentManagementState::new();
         state.apply(AgentEvent::Detected {
             codex: Some("codex 1.2".to_string()),
-            claude: None,
+            claude: Some("claude fixture".into()),
+            claude_connected: false,
             mcp_helper_path: None,
             account: Ok(json!({ "account": null })),
         });
         assert_eq!(state.view().codex_version.as_deref(), Some("codex 1.2"));
         assert!(!state.view().codex_connected);
+        assert!(!state.view().claude_connected);
         state.apply(AgentEvent::ClaudeAccount(true));
         assert!(state.view().claude_connected);
         state.apply(AgentEvent::ClaudeAccount(false));

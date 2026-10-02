@@ -699,14 +699,22 @@ impl AiPanel {
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
         let mut row = div().h(px(25.)).w_full().flex().items_center().gap_1();
-        for (label, effort) in [
-            ("Auto", AiReasoningEffort::Auto),
-            ("None", AiReasoningEffort::None),
-            ("Low", AiReasoningEffort::Low),
-            ("Med", AiReasoningEffort::Medium),
-            ("High", AiReasoningEffort::High),
-            ("XHigh", AiReasoningEffort::XHigh),
-        ] {
+        let model = snapshot
+            .enabled_models
+            .iter()
+            .find(|model| Some(&model.id) == snapshot.selected_model_id.as_ref());
+        for effort in nyaterm_core::ai::provider_settings::model_reasoning_options(model) {
+            let label = match effort {
+                AiReasoningEffort::Auto => "Auto",
+                AiReasoningEffort::None => "None",
+                AiReasoningEffort::Minimal => "Minimal",
+                AiReasoningEffort::Low => "Low",
+                AiReasoningEffort::Medium => "Med",
+                AiReasoningEffort::High => "High",
+                AiReasoningEffort::XHigh => "XHigh",
+                AiReasoningEffort::Max => "Max",
+                AiReasoningEffort::Ultra => "Ultra",
+            };
             row = row.child(mode_button(
                 format!("ai-reasoning-{label}"),
                 label,
@@ -3152,6 +3160,7 @@ mod tests {
             let settings = AiSettings {
                 models: vec![
                     AiModelConfigItem {
+                        supported_reasoning_efforts: None,
                         backend: Default::default(),
                         id: "openai:model-a".to_string(),
                         name: "Model A".to_string(),
@@ -3162,6 +3171,7 @@ mod tests {
                         last_seen_at: None,
                     },
                     AiModelConfigItem {
+                        supported_reasoning_efforts: None,
                         backend: Default::default(),
                         id: "openai:model-b".to_string(),
                         name: "Model B".to_string(),

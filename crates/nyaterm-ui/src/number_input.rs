@@ -94,6 +94,7 @@ pub struct NyaNumberInputState {
     state: Option<Entity<InputState>>,
     seed: SharedString,
     pending_value: Option<SharedString>,
+    silent_value: Option<SharedString>,
     placeholder: SharedString,
     options: NyaNumberInputOptions,
     focus: FocusHandle,
@@ -111,6 +112,7 @@ impl NyaNumberInputState {
             state: None,
             seed: seed.into(),
             pending_value: None,
+            silent_value: None,
             placeholder: SharedString::default(),
             options,
             focus: cx.focus_handle(),
@@ -136,6 +138,14 @@ impl NyaNumberInputState {
 
     pub fn set_content(&mut self, text: &str, cx: &mut Context<Self>) {
         self.pending_value = Some(SharedString::from(text.to_string()));
+        cx.notify();
+    }
+
+    /// Replace a draft buffer without reporting the rollback as a user edit.
+    pub fn set_content_silent(&mut self, text: &str, cx: &mut Context<Self>) {
+        let value = SharedString::from(text.to_string());
+        self.silent_value = Some(value.clone());
+        self.pending_value = Some(value);
         cx.notify();
     }
 
@@ -220,9 +230,15 @@ impl NyaNumberInputState {
                 window,
                 |this, input, event: &InputEvent, window, cx| match event {
                     InputEvent::Change => {
-                        cx.emit(NyaNumberInputEvent::Changed(
-                            input.read(cx).value().to_string(),
-                        ));
+                        let value = input.read(cx).value().to_string();
+                        if this
+                            .silent_value
+                            .take()
+                            .is_some_and(|expected| expected.as_ref() == value)
+                        {
+                            return;
+                        }
+                        cx.emit(NyaNumberInputEvent::Changed(value));
                     }
                     InputEvent::PressEnter { .. } => {
                         let committed = this.committed_value(input.read(cx).value().as_ref());

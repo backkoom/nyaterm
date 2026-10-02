@@ -190,6 +190,9 @@ impl NyaTermApp {
         if let Some(error) = self.pending_settings_cloud_error() {
             return Some(error);
         }
+        if let Some(error) = self.ai_provider_validation_error() {
+            return Some(error);
+        }
         let master_password = self.settings.master_password();
         if master_password.enabled
             && !self.settings.summary().has_master_password
@@ -258,6 +261,8 @@ impl NyaTermApp {
             return;
         }
 
+        self.hide_ai_provider_secret(cx);
+        self.ai.invalidate_provider_jobs();
         let settings = self.settings.summary().clone();
         let base_settings = self
             .shell
@@ -470,6 +475,10 @@ impl NyaTermApp {
                     this.settings
                         .replace_keyword_config(saved_keyword_highlights);
                     this.sync_ai_drafts_from_active_profile();
+                    this.reset_ai_settings_inputs(cx);
+                    this.forget_text_inputs("ai.credential.");
+                    this.forget_text_inputs("ai.settings.action.");
+                    this.forget_text_inputs("ai.settings.manual-model.");
                     this.recording.set_memory_limit(
                         this.settings.summary().recording_memory_limit_bytes as usize,
                     );
@@ -497,6 +506,7 @@ impl NyaTermApp {
                         this.finish_settings_page(cx);
                     } else {
                         this.begin_settings_draft(cx);
+                        this.ensure_settings_tab_inputs(this.shell.settings_active_tab(), cx);
                         cx.notify();
                     }
                     this.request_settings_panel_refresh(cx);
@@ -514,6 +524,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn cancel_settings(&mut self, cx: &mut Context<Self>) {
+        self.hide_ai_provider_secret(cx);
         if let Some(snapshot) = self.shell.take_settings_draft_snapshot() {
             self.apply_gpui_settings(snapshot.settings, cx);
             self.ai.restore_settings_draft(
@@ -546,6 +557,7 @@ impl NyaTermApp {
             self.invalidate_terminal_cell_metrics(cx);
             self.invalidate_paint_theme_caches();
             self.sync_ai_drafts_from_active_profile();
+            self.reset_ai_settings_inputs(cx);
             self.refresh_visible_terminal_surfaces(cx);
         }
         self.settings.clear_draft_dirty_domains();
@@ -601,7 +613,9 @@ impl NyaTermApp {
 
     fn finish_settings_page(&mut self, cx: &mut Context<Self>) {
         self.cancel_github_gist_auth(cx);
+        self.hide_ai_provider_secret(cx);
         self.ai.close_settings_editors();
+        self.forget_text_inputs("ai.credential.");
         self.settings.clear_keyword_highlight_edit();
         self.forget_text_inputs("ai.settings.action.");
         self.forget_text_inputs("ai.settings.manual-model.");

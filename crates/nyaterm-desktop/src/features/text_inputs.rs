@@ -507,8 +507,6 @@ impl NyaTermApp {
             self.apply_ai_model_search(text, cx);
         } else if id.as_ref() == "ai.history-search" {
             self.apply_ai_history_search(text, cx);
-        } else if id.as_ref() == "ai.settings.model-search" {
-            self.apply_ai_settings_model_search(text, cx);
         } else if id.as_ref() == "quick-command.search" {
             self.apply_quick_command_search(text, cx);
         } else if id.as_ref() == "quick-command.ai-prompt" {

@@ -458,10 +458,6 @@ impl McpHostFeatureState {
         }
     }
 
-    fn helper_status(&self) -> McpHelperStatus {
-        self.helper_status
-    }
-
     fn reconfigure(&mut self, settings: &ExternalMcpSettings) -> Result<(), String> {
         self.helper_status = mcp_helper_status();
         self.runtime.take();
@@ -627,10 +623,6 @@ impl NyaTermApp {
     pub(in crate::features) fn mcp_host_status(&self) -> McpHostStatus {
         self.mcp
             .status(self.ai.settings_config().external_mcp.enabled)
-    }
-
-    pub(in crate::features) fn mcp_helper_status(&self) -> McpHelperStatus {
-        self.mcp.helper_status()
     }
 
     pub(in crate::features) fn reconfigure_mcp_host(&mut self) -> Result<(), String> {

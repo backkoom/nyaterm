@@ -1,67 +1,27 @@
+mod provider;
+use nyaterm_core::ai::{AiProviderApiProtocol, provider_settings::effective_protocol};
+pub use provider::{discover_provider_models, test_model_connection};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::time::Duration;
 
 use nyaterm_core::{
-    AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiMessage, AiModelDiscovery, AiModelError,
+    AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiMessage, AiModelError,
     AiProviderCredential, AiProviderKind, AiSettings, AiToolCall, anthropic_messages_url,
     build_anthropic_chat_request_body, build_anthropic_chat_request_body_with_stream,
     build_gemini_chat_request_body, build_openai_compatible_chat_request_body,
     build_openai_compatible_chat_request_body_with_stream, build_openai_responses_request_body,
     effective_ai_request_user_agent, gemini_generate_content_url,
     gemini_stream_generate_content_url, openai_compatible_chat_completions_url,
-    openai_compatible_models_url, openai_responses_url, parse_anthropic_chat_response,
-    parse_anthropic_stream_chunk, parse_gemini_chat_response, parse_gemini_stream_chunk,
-    parse_openai_compatible_chat_response, parse_openai_compatible_models_response,
+    openai_responses_url, parse_anthropic_chat_response, parse_anthropic_stream_chunk,
+    parse_gemini_chat_response, parse_gemini_stream_chunk, parse_openai_compatible_chat_response,
     parse_openai_compatible_stream_chunk, parse_openai_responses_response,
     parse_openai_responses_stream_chunk, resolve_request_model, uses_responses_api,
     validate_ai_request_contract,
 };
 use zed_reqwest::StatusCode;
 
-const AI_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-
-pub fn discover_openai_compatible_models(
-    settings: &AiSettings,
-    credential: &AiProviderCredential,
-) -> Result<Vec<AiModelDiscovery>, String> {
-    let base_url = credential
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "AI model discovery requires a Base URL".to_string())?;
-    let url = openai_compatible_models_url(base_url).map_err(|error| error.to_string())?;
-    let client = zed_reqwest::blocking::Client::builder()
-        .timeout(AI_DISCOVERY_TIMEOUT)
-        .user_agent(effective_ai_request_user_agent(settings))
-        .build()
-        .map_err(map_discovery_error)?;
-
-    let mut request = client.get(url);
-    if let Some(api_key) = credential
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        request = request.bearer_auth(api_key);
-    }
-
-    let response = request.send().map_err(map_discovery_error)?;
-    let status = response.status();
-    let body = response.text().map_err(map_discovery_error)?;
-    if !status.is_success() {
-        return Err(format!(
-            "models endpoint returned {}: {}",
-            status_label(status),
-            body.trim()
-        ));
-    }
-
-    parse_openai_compatible_models_response(&body, credential).map_err(|error| error.to_string())
-}
 
 pub fn complete_native_chat(
     settings: &AiSettings,
@@ -92,8 +52,8 @@ pub fn complete_native_chat(
         );
     }
 
-    match resolved_model.provider_kind {
-        AiProviderKind::Anthropic => complete_anthropic_chat(
+    match effective_protocol(credential) {
+        AiProviderApiProtocol::Anthropic => complete_anthropic_chat(
             &client,
             credential,
             settings,
@@ -101,13 +61,22 @@ pub fn complete_native_chat(
             history,
             &resolved_model,
         ),
-        AiProviderKind::Gemini => complete_gemini_chat(
+        AiProviderApiProtocol::Gemini => complete_gemini_chat(
             &client,
             credential,
             settings,
             request,
             history,
             &resolved_model,
+        ),
+        AiProviderApiProtocol::Ollama => provider::complete_ollama(
+            &client,
+            credential,
+            settings,
+            request,
+            history,
+            &resolved_model,
+            None,
         ),
         _ => complete_openai_compatible_chat(
             &client,
@@ -151,8 +120,8 @@ pub fn stream_native_chat(
         );
     }
 
-    match resolved_model.provider_kind {
-        AiProviderKind::Anthropic => stream_anthropic_chat(
+    match effective_protocol(credential) {
+        AiProviderApiProtocol::Anthropic => stream_anthropic_chat(
             &client,
             credential,
             settings,
@@ -161,7 +130,7 @@ pub fn stream_native_chat(
             &resolved_model,
             on_delta,
         ),
-        AiProviderKind::Gemini => stream_gemini_chat(
+        AiProviderApiProtocol::Gemini => stream_gemini_chat(
             &client,
             credential,
             settings,
@@ -169,6 +138,15 @@ pub fn stream_native_chat(
             history,
             &resolved_model,
             on_delta,
+        ),
+        AiProviderApiProtocol::Ollama => provider::complete_ollama(
+            &client,
+            credential,
+            settings,
+            request,
+            history,
+            &resolved_model,
+            Some(&mut { on_delta }),
         ),
         _ => stream_openai_compatible_chat(
             &client,
@@ -693,6 +671,9 @@ fn openai_compatible_chat_base_url(credential: &AiProviderCredential) -> Result<
         return Ok(base_url);
     }
 
+    if credential.api_protocol == Some(AiProviderApiProtocol::OpenaiCompatible) {
+        return Err("API base URL is required".into());
+    }
     match credential.provider_kind {
         AiProviderKind::Openai => Ok("https://api.openai.com/v1"),
         AiProviderKind::Deepseek => Ok("https://api.deepseek.com/v1"),
@@ -727,14 +708,6 @@ fn api_key(credential: &AiProviderCredential) -> Result<&str, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("AI credential '{}' is missing an API key", credential.name))
-}
-
-fn map_discovery_error(error: zed_reqwest::Error) -> String {
-    if error.is_timeout() {
-        format!("AI model discovery timed out: {error}")
-    } else {
-        format!("AI model discovery request failed: {error}")
-    }
 }
 
 fn map_ai_http_error(error: zed_reqwest::Error) -> String {
@@ -807,6 +780,8 @@ mod tests {
 
     fn responses_settings(base_url: String) -> AiSettings {
         let credential = AiProviderCredential {
+            icon_data_url: None,
+            api_protocol: None,
             id: "mock-responses".to_string(),
             name: "Mock Responses".to_string(),
             provider_kind: AiProviderKind::OpenaiCompatible,
@@ -816,6 +791,7 @@ mod tests {
             enabled: true,
         };
         let model = AiModelConfigItem {
+            supported_reasoning_efforts: None,
             id: "mock-responses:gpt-test".to_string(),
             name: "gpt-test".to_string(),
             backend: AiBackendKind::Genai,
@@ -862,13 +838,20 @@ mod tests {
         response_body: String,
         content_type: &'static str,
     ) -> (String, thread::JoinHandle<String>) {
+        mock_server_status(response_body, content_type, "200 OK")
+    }
+    fn mock_server_status(
+        response_body: String,
+        content_type: &'static str,
+        status: &'static str,
+    ) -> (String, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
         let address = listener.local_addr().expect("mock address");
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept request");
             let request = read_http_request(&mut stream);
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
                 response_body.len()
             );
             stream
@@ -951,5 +934,207 @@ mod tests {
         assert!(deltas.iter().any(|delta| delta.done));
         assert!(raw_request.starts_with("POST /v1/responses HTTP/1.1"));
         assert!(raw_request.contains("\"stream\":true"));
+    }
+    #[test]
+    fn protocol_override_drives_discovery_chat_stream_and_authentication() {
+        use super::discover_provider_models;
+        use nyaterm_core::ai::AiProviderApiProtocol;
+        for (protocol, discovery, response, stream, path, auth) in [
+            (
+                AiProviderApiProtocol::OpenaiCompatible,
+                r#"{"data":[{"id":"gpt-test"}]}"#,
+                r#"{"choices":[{"message":{"content":"OK"}}]}"#,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n",
+                "/v1/chat/completions",
+                "authorization: Bearer mock-fixture-key",
+            ),
+            (
+                AiProviderApiProtocol::Anthropic,
+                r#"{"data":[{"id":"gpt-test"}],"has_more":false}"#,
+                r#"{"content":[{"type":"text","text":"OK"}]}"#,
+                "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+                "/v1/messages",
+                "x-api-key: mock-fixture-key",
+            ),
+            (
+                AiProviderApiProtocol::Gemini,
+                r#"{"models":[{"name":"models/gpt-test"}]}"#,
+                r#"{"candidates":[{"content":{"parts":[{"text":"OK"}]}}]}"#,
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}]},\"finishReason\":\"STOP\"}]}\n\n",
+                "/v1/models/gpt-test:",
+                "x-goog-api-key: mock-fixture-key",
+            ),
+            (
+                AiProviderApiProtocol::Ollama,
+                r#"{"models":[{"name":"gpt-test"}]}"#,
+                r#"{"message":{"content":"OK"},"done":true}"#,
+                "{\"message\":{\"content\":\"OK\"},\"done\":false}\n{\"done\":true}\n",
+                "/v1/api/chat",
+                "authorization: Bearer mock-fixture-key",
+            ),
+        ] {
+            let (base, server) = mock_server(discovery.into(), "application/json");
+            let mut settings = responses_settings(base);
+            // Intentionally use a brand that does not match any tested protocol.
+            settings.provider_credentials[0].provider_kind = AiProviderKind::Deepseek;
+            settings.provider_credentials[0].api_protocol = Some(protocol);
+            settings.provider_credentials[0].api_format = AiApiFormat::ChatCompletions;
+            settings.models[0].provider_kind = Some(AiProviderKind::Deepseek);
+            let models =
+                discover_provider_models(&settings, &settings.provider_credentials[0]).unwrap();
+            assert_eq!(models[0].credential_id.as_deref(), Some("mock-responses"));
+            let raw = server.join().unwrap();
+            assert!(raw.contains(auth), "{protocol:?}: {raw}");
+            assert!(
+                raw.starts_with(if protocol == AiProviderApiProtocol::Ollama {
+                    "GET /v1/api/tags"
+                } else {
+                    "GET /v1/models"
+                })
+            );
+            let (base, server) = mock_server(response.into(), "application/json");
+            settings.provider_credentials[0].base_url = Some(base);
+            assert_eq!(
+                complete_native_chat(&settings, &request(), &[])
+                    .unwrap()
+                    .text,
+                "OK"
+            );
+            let raw = server.join().unwrap();
+            assert!(
+                raw.starts_with(&format!("POST {path}")),
+                "{protocol:?}: {raw}"
+            );
+            assert!(raw.contains(auth));
+            let (base, server) = mock_server(stream.into(), "text/event-stream");
+            settings.provider_credentials[0].base_url = Some(base);
+            let mut deltas = Vec::new();
+            assert_eq!(
+                stream_native_chat(&settings, &request(), &[], |delta| deltas.push(delta))
+                    .unwrap()
+                    .text,
+                "OK"
+            );
+            let raw = server.join().unwrap();
+            assert!(raw.starts_with(&format!("POST {path}")));
+            assert!(
+                deltas.iter().any(|delta| delta.done),
+                "{protocol:?} missing done"
+            );
+        }
+    }
+
+    #[test]
+    fn model_connection_test_uses_fixed_prompt_auto_reasoning_and_bounded_output() {
+        let (base, server) = mock_server(
+            r#"{"choices":[{"message":{"content":"OK"}}]}"#.into(),
+            "application/json",
+        );
+        let mut settings = responses_settings(base);
+        settings.provider_credentials[0].api_format = AiApiFormat::ChatCompletions;
+        settings.models[0].enabled = false;
+        super::test_model_connection(&settings, "mock-responses:gpt-test").unwrap();
+        assert!(!settings.models[0].enabled);
+        let raw = server.join().unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["max_tokens"], 64);
+        assert_eq!(
+            body["messages"][1]["content"],
+            "Confirm that this model can respond."
+        );
+        assert!(body.get("tools").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn model_discovery_rejects_invalid_response_and_accepts_empty_results() {
+        for (response, succeeds) in [(r#"{"data":[]}"#, true), ("{}", false), ("not-json", false)] {
+            let (base, server) = mock_server(response.into(), "application/json");
+            let settings = responses_settings(base);
+            let result =
+                super::discover_provider_models(&settings, &settings.provider_credentials[0]);
+            assert_eq!(result.is_ok(), succeeds);
+            if succeeds {
+                assert!(result.unwrap().is_empty());
+            }
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn discovery_follows_protocol_pagination_and_rejects_repeated_cursors() {
+        use nyaterm_core::ai::AiProviderApiProtocol;
+        for protocol in [
+            AiProviderApiProtocol::Anthropic,
+            AiProviderApiProtocol::Gemini,
+        ] {
+            for repeat in [false, true] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let base = format!("http://{}/v1", listener.local_addr().unwrap());
+                let server = thread::spawn(move || {
+                    let mut requests = Vec::new();
+                    for page in 0..2 {
+                        let (mut stream, _) = listener.accept().unwrap();
+                        requests.push(read_http_request(&mut stream));
+                        let more = page == 0 || repeat;
+                        let body = if protocol == AiProviderApiProtocol::Anthropic {
+                            serde_json::json!({"data":[{"id":format!("model-{page}")}],"has_more":more,"last_id":"cursor"})
+                        } else { serde_json::json!({"models":[{"name":format!("models/model-{page}")}],"nextPageToken":if more { "cursor" } else { "" }}) }.to_string();
+                        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                    }
+                    requests
+                });
+                let mut settings = responses_settings(base);
+                settings.provider_credentials[0].api_protocol = Some(protocol);
+                let result =
+                    super::discover_provider_models(&settings, &settings.provider_credentials[0]);
+                assert_eq!(result.is_err(), repeat);
+                if !repeat {
+                    assert_eq!(result.unwrap().len(), 2);
+                }
+                let requests = server.join().unwrap();
+                assert!(
+                    requests[1].contains(if protocol == AiProviderApiProtocol::Gemini {
+                        "pageToken=cursor"
+                    } else {
+                        "after_id=cursor"
+                    })
+                );
+            }
+        }
+    }
+    #[test]
+    fn discovery_authentication_errors_do_not_expose_response_body() {
+        let (base, server) = mock_server_status(
+            "fixture-sensitive-error-body".into(),
+            "application/json",
+            "401 Unauthorized",
+        );
+        let settings = responses_settings(base);
+        let error = super::discover_provider_models(&settings, &settings.provider_credentials[0])
+            .unwrap_err();
+        assert!(error.contains("401"));
+        assert!(!error.contains("fixture-sensitive"));
+        server.join().unwrap();
+    }
+    #[test]
+    fn chat_timeout_is_enforced_by_the_http_adapter() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            request
+        });
+        let mut settings = responses_settings(base);
+        settings.timeout_ms = 100;
+        assert!(
+            complete_native_chat(&settings, &request(), &[])
+                .unwrap_err()
+                .to_lowercase()
+                .contains("timed out")
+        );
+        server.join().unwrap();
     }
 }

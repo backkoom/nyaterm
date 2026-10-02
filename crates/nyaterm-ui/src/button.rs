@@ -22,6 +22,7 @@ pub struct NyaButton {
     icon_path: Option<SharedString>,
     content: Option<AnyElement>,
     variant: NyaButtonVariant,
+    height: Option<Pixels>,
     small: bool,
     compact: bool,
     full_width: bool,
@@ -40,6 +41,7 @@ impl NyaButton {
             icon_path: None,
             content: None,
             variant: NyaButtonVariant::Secondary,
+            height: None,
             small: false,
             compact: false,
             full_width: false,
@@ -63,6 +65,11 @@ impl NyaButton {
 
     pub fn variant(mut self, variant: NyaButtonVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    pub fn height(mut self, height: Pixels) -> Self {
+        self.height = Some(height);
         self
     }
 
@@ -142,6 +149,9 @@ impl RenderOnce for NyaButton {
         }
         if let Some(on_click) = self.on_click {
             button = button.on_click(on_click);
+        }
+        if let Some(height) = self.height {
+            button = button.h(height);
         }
         button.disabled(self.disabled)
     }

@@ -11,6 +11,8 @@ mod agent;
 mod claude_code;
 mod codex;
 mod diagnostics;
+pub mod ollama;
+pub mod provider_settings;
 mod providers;
 mod responses;
 mod risk;
@@ -65,6 +67,15 @@ pub enum AiApiFormat {
     #[default]
     ChatCompletions,
     Responses,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProviderApiProtocol {
+    OpenaiCompatible,
+    Anthropic,
+    Gemini,
+    Ollama,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -126,10 +137,26 @@ pub enum AiReasoningEffort {
     #[default]
     Auto,
     None,
+    Minimal,
     Low,
     Medium,
     High,
     XHigh,
+    Max,
+    Ultra,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AiModelReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+    Ultra,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -315,10 +342,16 @@ pub struct AiModelConfigItem {
     pub source: AiModelSource,
     #[serde(default)]
     pub last_seen_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_reasoning_efforts: Option<Vec<AiModelReasoningEffort>>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiProviderCredential {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_data_url: Option<String>,
+    #[serde(default)]
+    pub api_protocol: Option<AiProviderApiProtocol>,
     pub id: String,
     pub name: String,
     pub provider_kind: AiProviderKind,
@@ -719,6 +752,8 @@ pub enum AiAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiRequestOptions {
+    #[serde(skip)]
+    pub connectivity_test: bool,
     #[serde(default = "default_max_output_commands")]
     pub max_output_commands: u8,
     #[serde(default = "default_language")]
@@ -734,6 +769,7 @@ pub struct AiRequestOptions {
 impl Default for AiRequestOptions {
     fn default() -> Self {
         Self {
+            connectivity_test: false,
             max_output_commands: default_max_output_commands(),
             language: default_language(),
             safety_mode: default_safety_mode(),
@@ -1101,7 +1137,12 @@ pub fn resolve_model_credential(
     model: &AiModelConfigItem,
     provider_kind: Option<&AiProviderKind>,
 ) -> Result<Option<AiProviderCredential>, AiModelError> {
-    if let Some(credential_id) = model.credential_id.as_deref() {
+    let implicit_id = model
+        .id
+        .split_once(':')
+        .map(|(id, _)| id)
+        .filter(|id| provider_settings::is_builtin_provider(id));
+    if let Some(credential_id) = model.credential_id.as_deref().or(implicit_id) {
         let credential = settings
             .provider_credentials
             .iter()
@@ -1126,6 +1167,21 @@ pub fn validate_model_credential(
     provider_kind: &AiProviderKind,
     credential: Option<&AiProviderCredential>,
 ) -> Result<(), AiModelError> {
+    if let Some(credential) = credential {
+        if !provider_settings::provider_requires_api_key(credential) {
+            return Ok(());
+        }
+        if credential
+            .api_key
+            .as_ref()
+            .is_none_or(|key| key.expose_secret().trim().is_empty())
+        {
+            return Err(AiModelError::MissingApiKey {
+                credential: credential.name.clone(),
+            });
+        }
+        return Ok(());
+    }
     match provider_kind {
         AiProviderKind::Ollama => Ok(()),
         AiProviderKind::OpenaiCompatible => {
@@ -1378,6 +1434,9 @@ pub fn agent_system_prompt(language: &str) -> &'static str {
 }
 
 fn request_system_prompt(request: &AiChatRequest) -> &'static str {
+    if request.options.connectivity_test {
+        return "You are NyaTerm's terminal AI connectivity check. Reply with OK only; do not suggest or run commands.";
+    }
     if request.mode == AiMode::Agent && request.options.agent_json_protocol {
         return AGENT_JSON_PROTOCOL_PROMPT;
     }
@@ -1390,6 +1449,9 @@ fn request_system_prompt(request: &AiChatRequest) -> &'static str {
 const AGENT_JSON_PROTOCOL_PROMPT: &str = r#"You are a terminal automation agent. Return exactly one JSON object per turn, with no Markdown. For a command use {"thought":"brief reason","action":"execute_command","command":"one non-interactive shell command","riskLevel":"low|medium|high|critical","riskReason":"brief reason","targetTerminalSessionId":"terminal ID"}. To finish use {"thought":"brief reason","action":"final_answer","answer":"user-facing answer"}. Never request passwords or execute irreversible destructive commands. Keep commands and paths unchanged."#;
 
 fn request_user_prompt(request: &AiChatRequest, settings: &AiSettings) -> String {
+    if request.options.connectivity_test {
+        return "Confirm that this model can respond.".into();
+    }
     if request.mode == AiMode::Agent && request.options.agent_json_protocol {
         return format!(
             "Task or latest observation:\n{}\n\nConnection: {}\nHost: {}\nDirectory: {}\nRecent terminal output:\n{}\n\nRespond with exactly one JSON action: execute_command or final_answer. Use {} for user-facing text. Commands must be non-interactive; never wait for a pager, confirmation, or input.",
@@ -1579,6 +1641,11 @@ fn chat_history_for_request(
     assistant_role: &str,
 ) -> Vec<serde_json::Value> {
     let mut messages = Vec::new();
+    if request.options.connectivity_test {
+        return vec![
+            serde_json::json!({"role": "user", "content": "Confirm that this model can respond."}),
+        ];
+    }
 
     if let Some(session_id) = request.session_id.as_deref() {
         let max_turns = request.options.history_turns as usize;
