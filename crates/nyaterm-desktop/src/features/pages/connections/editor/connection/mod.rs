@@ -3216,7 +3216,7 @@ mod tests {
             assert!(vcx.update(|window, cx| {
                 input.read(cx).component_focus_handle(cx).is_focused(window)
             }));
-            vcx.simulate_keystrokes("ctrl-a 2 5 0 0 0 0");
+            vcx.simulate_keystrokes("secondary-a 2 5 0 0 0 0");
             draw_editor(&app, vcx);
             assert_eq!(input.read_with(vcx, |input, cx| input.value(cx)), "250000");
             assert!(vcx.update(|_, cx| {
