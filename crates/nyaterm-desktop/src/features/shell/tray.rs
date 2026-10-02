@@ -333,15 +333,37 @@ pub(crate) fn show_window(window: &mut Window, cx: &mut gpui::App) {
     if let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window)
         && let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw()
     {
-        unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
-                handle.hwnd.get() as _,
-                windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE,
-            );
-        }
+        unsafe { show_native_window(handle.hwnd.get() as _) };
+        // Native activation must finish before a tray action opens a dialog.
+        // GPUI's queued activation could otherwise run after the dialog opens.
+        return;
     }
     cx.activate(true);
     window.activate_window();
+}
+
+#[cfg(windows)]
+unsafe fn show_native_window(hwnd: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IsIconic, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
+    };
+
+    // SW_RESTORE also unmaximizes; only minimized windows need restoring.
+    unsafe {
+        let command = if IsIconic(hwnd) != 0 {
+            SW_RESTORE
+        } else {
+            SW_SHOW
+        };
+        ShowWindow(hwnd, command);
+        // SW_SHOW leaves an already-visible window inactive. The tray menu's
+        // hidden HWND may still be active, and GPUI uses GetActiveWindow as the
+        // owner of a new dialog. Select the real owner synchronously.
+        SetForegroundWindow(hwnd);
+        SetActiveWindow(hwnd);
+        SetFocus(hwnd);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -410,6 +432,88 @@ mod tests {
 
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{NavItem, PanelOpenMode, PanelSide};
+
+    #[cfg(windows)]
+    #[test]
+    fn showing_native_window_preserves_size_and_activates_before_opening_dialogs() {
+        use super::show_native_window;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, SetActiveWindow};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, IsIconic, IsWindowVisible, IsZoomed, SW_HIDE,
+            SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, ShowWindow, WS_OVERLAPPEDWINDOW,
+        };
+
+        struct NativeWindow(windows_sys::Win32::Foundation::HWND);
+        impl Drop for NativeWindow {
+            fn drop(&mut self) {
+                unsafe { DestroyWindow(self.0) };
+            }
+        }
+
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let create_window = || {
+                NativeWindow(CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    WS_OVERLAPPEDWINDOW,
+                    0,
+                    0,
+                    320,
+                    240,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                ))
+            };
+            let window = create_window();
+            let tray_menu_owner = create_window();
+            assert!(!window.0.is_null(), "create native test window");
+            assert!(
+                !tray_menu_owner.0.is_null(),
+                "create hidden tray menu owner"
+            );
+
+            ShowWindow(window.0, SW_MAXIMIZE);
+            assert_ne!(IsZoomed(window.0), 0);
+            for state in [None, Some(SW_HIDE), Some(SW_MINIMIZE)] {
+                if let Some(state) = state {
+                    ShowWindow(window.0, state);
+                }
+                SetActiveWindow(tray_menu_owner.0);
+                assert_eq!(GetActiveWindow(), tray_menu_owner.0);
+                show_native_window(window.0);
+                assert_eq!(
+                    GetActiveWindow(),
+                    window.0,
+                    "dialog must resolve the main window as its owner immediately"
+                );
+                assert_ne!(IsWindowVisible(window.0), 0);
+                assert_eq!(IsIconic(window.0), 0);
+                assert_ne!(IsZoomed(window.0), 0, "preserve maximized state");
+            }
+
+            ShowWindow(window.0, SW_RESTORE);
+            for state in [None, Some(SW_HIDE), Some(SW_MINIMIZE)] {
+                if let Some(state) = state {
+                    ShowWindow(window.0, state);
+                }
+                SetActiveWindow(tray_menu_owner.0);
+                assert_eq!(GetActiveWindow(), tray_menu_owner.0);
+                show_native_window(window.0);
+                assert_eq!(
+                    GetActiveWindow(),
+                    window.0,
+                    "dialog must resolve the main window as its owner immediately"
+                );
+                assert_ne!(IsWindowVisible(window.0), 0);
+                assert_eq!(IsIconic(window.0), 0);
+                assert_eq!(IsZoomed(window.0), 0, "preserve normal state");
+            }
+        }
+    }
 
     #[test]
     fn opening_tray_panels_repeatedly_keeps_them_visible_in_each_layout() {
