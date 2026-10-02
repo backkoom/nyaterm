@@ -441,7 +441,9 @@ jobs:
             const release = releases.find(item => item.tag_name === tag);
             if (!release?.draft) throw new Error(`Expected an existing Draft Release for ${tag}`);
 
-            const assets = release.assets || [];
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner, repo: context.repo.repo, release_id: release.id, per_page: 100,
+            });
 
             function normalizeArch(name) {
               const lower = name.toLowerCase();
@@ -576,7 +578,9 @@ jobs:
             const release = releases.find(item => item.tag_name === tag);
             if (!release?.draft) throw new Error(`Expected an existing Draft Release for ${tag}`);
 
-            const assets = release.assets || [];
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner, repo, release_id: release.id, per_page: 100,
+            });
 
             function normalizeArch(name) {
               const lower = name.toLowerCase();
@@ -790,7 +794,10 @@ jobs:
             const release = releases.find(item => item.tag_name === tag);
             if (!release?.draft) throw new Error(`Expected an existing Draft Release for ${tag}`);
 
-            const sigAssets = release.assets.filter(asset => asset.name.endsWith('.sig'));
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner, repo: context.repo.repo, release_id: release.id, per_page: 100,
+            });
+            const sigAssets = assets.filter(asset => asset.name.endsWith('.sig'));
 
             for (const asset of sigAssets) {
               console.log(`Deleting signature asset: ${asset.name}`);
@@ -1222,7 +1229,7 @@ jobs:
           aws s3 cp release-assets/r2-latest.json "s3://${R2_BUCKET}/releases/${GITHUB_REF_NAME}/latest.json" \
             --endpoint-url "$R2_ENDPOINT" \
             --content-type "application/json; charset=utf-8" \
-            --cache-control "public, max-age=31536000, immutable" \
+            --cache-control "public, no-cache, must-revalidate" \
             --no-progress
 
       - name: Verify versioned R2 latest.json
@@ -1287,7 +1294,9 @@ jobs:
             " "$source"
           }
 
-          curl -fsSL "${DOWNLOAD_BASE_URL}/releases/${GITHUB_REF_NAME}/latest.json" -o staged-latest.json
+          aws s3 cp "s3://${R2_BUCKET}/releases/${GITHUB_REF_NAME}/latest.json" staged-latest.json \
+            --endpoint-url "$R2_ENDPOINT" \
+            --no-progress
           verify_manifest "Versioned R2 latest.json" < staged-latest.json
           cmp release-assets/r2-latest.json staged-latest.json
           echo "manifest-sha256=$(sha256sum staged-latest.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
