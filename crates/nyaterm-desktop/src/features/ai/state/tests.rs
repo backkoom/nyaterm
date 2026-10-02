@@ -837,6 +837,7 @@ fn background_completion_distinguishes_foreign_and_matched_stale_jobs() {
     let launch = state.begin_chat_job();
     let now = Instant::now();
     let loop_state = AiAgentLoopState {
+        command_card_id: None,
         available_targets: Vec::new(),
         default_target_session_id: None,
         ai_session_id: "session-a".to_string(),
@@ -879,6 +880,7 @@ fn agent_step_limit_and_observation_poll_stay_on_the_owner() {
 
     let now = Instant::now();
     state.set_agent_loop(AiAgentLoopState {
+        command_card_id: None,
         available_targets: Vec::new(),
         default_target_session_id: None,
         ai_session_id: "session-a".to_string(),
@@ -1241,4 +1243,448 @@ fn disabling_an_external_agent_falls_back_to_ask_for_its_existing_terminal_draft
     state.toggle_settings_codex_enabled();
     assert_eq!(state.chat_run_mode(), AiMode::Ask);
     assert_eq!(state.chat_agent_kind(), AiAgentKind::Nyaterm);
+}
+
+#[test]
+fn response_phases_stop_thinking_when_visible_text_or_tool_arguments_arrive() {
+    use crate::features::ai::presentation::AiResponsePhase;
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let launch = state.begin_chat_request("inspect".into(), AiMode::Ask, None);
+    assert_eq!(state.response_phase(), AiResponsePhase::Waiting);
+    assert!(state.apply_chat_delta(launch.job_id, "<think>consider", None));
+    assert_eq!(state.response_phase(), AiResponsePhase::Thinking);
+    assert!(state.apply_chat_delta(launch.job_id, "</think>Answer", None));
+    assert_eq!(state.response_phase(), AiResponsePhase::Responding);
+    assert!(state.apply_chat_delta(launch.job_id, "", Some("late thought")));
+    assert_eq!(state.response_phase(), AiResponsePhase::Responding);
+    state.cancel_chat_and_agent();
+    assert_eq!(state.response_phase(), AiResponsePhase::Ended);
+    assert!(!state.apply_chat_delta(launch.job_id, "late output", None));
+    assert!(!state.apply_agent_tool_delta(launch.job_id, Some("execute_command"), 4));
+
+    let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
+    assert!(state.apply_agent_tool_delta(launch.job_id, Some("execute_command"), 4));
+    assert_eq!(state.response_phase(), AiResponsePhase::ToolArguments);
+    assert!(state.apply_chat_delta(launch.job_id, "", Some("reason")));
+    assert_eq!(state.response_phase(), AiResponsePhase::ToolArguments);
+    assert!(state.apply_agent_protocol_fallback(launch.job_id));
+    assert_eq!(state.response_phase(), AiResponsePhase::Waiting);
+}
+
+fn presentation_command(id: &str) -> nyaterm_core::AiCommandCard {
+    nyaterm_core::AiCommandCard {
+        id: id.into(),
+        title: "Inspect".into(),
+        command: "echo fixture".into(),
+        explanation: "Read only".into(),
+        risk_level: Some(nyaterm_core::RiskLevel::Low),
+        risk_reason: Some("No changes".into()),
+        expected_effect: String::new(),
+        rollback: None,
+        category: None,
+        references: Vec::new(),
+        target_terminal_session_id: Some("terminal-a".into()),
+        target: None,
+    }
+}
+
+#[test]
+fn agent_proposals_link_the_exact_message_and_card_before_execution() {
+    use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase, AiResponsePhase};
+    let cx = TestAppContext::single();
+    for automatic in [false, true] {
+        let mut state = state(&cx);
+        let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
+        let assistant_id = state.chat_streaming_assistant_id().unwrap().to_string();
+        state.apply_chat_delta(launch.job_id, "streamed protocol", None);
+        state
+            .finish_chat_job(
+                launch.job_id,
+                launch.session_id,
+                Ok(AiChatJobOutput {
+                    mode: AiMode::Agent,
+                    text: String::new(),
+                    reasoning: Some("Read only".into()),
+                    command_cards: vec![presentation_command("agent-fixture")],
+                    auto_execute_first: automatic,
+                    approval_note: Some("Review this command".into()),
+                }),
+            )
+            .unwrap();
+        let step = &state.agent_steps()[0];
+        assert_eq!(
+            step.source_message_id.as_deref(),
+            Some(assistant_id.as_str())
+        );
+        assert_eq!(step.command_card_id.as_deref(), Some("agent-fixture"));
+        assert_eq!(step.command.as_deref(), Some("echo fixture"));
+        assert_eq!(step.kind, AiAgentStepKind::ToolProgress);
+        assert_eq!(
+            AiCommandPhase::from_step(step),
+            if automatic {
+                AiCommandPhase::Preparing
+            } else {
+                AiCommandPhase::NeedsApproval
+            }
+        );
+        assert!(
+            state.chat_messages()[1].content.is_empty(),
+            "protocol text must not duplicate the execution block"
+        );
+        assert_eq!(state.response_phase(), AiResponsePhase::Ended);
+        assert!(!state.apply_chat_delta(launch.job_id, "late", None));
+        assert!(!state.apply_agent_tool_delta(launch.job_id, None, 8));
+    }
+}
+
+#[test]
+fn final_answers_are_not_classified_as_thoughts_commands_or_output() {
+    use crate::features::ai::presentation::AiAgentStepKind;
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
+    let id = state.chat_streaming_assistant_id().unwrap().to_string();
+    state
+        .finish_chat_job(
+            launch.job_id,
+            launch.session_id,
+            Ok(AiChatJobOutput {
+                mode: AiMode::Agent,
+                text: "## Result\nAll good".into(),
+                reasoning: None,
+                command_cards: Vec::new(),
+                auto_execute_first: false,
+                approval_note: None,
+            }),
+        )
+        .unwrap();
+    let step = &state.agent_steps()[0];
+    assert_eq!(step.kind, AiAgentStepKind::FinalAnswer);
+    assert_eq!(step.source_message_id.as_deref(), Some(id.as_str()));
+    assert!(step.thought.is_none() && step.command.is_none() && step.observation.is_none());
+    assert_eq!(state.chat_messages()[1].content, "## Result\nAll good");
+}
+
+#[test]
+fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messages() {
+    use crate::features::ai::presentation::{AiAgentStepKind, AiResponsePhase};
+    let cx = TestAppContext::single();
+    for automatic in [false, true] {
+        let mut state = state(&cx);
+        let mut launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
+        let mut message_ids = Vec::new();
+        for index in 0..2 {
+            let id = state.chat_streaming_assistant_id().unwrap().to_string();
+            message_ids.push(id.clone());
+            let card_id = format!("agent-command-{index}");
+            state
+                .finish_chat_job(
+                    launch.job_id,
+                    launch.session_id.clone(),
+                    Ok(AiChatJobOutput {
+                        mode: AiMode::Agent,
+                        text: String::new(),
+                        reasoning: Some("Inspect safely".into()),
+                        command_cards: vec![presentation_command(&card_id)],
+                        auto_execute_first: automatic,
+                        approval_note: None,
+                    }),
+                )
+                .unwrap();
+            let (_, step_index) = state.begin_agent_step(4).unwrap();
+            let now = Instant::now();
+            let execution = AiAgentLoopState {
+                command_card_id: Some(card_id.clone()),
+                ai_session_id: launch.session_id.clone(),
+                terminal_session_id: "terminal-a".into(),
+                available_targets: Vec::new(),
+                default_target_session_id: None,
+                command: "echo fixture".into(),
+                marker_id: None,
+                background_job_id: None,
+                step_index,
+                max_steps: 4,
+                output_start_len: 0,
+                started_at: now,
+                min_wait_until: now,
+                timeout_at: now,
+                last_seen_len: 0,
+                stable_since: now,
+            };
+            state.set_agent_loop(execution.clone());
+            state.record_agent_observation(
+                step_index,
+                &nyaterm_core::CommandObservation {
+                    output: "fixture output".into(),
+                    exit_code: Some(0),
+                    duration_ms: 1,
+                },
+                "Observation".into(),
+            );
+            let step = &state.agent_steps()[usize::from(step_index)];
+            assert_eq!(step.command_card_id.as_deref(), Some(card_id.as_str()));
+            assert_eq!(step.source_message_id.as_deref(), Some(id.as_str()));
+            launch = state
+                .begin_agent_continuation(&execution, "fixture output")
+                .unwrap();
+            assert_eq!(state.response_phase(), AiResponsePhase::Waiting);
+            assert!(state.apply_chat_delta(launch.job_id, "", Some("Next step")));
+            assert_eq!(state.response_phase(), AiResponsePhase::Thinking);
+        }
+        let final_id = state.chat_streaming_assistant_id().unwrap().to_string();
+        assert!(!message_ids.contains(&final_id));
+        let answer = format!(
+            "## Result\n{}\nFull answer ending.",
+            "Detailed finding. ".repeat(30)
+        );
+        assert!(state.apply_chat_delta(launch.job_id, "## Result", None));
+        assert_eq!(state.response_phase(), AiResponsePhase::Responding);
+        state
+            .finish_chat_job(
+                launch.job_id,
+                launch.session_id,
+                Ok(AiChatJobOutput {
+                    mode: AiMode::Agent,
+                    text: answer.clone(),
+                    reasoning: None,
+                    command_cards: Vec::new(),
+                    auto_execute_first: false,
+                    approval_note: None,
+                }),
+            )
+            .unwrap();
+        assert_eq!(state.response_phase(), AiResponsePhase::Ended);
+        assert_eq!(state.chat_messages().len(), 4);
+        assert_eq!(state.chat_messages()[3].id, final_id);
+        assert_eq!(state.chat_messages()[3].content, answer);
+        let final_step = state.agent_steps().last().unwrap();
+        assert_eq!(final_step.kind, AiAgentStepKind::FinalAnswer);
+        assert_eq!(
+            final_step.source_message_id.as_deref(),
+            Some(final_id.as_str())
+        );
+        assert!(final_step.thought.is_none() && final_step.observation.is_none());
+        assert!(!state.apply_chat_delta(launch.job_id, "late", None));
+    }
+}
+
+#[test]
+fn foreign_agent_continuation_cannot_claim_the_active_response() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
+    let assistant_id = state.chat_streaming_assistant_id().unwrap().to_string();
+    let now = Instant::now();
+    let execution = AiAgentLoopState {
+        command_card_id: None,
+        ai_session_id: "another-session".into(),
+        terminal_session_id: "terminal-a".into(),
+        available_targets: Vec::new(),
+        default_target_session_id: None,
+        command: "echo fixture".into(),
+        marker_id: None,
+        background_job_id: None,
+        step_index: 0,
+        max_steps: 4,
+        output_start_len: 0,
+        started_at: now,
+        min_wait_until: now,
+        timeout_at: now,
+        last_seen_len: 0,
+        stable_since: now,
+    };
+    assert!(
+        state
+            .begin_agent_continuation(&execution, "foreign output")
+            .is_none()
+    );
+    assert_eq!(
+        state.chat_streaming_assistant_id(),
+        Some(assistant_id.as_str())
+    );
+    assert_eq!(state.chat_messages().len(), 2);
+    assert!(state.apply_chat_delta(launch.job_id, "active answer", None));
+}
+
+#[test]
+fn command_results_distinguish_success_failure_and_unknown_exit_codes() {
+    use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    for (index, code, phase) in [
+        (0, Some(0), AiCommandPhase::Completed),
+        (1, Some(7), AiCommandPhase::Failed),
+        (2, None, AiCommandPhase::Observed),
+    ] {
+        state.upsert_agent_step(
+            index,
+            AiAgentStepStatus::Running,
+            AiAgentStepKind::Command,
+            "Running",
+            "echo fixture",
+        );
+        state.record_agent_observation(
+            index,
+            &nyaterm_core::CommandObservation {
+                output: "line one\nline two".into(),
+                exit_code: code,
+                duration_ms: 20,
+            },
+            "summary".into(),
+        );
+        let step = state
+            .agent_steps()
+            .iter()
+            .find(|step| step.step_index == index)
+            .unwrap();
+        assert_eq!(AiCommandPhase::from_step(step), phase);
+        assert_eq!(step.command.as_deref(), Some("echo fixture"));
+        assert_eq!(step.observation.as_deref(), Some("line one\nline two"));
+        assert!(!phase.offers_approval() && !phase.offers_run());
+        assert!(phase.offers_reuse());
+    }
+}
+
+#[test]
+fn payload_categories_do_not_depend_on_english_titles() {
+    use crate::features::ai::presentation::AiAgentStepKind;
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    state.upsert_agent_step(
+        0,
+        AiAgentStepStatus::Completed,
+        AiAgentStepKind::Diagnostic,
+        "Final Answer shell running",
+        "diagnostic",
+    );
+    assert!(state.agent_steps()[0].thought.is_none());
+    assert!(state.agent_steps()[0].command.is_none());
+    assert_eq!(
+        state.agent_steps()[0].observation.as_deref(),
+        Some("diagnostic")
+    );
+}
+
+#[test]
+fn message_disclosure_choices_follow_their_conversation_scope() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    state.switch_scope("terminal:a");
+    state.toggle_message_thought("assistant-a".into());
+    state.toggle_command_details("agent-a".into());
+    state.switch_scope("terminal:b");
+    assert!(state.expanded_message_thoughts().is_empty());
+    assert!(state.expanded_command_details().is_empty());
+    state.toggle_message_thought("assistant-b".into());
+    state.switch_scope("terminal:a");
+    assert!(state.expanded_message_thoughts().contains("assistant-a"));
+    assert!(!state.expanded_message_thoughts().contains("assistant-b"));
+    state.start_new_chat();
+    assert!(state.expanded_message_thoughts().is_empty());
+    assert!(state.expanded_command_details().is_empty());
+}
+
+#[test]
+fn settled_agent_cards_cannot_be_approved_again_and_keep_their_identity() {
+    use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
+    state
+        .finish_chat_job(
+            launch.job_id,
+            launch.session_id,
+            Ok(AiChatJobOutput {
+                mode: AiMode::Agent,
+                text: String::new(),
+                reasoning: None,
+                command_cards: vec![presentation_command("agent-fixture")],
+                auto_execute_first: false,
+                approval_note: None,
+            }),
+        )
+        .unwrap();
+    assert!(state.current_agent_command_card("agent-fixture"));
+    for status in [
+        AiAgentStepStatus::Running,
+        AiAgentStepStatus::Completed,
+        AiAgentStepStatus::Failed,
+        AiAgentStepStatus::Rejected,
+        AiAgentStepStatus::Cancelled,
+    ] {
+        state.upsert_agent_step(
+            0,
+            status,
+            AiAgentStepKind::Command,
+            "Fixture",
+            "command preview",
+        );
+        assert!(!state.current_agent_command_card("agent-fixture"));
+        assert_eq!(
+            state.agent_steps()[0].command.as_deref(),
+            Some("echo fixture")
+        );
+        assert_eq!(
+            state.agent_steps()[0].command_card_id.as_deref(),
+            Some("agent-fixture")
+        );
+    }
+    state.cancel_chat_and_agent();
+    assert_eq!(
+        AiCommandPhase::from_step(&state.agent_steps()[0]),
+        AiCommandPhase::Cancelled
+    );
+}
+
+#[test]
+fn mismatched_background_card_does_not_clear_current_cancellation_or_update_output() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let launch = state.begin_chat_job();
+    let now = Instant::now();
+    let active = AiAgentLoopState {
+        command_card_id: Some("agent-current".into()),
+        ai_session_id: "session-a".into(),
+        terminal_session_id: "terminal-a".into(),
+        available_targets: Vec::new(),
+        default_target_session_id: None,
+        command: "echo fixture".into(),
+        marker_id: None,
+        background_job_id: Some(launch.job_id),
+        step_index: 0,
+        max_steps: 3,
+        output_start_len: 0,
+        started_at: now,
+        min_wait_until: now,
+        timeout_at: now,
+        last_seen_len: 0,
+        stable_since: now,
+    };
+    state.set_agent_loop(active.clone());
+    let mut foreign = active;
+    foreign.command_card_id = Some("agent-foreign".into());
+    assert!(matches!(
+        state.finish_agent_background(
+            launch.job_id,
+            foreign,
+            Ok(nyaterm_core::CommandObservation {
+                output: "foreign output".into(),
+                exit_code: Some(0),
+                duration_ms: 1,
+            }),
+            |_| String::new()
+        ),
+        super::AiAgentBackgroundEffect::MatchedStale
+    ));
+    assert!(state.chat.cancel.is_some());
+    assert_eq!(
+        state
+            .agent_loop_snapshot()
+            .unwrap()
+            .command_card_id
+            .as_deref(),
+        Some("agent-current")
+    );
+    assert!(state.agent_steps().is_empty());
 }

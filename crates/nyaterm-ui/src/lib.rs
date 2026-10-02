@@ -2,6 +2,7 @@
 
 mod app_menu_bar;
 mod button;
+pub mod chat;
 mod child_window;
 mod command;
 mod dialog;

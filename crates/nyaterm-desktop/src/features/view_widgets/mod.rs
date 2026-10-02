@@ -33,4 +33,4 @@ pub(in crate::features) use icons::{
 };
 
 mod markdown;
-pub(in crate::features) use markdown::markdown_content_view;
+pub(in crate::features) use markdown::{markdown_answer_view, markdown_content_view};

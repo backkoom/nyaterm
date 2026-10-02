@@ -3,41 +3,38 @@ use std::sync::Arc;
 use rust_i18n::t;
 
 use gpui::{
-    App, ClickEvent, ClipboardItem, Context, Entity, FontWeight, IntoElement, MouseButton,
-    MouseDownEvent, RenderImage, Rgba, ScrollHandle, SharedString, WeakEntity, Window, div, img,
-    prelude::*, px, rgb, rgba, svg,
+    ClipboardItem, Context, Entity, FontWeight, IntoElement, MouseButton, RenderImage, Rgba,
+    ScrollHandle, SharedString, WeakEntity, Window, div, img, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::{
-    AgentCommandExecutionMode, AiAction, AiAgentKind, AiCommandCard, AiMessage, AiMessageRole,
-    AiMode, AiModelConfigItem, AiProviderKind, AiReasoningEffort, AiSession, AiSessionScopeType,
+    AgentCommandExecutionMode, AiAction, AiAgentKind, AiCommandCard, AiMessage, AiMode,
+    AiModelConfigItem, AiProviderKind, AiReasoningEffort, AiSession, AiSessionScopeType,
     truncate_preview,
 };
+use nyaterm_ui::chat::{NyaMessageScroller, NyaMessageScrollerState};
 use nyaterm_ui::{
     NyaDropdownMenu, NyaInputShell, NyaMenuAnchor, NyaMenuItem, NyaScrollable, NyaSearchInput,
 };
 
 use crate::features::NyaTermApp;
-use crate::features::formatting::{
-    ai_agent_step_status_style, extract_think_content, group_ai_sessions_by_date, short_id,
-};
-use crate::features::shell::gpui_code_font_family;
+use crate::features::formatting::{group_ai_sessions_by_date, short_id};
 use crate::features::text_inputs::TextInputSetup;
-use crate::features::view_widgets::{
-    full_window_input_layer, markdown_content_view, tab_menu_separator,
-};
+use crate::features::view_widgets::{full_window_input_layer, tab_menu_separator};
 use crate::models::{
     AiDetectedErrorState, AiMessageMenuState, AiPreparedRequest, NavItem, SettingsTab,
 };
 use crate::theme::ThemePalette;
-use crate::widgets::{small_button, status_pill, svg_icon_button};
+use crate::widgets::{small_button, svg_icon_button};
 
-use crate::features::runtime_jobs::{AiAgentStepStatus, AiAgentStepView};
+use super::presentation::AiResponsePhase;
+use crate::features::runtime_jobs::AiAgentStepView;
 
+mod command_syntax;
 mod components;
-use components::{
-    AiCommandCardPresentation, ai_message_menu_button, ai_message_menu_position, ai_send_button,
-    ai_setup_step, ai_user_pre_wrap_text,
-};
+mod messages;
+mod transcript;
+use components::{ai_message_menu_button, ai_message_menu_position, ai_send_button, ai_setup_step};
+use transcript::{AiTranscriptRow, AiTranscriptUpdate};
 
 #[derive(Clone, Copy)]
 pub(in crate::features) struct AiPanelChrome {
@@ -71,7 +68,7 @@ pub(in crate::features) struct AiTargetSession {
     pub label: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(in crate::features) struct AiAgentStepPresentation {
     pub step: AiAgentStepView,
     pub thought_open: bool,
@@ -81,6 +78,7 @@ pub(in crate::features) struct AiAgentStepPresentation {
 #[derive(Clone)]
 pub(in crate::features) struct AiPanelSnapshot {
     pub chrome: AiPanelChrome,
+    pub ui_font_family: SharedString,
     pub enabled: bool,
     pub agent_mode: bool,
     pub running: bool,
@@ -107,6 +105,9 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub file_action_ready: bool,
     pub messages: Arc<[Arc<AiMessage>]>,
     pub streaming_assistant_id: Option<String>,
+    pub response_phase: AiResponsePhase,
+    pub expanded_message_thoughts: Arc<[String]>,
+    pub expanded_command_details: Arc<[String]>,
     pub command_cards: Arc<[AiCommandCard]>,
     pub agent_steps: Arc<[AiAgentStepPresentation]>,
     pub target_sessions: Arc<[AiTargetSession]>,
@@ -141,7 +142,10 @@ pub(in crate::features) struct AiHeaderPresentation {
 pub(in crate::features) struct AiPanel {
     app: WeakEntity<NyaTermApp>,
     snapshot: Option<AiPanelSnapshot>,
-    transcript_scroll: ScrollHandle,
+    transcript_scroll: Entity<NyaMessageScrollerState>,
+    transcript_rows: Arc<[AiTranscriptRow]>,
+    transcript_text_style: Option<(gpui::TextStyle, gpui::Pixels, String)>,
+    command_syntax: command_syntax::CommandSyntaxCache,
     mention_scroll: ScrollHandle,
     model_scroll: ScrollHandle,
     picker_reveal_pending: bool,
@@ -152,11 +156,17 @@ pub(in crate::features) struct AiPanel {
 }
 
 impl AiPanel {
-    pub(in crate::features) fn new(app: WeakEntity<NyaTermApp>) -> Self {
+    pub(in crate::features) fn new(app: WeakEntity<NyaTermApp>, cx: &mut Context<Self>) -> Self {
+        let transcript_scroll = cx.new(|cx| NyaMessageScrollerState::new(0, cx));
+        cx.observe(&transcript_scroll, |_, _, cx| cx.notify())
+            .detach();
         Self {
             app,
             snapshot: None,
-            transcript_scroll: ScrollHandle::new(),
+            transcript_scroll,
+            transcript_rows: Arc::from([]),
+            transcript_text_style: None,
+            command_syntax: command_syntax::CommandSyntaxCache::default(),
             mention_scroll: ScrollHandle::new(),
             model_scroll: ScrollHandle::new(),
             picker_reveal_pending: false,
@@ -172,16 +182,31 @@ impl AiPanel {
         snapshot: AiPanelSnapshot,
         cx: &mut Context<Self>,
     ) {
-        // Inspect the previous layout before the new transcript changes its extent.
-        // Manual scrolling (including scrollbar dragging) suspends following until
-        // the reader returns to within 60px of the bottom.
-        if self.snapshot.as_ref().is_none_or(|previous| {
-            previous.current_ai_session_id != snapshot.current_ai_session_id
-                || previous.owner_terminal_id != snapshot.owner_terminal_id
-                || ai_transcript_near_bottom(&self.transcript_scroll)
-        }) {
-            self.transcript_scroll.scroll_to_bottom();
-        }
+        self.refresh_command_syntax(&snapshot, cx);
+        let rows = AiTranscriptRow::project(&snapshot);
+        let update = AiTranscriptUpdate::between(
+            self.snapshot.as_ref(),
+            &snapshot,
+            &self.transcript_rows,
+            &rows,
+        );
+        self.transcript_scroll.update(cx, |state, cx| {
+            if update.reset {
+                state.reset(rows.len(), cx);
+            } else {
+                if let Some((range, count)) = update.splice {
+                    state.splice(range, count, cx);
+                }
+                if update.remeasure_all {
+                    state.remeasure(cx);
+                } else {
+                    for range in update.remeasure {
+                        state.remeasure_items(range, cx);
+                    }
+                }
+            }
+        });
+        self.transcript_rows = rows.into();
         if snapshot.mention_open
             && self.snapshot.as_ref().is_none_or(|previous| {
                 !previous.mention_open
@@ -268,8 +293,6 @@ impl AiPanel {
             return div().size_full().into_any_element();
         };
         let palette = snapshot.chrome.palette;
-        let command_rows = self.ai_command_card_list(&snapshot, cx);
-        let agent_step_rows = self.ai_agent_step_list(&snapshot, cx);
         let prompt_input = NyaInputShell::new("ai.chat.prompt", &snapshot.prompt_input)
             .multi_line()
             .height(px(64.))
@@ -286,6 +309,8 @@ impl AiPanel {
                 || snapshot.prompt_draft.trim().is_empty());
 
         div()
+            .tab_group()
+            .font_family(snapshot.ui_font_family.clone())
             .size_full()
             .flex()
             .flex_col()
@@ -343,20 +368,10 @@ impl AiPanel {
                             .id(SharedString::from("ai-transcript-scroll"))
                             .debug_selector(|| "ai-transcript-viewport".to_string())
                             .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.transcript_scroll)
-                            .px_3()
-                            .py_2()
                             .flex()
                             .flex_col()
-                            .child(self.ai_transcript_body(
-                                &snapshot,
-                                agent_step_rows,
-                                command_rows,
-                                cx,
-                            )),
-                    )
-                    .vertical_scrollbar(&self.transcript_scroll),
+                            .child(self.ai_transcript_body(&snapshot, cx)),
+                    ),
             )
             .child(
                 div()
@@ -1178,25 +1193,38 @@ impl AiPanel {
     fn ai_transcript_body(
         &self,
         snapshot: &AiPanelSnapshot,
-        agent_step_rows: impl IntoElement,
-        command_rows: impl IntoElement,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let mut body = div()
-            .min_w_0()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .when(snapshot.messages.is_empty(), |this| this.flex_1());
-        if snapshot.messages.is_empty() {
-            body = body.child(self.ai_empty_transcript(snapshot, cx));
-        } else {
-            for message in snapshot.messages.iter() {
-                body = body.child(self.ai_message_bubble(snapshot, message, cx));
-            }
+    ) -> gpui::AnyElement {
+        if self.transcript_rows.is_empty() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .px_3()
+                .py_2()
+                .child(self.ai_empty_transcript(snapshot, cx))
+                .into_any_element();
         }
-        body.child(agent_step_rows).child(command_rows)
+        let panel = cx.weak_entity();
+        let snapshot = snapshot.clone();
+        let rows = Arc::clone(&self.transcript_rows);
+        let mut row_style = gpui::StyleRefinement::default();
+        row_style.padding.bottom = Some(px(8.).into());
+        NyaMessageScroller::new(
+            "ai-transcript",
+            self.transcript_scroll.clone(),
+            move |index, _, cx| {
+                panel
+                    .update(cx, |panel, cx| {
+                        panel.ai_transcript_row(&snapshot, &rows[index], cx)
+                    })
+                    .unwrap_or_else(|_| div().into_any_element())
+            },
+        )
+        .size_full()
+        .with_row_style(row_style)
+        .with_jump_button_label(t!("ai.jumpToLatest"))
+        .into_any_element()
     }
 
     fn ai_empty_transcript(
@@ -1314,720 +1342,6 @@ impl AiPanel {
                     .text_size(px(12.))
                     .text_color(rgb(palette.text_muted))
                     .child(t!("ai.empty")),
-            )
-            .into_any_element()
-    }
-
-    fn ai_message_bubble(
-        &self,
-        snapshot: &AiPanelSnapshot,
-        message: &AiMessage,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let palette = snapshot.chrome.palette;
-        let is_user = matches!(message.role, AiMessageRole::User);
-        let streaming = snapshot
-            .streaming_assistant_id
-            .as_deref()
-            .is_some_and(|id| id == message.id);
-        let role_label = if is_user { "User" } else { "AI" };
-        let raw = if message.content.trim().is_empty() {
-            String::new()
-        } else {
-            message.content.clone()
-        };
-        let (visible, think_reasoning) = extract_think_content(&raw);
-        let mut reasoning = message
-            .reasoning_content
-            .as_ref()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        if reasoning.is_none() {
-            reasoning = think_reasoning;
-        }
-        let display = if visible.trim().is_empty() {
-            if streaming { String::new() } else { visible }
-        } else {
-            visible
-        };
-        let menu_text = if display.trim().is_empty() {
-            raw.clone()
-        } else {
-            display.clone()
-        };
-        let menu_message_id = message.id.clone();
-
-        let mut bubble = div()
-            .id(SharedString::from(format!("ai-msg-{}", message.id)))
-            .min_w_0()
-            .w_full()
-            .rounded_md()
-            .border_1()
-            .border_color(if is_user {
-                rgb(0x1f6feb)
-            } else {
-                rgb(palette.border)
-            })
-            .bg(if is_user {
-                rgb(palette.hover)
-            } else {
-                rgb(palette.bg)
-            })
-            .px_2()
-            .py_2()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |panel, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    let menu = AiMessageMenuState {
-                        message_id: menu_message_id.clone(),
-                        text: menu_text.clone(),
-                        x: event.position.x,
-                        y: event.position.y,
-                    };
-                    panel.with_app(cx, move |app, _| {
-                        app.ai.open_message_menu(menu);
-                    });
-                }),
-            )
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .font_weight(FontWeight(700.))
-                    .text_color(rgb(palette.text_muted))
-                    .child(role_label),
-            );
-
-        if let Some(reasoning) = reasoning {
-            bubble = bubble.child(
-                div()
-                    .min_w_0()
-                    .w_full()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(if streaming {
-                        rgb(0x1f6feb)
-                    } else {
-                        rgb(palette.border)
-                    })
-                    .bg(if streaming {
-                        rgb(palette.hover)
-                    } else {
-                        rgb(palette.bg)
-                    })
-                    .px_2()
-                    .py_2()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .font_weight(FontWeight(700.))
-                            .text_color(if streaming {
-                                rgb(palette.link)
-                            } else {
-                                rgb(palette.text_muted)
-                            })
-                            .child(if streaming {
-                                t!("ai.thinking")
-                            } else {
-                                t!("ai.thoughtComplete")
-                            }),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .w_full()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette.text_muted))
-                            .line_height(px(16.))
-                            .child(markdown_content_view(
-                                palette,
-                                &truncate_preview(&reasoning, 1200),
-                            )),
-                    ),
-            );
-        } else if streaming && display.trim().is_empty() {
-            bubble = bubble.child(
-                div()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(0x1f6feb))
-                    .bg(rgb(palette.hover))
-                    .px_2()
-                    .py_2()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette.link))
-                    .child(t!("ai.thinking")),
-            );
-        }
-
-        if !display.trim().is_empty() {
-            if is_user {
-                bubble = bubble.child(ai_user_pre_wrap_text(palette, &display));
-            } else {
-                bubble = bubble.child(markdown_content_view(
-                    palette,
-                    &truncate_preview(&display, 8000),
-                ));
-            }
-        }
-
-        for (card_index, card) in message.command_cards.iter().cloned().enumerate() {
-            bubble = bubble.child(self.ai_command_card_view_for_card(
-                palette,
-                format!("{}-{}", message.id, card_index),
-                card,
-                cx,
-            ));
-        }
-        bubble
-    }
-
-    fn ai_agent_step_list(
-        &self,
-        snapshot: &AiPanelSnapshot,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let palette = snapshot.chrome.palette;
-        let mut rows = div();
-        if snapshot.agent_mode || !snapshot.agent_steps.is_empty() {
-            rows = rows
-                .mt_2()
-                .border_t_1()
-                .border_color(rgb(palette.border))
-                .pt_2()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .font_weight(FontWeight(700.))
-                        .text_color(rgb(palette.text_muted))
-                        .child(t!("ai.agentSteps")),
-                );
-            if snapshot.agent_steps.is_empty() {
-                rows = rows.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(palette.text_dimmed))
-                        .child(t!("ai.agentNoSteps")),
-                );
-            } else {
-                for step in snapshot.agent_steps.iter().rev().take(16).rev() {
-                    rows = rows.child(self.ai_agent_step_card(palette, step.clone(), cx));
-                }
-            }
-        }
-        rows.into_any_element()
-    }
-
-    fn ai_agent_step_card(
-        &self,
-        palette: ThemePalette,
-        presentation: AiAgentStepPresentation,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let step = presentation.step;
-        let (label, fg, bg) = ai_agent_step_status_style(step.status);
-        let border = match step.status {
-            AiAgentStepStatus::Completed => rgb(palette.success),
-            AiAgentStepStatus::Failed
-            | AiAgentStepStatus::Rejected
-            | AiAgentStepStatus::Cancelled => rgb(palette.danger),
-            AiAgentStepStatus::Running | AiAgentStepStatus::Tool => rgb(palette.link),
-            AiAgentStepStatus::NeedsApproval => rgb(palette.warning),
-            AiAgentStepStatus::Planning => rgb(palette.text_muted),
-        };
-        let step_index = step.step_index;
-        let thought_open = presentation.thought_open;
-        let output_open = presentation.output_open;
-        let thought = step
-            .thought
-            .clone()
-            .filter(|value| !value.trim().is_empty());
-        let command = step
-            .command
-            .clone()
-            .or_else(|| {
-                if step.detail.trim().is_empty()
-                    || thought
-                        .as_ref()
-                        .is_some_and(|thought| thought == &step.detail)
-                {
-                    None
-                } else {
-                    Some(step.detail.clone())
-                }
-            })
-            .filter(|value| !value.trim().is_empty());
-        let observation = step
-            .observation
-            .clone()
-            .filter(|value| !value.trim().is_empty());
-        let thought_label = if thought.is_some() {
-            if thought_open {
-                "Hide thought"
-            } else {
-                "Show thought"
-            }
-        } else if matches!(
-            step.status,
-            AiAgentStepStatus::Completed | AiAgentStepStatus::Planning
-        ) {
-            "Step"
-        } else {
-            ""
-        };
-
-        let mut card = div()
-            .id(SharedString::from(format!("ai-agent-step-{step_index}")))
-            .flex()
-            .flex_col()
-            .gap_1()
-            .pb_2()
-            .child(
-                div()
-                    .id(SharedString::from(format!(
-                        "ai-agent-step-thought-toggle-{step_index}"
-                    )))
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |panel, _, _, cx| {
-                        panel.with_app(cx, move |app, cx| {
-                            app.toggle_ai_agent_thought_expanded(step_index, cx);
-                        });
-                    }))
-                    .child(
-                        svg()
-                            .size(px(13.))
-                            .flex_none()
-                            .path(if thought_open {
-                                "icons/chevron-down.svg"
-                            } else {
-                                "icons/fe/forward.svg"
-                            })
-                            .text_color(rgb(palette.text_muted)),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight(700.))
-                            .text_color(rgb(palette.text))
-                            .child(format!("#{}", step.step_index.saturating_add(1))),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette.text_muted))
-                            .overflow_hidden()
-                            .child(if thought_label.is_empty() {
-                                truncate_preview(&step.title, 36)
-                            } else {
-                                format!("{} · {}", thought_label, truncate_preview(&step.title, 28))
-                            }),
-                    )
-                    .child(status_pill(label, rgb(fg), rgb(bg))),
-            );
-
-        if thought_open && let Some(thought_text) = thought.clone() {
-            card = card.child(
-                div()
-                    .ml_4()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette.text_muted))
-                    .line_height(px(16.))
-                    .child(markdown_content_view(
-                        palette,
-                        &truncate_preview(&thought_text, 800),
-                    )),
-            );
-        }
-
-        if let Some(command_text) = command {
-            let mut shell = div()
-                .ml_1()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(palette.border))
-                .border_l_2()
-                .border_color(border)
-                .bg(rgb(palette.bg))
-                .overflow_hidden()
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .border_b_1()
-                        .border_color(rgb(palette.surface_elevated))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_size(px(10.))
-                                .font_weight(FontWeight(700.))
-                                .text_color(rgb(palette.text_muted))
-                                .child("SHELL"),
-                        )
-                        .child(
-                            div()
-                                .ml_auto()
-                                .text_size(px(10.))
-                                .text_color(rgb(palette.text_dimmed))
-                                .child(truncate_preview(&step.title, 24)),
-                        ),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .font_family(gpui_code_font_family())
-                        .text_size(px(11.))
-                        .text_color(rgb(palette.text))
-                        .line_height(px(16.))
-                        .child(truncate_preview(&command_text, 600)),
-                );
-
-            if let Some(obs) = observation.clone() {
-                shell = shell.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "ai-agent-step-output-toggle-{step_index}"
-                        )))
-                        .px_2()
-                        .py_1()
-                        .border_t_1()
-                        .border_color(rgb(palette.surface_elevated))
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .cursor_pointer()
-                        .hover(move |this| this.bg(rgb(palette.surface)))
-                        .on_click(cx.listener(move |panel, _, _, cx| {
-                            panel.with_app(cx, move |app, cx| {
-                                app.toggle_ai_agent_output_expanded(step_index, cx);
-                            });
-                        }))
-                        .child(
-                            svg()
-                                .size(px(13.))
-                                .flex_none()
-                                .path(if output_open {
-                                    "icons/chevron-down.svg"
-                                } else {
-                                    "icons/fe/forward.svg"
-                                })
-                                .text_color(rgb(palette.text_muted)),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(10.))
-                                .text_color(rgb(palette.text_muted))
-                                .child(if output_open {
-                                    "Hide output"
-                                } else {
-                                    "Show output"
-                                }),
-                        ),
-                );
-                if output_open {
-                    shell = shell.child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .max_h(px(120.))
-                            .overflow_hidden()
-                            .font_family(gpui_code_font_family())
-                            .text_size(px(10.))
-                            .text_color(rgb(palette.text_muted))
-                            .line_height(px(14.))
-                            .child(truncate_preview(&obs, 1200)),
-                    );
-                }
-            } else if matches!(
-                step.status,
-                AiAgentStepStatus::Running | AiAgentStepStatus::Tool
-            ) {
-                shell = shell.child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .border_t_1()
-                        .border_color(rgb(palette.surface_elevated))
-                        .text_size(px(10.))
-                        .text_color(rgb(palette.link))
-                        .child(t!("ai.agentExecuting")),
-                );
-            }
-            card = card.child(shell);
-        } else if let Some(obs) = observation {
-            card = card.child(
-                div()
-                    .ml_4()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .bg(rgb(palette.bg))
-                    .px_2()
-                    .py_1()
-                    .font_family(gpui_code_font_family())
-                    .text_size(px(10.))
-                    .text_color(rgb(palette.text_muted))
-                    .child(truncate_preview(&obs, 400)),
-            );
-        }
-
-        card
-    }
-
-    fn ai_command_card_list(
-        &self,
-        snapshot: &AiPanelSnapshot,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let mut rows = div().mt_2().flex().flex_col().gap_2();
-        for (index, card) in snapshot.command_cards.iter().take(8).cloned().enumerate() {
-            rows = rows.child(self.ai_command_card_view(snapshot.chrome.palette, index, card, cx));
-        }
-        rows.into_any_element()
-    }
-
-    fn ai_command_card_view(
-        &self,
-        palette: ThemePalette,
-        index: usize,
-        card: AiCommandCard,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        self.ai_command_card_shell(
-            AiCommandCardPresentation::new(palette, format!("idx-{index}"), card),
-            cx.listener(move |panel, _, _, cx| {
-                panel.with_app(cx, move |app, cx| {
-                    app.insert_ai_command_card(index, cx);
-                });
-            }),
-            cx.listener(move |panel, _, _, cx| {
-                panel.with_app(cx, move |app, cx| {
-                    app.save_ai_command_card(index, cx);
-                });
-            }),
-            cx.listener(move |panel, _, _, cx| {
-                panel.with_app(cx, move |app, cx| {
-                    app.run_ai_command_card(index, cx);
-                });
-            }),
-            cx.listener(move |panel, _, _, cx| {
-                panel.with_app(cx, move |app, cx| {
-                    app.reject_ai_agent_command_card(index, cx)
-                });
-            }),
-            cx,
-        )
-    }
-
-    fn ai_command_card_view_for_card(
-        &self,
-        palette: ThemePalette,
-        key: String,
-        card: AiCommandCard,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let card_id = card.id.clone();
-        let insert_id = card_id.clone();
-        let save_id = card_id.clone();
-        let run_id = card_id;
-        let reject_id = run_id.clone();
-        self.ai_command_card_shell(
-            AiCommandCardPresentation::new(palette, key, card),
-            cx.listener(move |panel, _, _, cx| {
-                let insert_id = insert_id.clone();
-                panel.with_app(cx, move |app, cx| {
-                    app.insert_ai_command_card_by_id(insert_id, cx);
-                });
-            }),
-            cx.listener(move |panel, _, _, cx| {
-                let save_id = save_id.clone();
-                panel.with_app(cx, move |app, cx| {
-                    app.save_ai_command_card_by_id(save_id, cx);
-                });
-            }),
-            cx.listener(move |panel, _, _, cx| {
-                let run_id = run_id.clone();
-                panel.with_app(cx, move |app, cx| {
-                    app.run_ai_command_card_by_id(run_id, cx);
-                });
-            }),
-            cx.listener(move |panel, _, _, cx| {
-                let reject_id = reject_id.clone();
-                panel.with_app(cx, move |app, cx| {
-                    app.reject_ai_agent_command_card_by_id(reject_id, cx)
-                });
-            }),
-            cx,
-        )
-    }
-
-    fn ai_command_card_shell(
-        &self,
-        presentation: AiCommandCardPresentation,
-        on_insert: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-        on_save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-        on_run: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-        on_reject: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let AiCommandCardPresentation {
-            palette,
-            key,
-            risk,
-            title,
-            command,
-            explanation,
-            risk_reason,
-            agent_command,
-            expected,
-            rollback,
-        } = presentation;
-        let command_for_copy = command.clone();
-        div()
-            .id(SharedString::from(format!("ai-command-card-{key}")))
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(palette.border))
-            .bg(rgb(palette.bg))
-            .p_2()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight(700.))
-                            .text_color(rgb(palette.text))
-                            .overflow_hidden()
-                            .child(truncate_preview(&title, 48)),
-                    )
-                    .child(status_pill(risk, rgb(palette.warning), rgb(palette.hover))),
-            )
-            .child(
-                div()
-                    .id(SharedString::from(format!("ai-command-body-{key}")))
-                    .max_h(px(128.))
-                    .overflow_hidden()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .bg(rgb(palette.surface))
-                    .px_2()
-                    .py_1()
-                    .font_family(gpui_code_font_family())
-                    .text_size(px(11.))
-                    .text_color(rgb(palette.text))
-                    .line_height(px(16.))
-                    .child(truncate_preview(&command, 1600)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette.text_muted))
-                            .line_height(px(16.))
-                            .child(truncate_preview(&explanation, 320)),
-                    )
-                    .when(!risk_reason.trim().is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_size(px(10.))
-                                .text_color(rgb(palette.warning))
-                                .child(truncate_preview(&risk_reason, 320)),
-                        )
-                    })
-                    .when(!expected.trim().is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette.text_dimmed))
-                                .line_height(px(16.))
-                                .child(truncate_preview(&expected, 220)),
-                        )
-                    })
-                    .when(!rollback.trim().is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette.text_dimmed))
-                                .line_height(px(16.))
-                                .child(format!("Rollback: {}", truncate_preview(&rollback, 160))),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_1()
-                    .child(small_button(
-                        palette,
-                        format!("ai-command-insert-{key}"),
-                        "Insert",
-                        on_insert,
-                    ))
-                    .child(small_button(
-                        palette,
-                        format!("ai-command-copy-{key}"),
-                        "Copy",
-                        cx.listener(move |panel, _, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                command_for_copy.clone(),
-                            ));
-                            panel.with_app(cx, |app, _| {
-                                app.ai.set_panel_status("command copied");
-                            });
-                        }),
-                    ))
-                    .child(small_button(
-                        palette,
-                        format!("ai-command-save-{key}"),
-                        "Save",
-                        on_save,
-                    ))
-                    .child(small_button(
-                        palette,
-                        format!("ai-command-run-{key}"),
-                        "Run",
-                        on_run,
-                    ))
-                    .when(agent_command, |this| {
-                        this.child(small_button(
-                            palette,
-                            format!("ai-command-reject-{key}"),
-                            "Reject",
-                            on_reject,
-                        ))
-                    }),
             )
             .into_any_element()
     }
@@ -2620,7 +1934,19 @@ impl AiPanel {
 }
 
 impl gpui::Render for AiPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The virtual list detects width changes itself. Font metrics and
+        // translated labels also invalidate heights of off-screen rows.
+        let text_style = (
+            window.text_style(),
+            window.rem_size(),
+            rust_i18n::locale().to_string(),
+        );
+        if self.transcript_text_style.as_ref() != Some(&text_style) {
+            self.transcript_text_style = Some(text_style);
+            self.transcript_scroll
+                .update(cx, |state, cx| state.remeasure(cx));
+        }
         #[cfg(test)]
         {
             self.paint_count += 1;
@@ -2996,6 +2322,11 @@ impl NyaTermApp {
         let (viewport_width, viewport_height) = self.shell.viewport_size();
 
         AiPanelSnapshot {
+            ui_font_family: if self.settings.summary().ui_font_family.trim().is_empty() {
+                crate::features::shell::gpui_ui_font_fallback().into()
+            } else {
+                self.gpui_ui_font().family.into()
+            },
             chrome: AiPanelChrome {
                 palette,
                 transparent_surface: self.shell_transparent_color(palette.surface),
@@ -3051,6 +2382,21 @@ impl NyaTermApp {
                 .is_some_and(|request| request.action == AiAction::CustomFileAction),
             messages: self.ai.chat_snapshot_messages(),
             streaming_assistant_id: self.ai.chat_streaming_assistant_id().map(str::to_string),
+            response_phase: self.ai.response_phase(),
+            expanded_message_thoughts: self
+                .ai
+                .expanded_message_thoughts()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+            expanded_command_details: self
+                .ai
+                .expanded_command_details()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
             command_cards: self.ai.chat_command_cards().to_vec().into(),
             agent_steps: self
                 .ai
@@ -3148,10 +2494,6 @@ fn ai_agent_status_badge(snapshot: &AiPanelSnapshot) -> impl IntoElement {
         )
 }
 
-fn ai_transcript_near_bottom(handle: &ScrollHandle) -> bool {
-    handle.max_offset().y + handle.offset().y <= px(60.)
-}
-
 fn ai_menu_heading(palette: ThemePalette, label: impl Into<SharedString>) -> impl IntoElement {
     div()
         .h(px(24.))
@@ -3226,14 +2568,16 @@ mod tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use super::{AiMentionCandidate, AiPanel, AiPanelSnapshot};
+    use super::{AiAgentStepPresentation, AiMentionCandidate, AiPanel, AiPanelSnapshot};
+    use crate::features::ai::panel::transcript::{AiTranscriptRow, AiTranscriptUpdate};
+    use crate::features::runtime_jobs::{AiAgentStepStatus, AiAgentStepView};
     use gpui::{
         AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, VisualTestContext, div, point, px,
+        TestAppContext, VisualTestContext, div, px,
     };
     use nyaterm_core::{
-        AgentCommandExecutionMode, AiMessage, AiMessageRole, AiMode, AiModelConfigItem,
-        AiModelSource, AiProviderKind, AiSettings, AppRuntime, RuntimeMode,
+        AgentCommandExecutionMode, AiCommandCard, AiMessage, AiMessageRole, AiMode,
+        AiModelConfigItem, AiModelSource, AiProviderKind, AiSettings, AppRuntime, RuntimeMode,
     };
     use nyaterm_ui::NyaInputEvent;
 
@@ -3850,20 +3194,481 @@ mod tests {
             snapshot.messages = (0..24).map(transcript_message).collect::<Vec<_>>().into();
         });
         let scroll = vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).transcript_scroll.clone());
-        assert!(scroll.max_offset().y > px(200.));
-        assert_eq!(scroll.offset().y, -scroll.max_offset().y);
-        scroll.set_offset(point(px(0.), px(-100.)));
+        assert!(vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+        assert!(vcx.debug_bounds("ai-message-message-23").is_some());
+        assert!(vcx.debug_bounds("ai-message-message-0").is_none());
+        vcx.update(|_, cx| scroll.update(cx, |state, cx| state.scroll_to_item(4, cx)));
+        compact_draw(&app, vcx);
+        let anchor = vcx.debug_bounds("ai-message-message-4").unwrap().top();
         edit_panel_snapshot(&app, vcx, |snapshot| {
             snapshot.messages = (0..25).map(transcript_message).collect::<Vec<_>>().into();
         });
-        assert_eq!(scroll.offset().y, px(-100.));
-        scroll.scroll_to_bottom();
+        assert!(!vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+        assert_eq!(
+            vcx.debug_bounds("ai-message-message-4").unwrap().top(),
+            anchor
+        );
+        vcx.update(|_, cx| scroll.update(cx, |state, cx| state.scroll_to_end(cx)));
         compact_draw(&app, vcx);
-        let previous_extent = scroll.max_offset().y;
         edit_panel_snapshot(&app, vcx, |snapshot| {
             snapshot.messages = (0..26).map(transcript_message).collect::<Vec<_>>().into();
         });
-        assert!(scroll.max_offset().y > previous_extent);
-        assert_eq!(scroll.offset().y, -scroll.max_offset().y);
+        assert!(vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+        assert!(vcx.debug_bounds("ai-message-message-25").is_some());
+    }
+
+    #[test]
+    fn prepending_history_preserves_the_visible_message_anchor() {
+        let root = TestConfigDir::new("nyaterm-ai-prepend");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.messages = (10..34).map(transcript_message).collect::<Vec<_>>().into();
+        });
+        let scroll = vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).transcript_scroll.clone());
+        vcx.update(|_, cx| scroll.update(cx, |state, cx| state.scroll_to_item(4, cx)));
+        compact_draw(&app, vcx);
+        let anchor = vcx.debug_bounds("ai-message-message-14").unwrap().top();
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.messages = (0..34).map(transcript_message).collect::<Vec<_>>().into();
+        });
+        assert_eq!(
+            vcx.debug_bounds("ai-message-message-14").unwrap().top(),
+            anchor
+        );
+        assert!(!vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+    }
+
+    #[test]
+    fn streaming_remeasures_the_growing_row_and_preserves_a_readers_anchor() {
+        let root = TestConfigDir::new("nyaterm-ai-stream-measure");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            let mut messages = (0..24).map(transcript_message).collect::<Vec<_>>();
+            Arc::make_mut(&mut messages[23]).role = AiMessageRole::Assistant;
+            snapshot.messages = messages.into();
+            snapshot.streaming_assistant_id = Some("message-23".to_string());
+        });
+        let scroll = vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).transcript_scroll.clone());
+        let previous_height = vcx
+            .debug_bounds("ai-message-message-23")
+            .unwrap()
+            .size
+            .height;
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            let mut messages = snapshot.messages.to_vec();
+            Arc::make_mut(&mut messages[23])
+                .content
+                .push_str(&"streamed line\n".repeat(6));
+            snapshot.messages = messages.into();
+        });
+        assert!(
+            vcx.debug_bounds("ai-message-message-23")
+                .unwrap()
+                .size
+                .height
+                > previous_height
+        );
+        assert!(vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+        vcx.update(|_, cx| scroll.update(cx, |state, cx| state.scroll_to_item(4, cx)));
+        compact_draw(&app, vcx);
+        let anchor = vcx.debug_bounds("ai-message-message-4").unwrap().top();
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            let mut messages = snapshot.messages.to_vec();
+            Arc::make_mut(&mut messages[23])
+                .content
+                .push_str(&"more streamed text\n".repeat(12));
+            snapshot.messages = messages.into();
+        });
+        assert_eq!(
+            vcx.debug_bounds("ai-message-message-4").unwrap().top(),
+            anchor
+        );
+        assert!(!vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+    }
+
+    #[test]
+    fn switching_conversations_resumes_tail_following_even_with_the_same_message_ids() {
+        let root = TestConfigDir::new("nyaterm-ai-scroll-session");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.messages = (0..24).map(transcript_message).collect::<Vec<_>>().into();
+        });
+        let scroll = vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).transcript_scroll.clone());
+        vcx.update(|_, cx| scroll.update(cx, |state, cx| state.scroll_to_item(4, cx)));
+        compact_draw(&app, vcx);
+        assert!(!vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.current_ai_session_id = "another-conversation".to_string();
+        });
+        assert!(vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+        assert!(vcx.debug_bounds("ai-message-message-23").is_some());
+    }
+
+    #[test]
+    fn mixed_transcript_preserves_card_indices_and_remeasures_changed_agent_details() {
+        let root = TestConfigDir::new("nyaterm-ai-transcript-projection");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let mut previous =
+            vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        previous.messages = (0..2).map(transcript_message).collect::<Vec<_>>().into();
+        previous.agent_steps = (0..20)
+            .map(|step_index| AiAgentStepPresentation {
+                step: AiAgentStepView {
+                    kind: crate::features::ai::presentation::AiAgentStepKind::Command,
+                    source_message_id: None,
+                    command_card_id: None,
+                    exit_code: None,
+                    step_index,
+                    status: AiAgentStepStatus::Completed,
+                    title: "Fixture step".to_string(),
+                    detail: String::new(),
+                    thought: None,
+                    command: None,
+                    observation: Some("Fixture output".to_string()),
+                },
+                thought_open: false,
+                output_open: false,
+            })
+            .collect::<Vec<_>>()
+            .into();
+        previous.command_cards = (0..10)
+            .map(|index| AiCommandCard {
+                id: format!("card-{index}"),
+                title: "Fixture command".to_string(),
+                command: "echo fixture".to_string(),
+                explanation: String::new(),
+                risk_level: None,
+                risk_reason: None,
+                expected_effect: String::new(),
+                rollback: None,
+                category: None,
+                references: Vec::new(),
+                target_terminal_session_id: None,
+                target: None,
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let old_rows = AiTranscriptRow::project(&previous);
+        assert_eq!(old_rows.len(), 27);
+        assert!(matches!(
+            old_rows[3],
+            AiTranscriptRow::AgentStep {
+                index: 4,
+                step_index: 4
+            }
+        ));
+        assert!(matches!(
+            old_rows[26],
+            AiTranscriptRow::Command { index: 7, .. }
+        ));
+
+        let mut next = previous.clone();
+        next.messages = (0..3).map(transcript_message).collect::<Vec<_>>().into();
+        let mut steps = next.agent_steps.to_vec();
+        steps[19].output_open = true;
+        next.agent_steps = steps.into();
+        let rows = AiTranscriptRow::project(&next);
+        let update = AiTranscriptUpdate::between(Some(&previous), &next, &old_rows, &rows);
+        assert_eq!(
+            update.splice,
+            Some((2..2, 1)),
+            "insert before the retained agent and command rows"
+        );
+        assert_eq!(
+            update.remeasure,
+            vec![19..20],
+            "expanded output changes only its own row height"
+        );
+        assert!(!update.reset);
+    }
+
+    fn chat_card(id: &str) -> AiCommandCard {
+        AiCommandCard {
+            id: id.into(),
+            title: "Inspect resources".into(),
+            command: "echo fixture".into(),
+            explanation: String::new(),
+            risk_level: Some(nyaterm_core::RiskLevel::Low),
+            risk_reason: Some("Read only".into()),
+            expected_effect: "Show resources".into(),
+            rollback: None,
+            category: None,
+            references: Vec::new(),
+            target_terminal_session_id: Some("terminal-a".into()),
+            target: None,
+        }
+    }
+
+    fn linked_command_step(status: AiAgentStepStatus) -> AiAgentStepPresentation {
+        AiAgentStepPresentation {
+            step: AiAgentStepView {
+                step_index: 0,
+                status,
+                kind: crate::features::ai::presentation::AiAgentStepKind::Command,
+                source_message_id: Some("message-0".into()),
+                command_card_id: Some("agent-fixture".into()),
+                exit_code: None,
+                title: "Inspect resources".into(),
+                detail: String::new(),
+                thought: None,
+                command: Some("echo fixture".into()),
+                observation: None,
+            },
+            thought_open: false,
+            output_open: false,
+        }
+    }
+
+    #[test]
+    fn transcript_deduplicates_ids_and_preserves_unrelated_commands_and_old_text() {
+        use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
+        let root = TestConfigDir::new("nyaterm-ai-card-dedup");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let mut snapshot =
+            vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        let mut message = transcript_message(0);
+        let original = "Agent proposed `echo fixture`; legacy note";
+        Arc::make_mut(&mut message).content = original.into();
+        Arc::make_mut(&mut message).command_cards =
+            vec![chat_card("agent-fixture"), chat_card("agent-fixture")];
+        snapshot.messages = vec![message].into();
+        snapshot.command_cards = vec![
+            chat_card("agent-fixture"),
+            chat_card("different-id"),
+            chat_card("different-id"),
+        ]
+        .into();
+        snapshot.agent_steps = vec![linked_command_step(AiAgentStepStatus::Running)].into();
+        let rows = AiTranscriptRow::project(&snapshot);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            matches!(&rows[1], AiTranscriptRow::Command { id, index: 1 } if id == "different-id")
+        );
+        assert_eq!(snapshot.card_owner("agent-fixture"), Some("message-0"));
+        assert_eq!(snapshot.messages[0].content, original);
+        assert_eq!(
+            snapshot.command_phase(&chat_card("agent-fixture")),
+            AiCommandPhase::Running
+        );
+        snapshot.agent_steps = Vec::new().into();
+        assert_eq!(
+            snapshot.command_phase(&chat_card("agent-fixture")),
+            AiCommandPhase::HistoryUnknown
+        );
+        let mut final_step = linked_command_step(AiAgentStepStatus::Completed);
+        final_step.step.kind = AiAgentStepKind::FinalAnswer;
+        final_step.step.command_card_id = None;
+        snapshot.agent_steps = vec![final_step.clone()].into();
+        assert_eq!(AiTranscriptRow::project(&snapshot).len(), 2);
+        final_step.step.source_message_id = Some("unrelated-message".into());
+        snapshot.agent_steps = vec![final_step].into();
+        assert_eq!(
+            AiTranscriptRow::project(&snapshot).len(),
+            4,
+            "unrelated steps must remain visible"
+        );
+    }
+
+    #[test]
+    fn linked_execution_changes_remeasure_only_the_owning_message() {
+        let root = TestConfigDir::new("nyaterm-ai-linked-height");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let mut previous =
+            vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        let mut messages = (0..3).map(transcript_message).collect::<Vec<_>>();
+        Arc::make_mut(&mut messages[0]).command_cards = vec![chat_card("agent-fixture")];
+        previous.messages = messages.into();
+        previous.agent_steps = vec![linked_command_step(AiAgentStepStatus::Running)].into();
+        let mut next = previous.clone();
+        let mut steps = next.agent_steps.to_vec();
+        steps[0].step.status = AiAgentStepStatus::Completed;
+        steps[0].step.observation = Some("resource output".into());
+        steps[0].output_open = true;
+        next.agent_steps = steps.into();
+        let update = AiTranscriptUpdate::between(
+            Some(&previous),
+            &next,
+            &AiTranscriptRow::project(&previous),
+            &AiTranscriptRow::project(&next),
+        );
+        assert_eq!(update.remeasure, vec![0..1]);
+        assert!(update.splice.is_none() && !update.remeasure_all && !update.reset);
+    }
+
+    #[test]
+    fn command_buttons_and_running_animation_match_execution_phase_in_a_narrow_panel() {
+        use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
+        let root = TestConfigDir::new("nyaterm-ai-command-controls");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        for status in [
+            AiAgentStepStatus::NeedsApproval,
+            AiAgentStepStatus::Running,
+            AiAgentStepStatus::Completed,
+            AiAgentStepStatus::Failed,
+            AiAgentStepStatus::Rejected,
+            AiAgentStepStatus::Cancelled,
+        ] {
+            let mut step = linked_command_step(status);
+            if status == AiAgentStepStatus::Completed {
+                step.step.kind = AiAgentStepKind::Observation;
+                step.step.exit_code = Some(0);
+            }
+            let phase = AiCommandPhase::from_step(&step.step);
+            edit_panel_snapshot(&app, vcx, |snapshot| {
+                let mut message = transcript_message(0);
+                Arc::make_mut(&mut message).command_cards = vec![chat_card("agent-fixture")];
+                snapshot.messages = vec![message].into();
+                snapshot.command_cards = vec![chat_card("agent-fixture")].into();
+                snapshot.agent_steps = vec![step].into();
+            });
+            assert_eq!(
+                vcx.debug_bounds("ai-command-run-agent-fixture").is_some(),
+                phase.offers_approval()
+            );
+            assert_eq!(
+                vcx.debug_bounds("ai-command-reject-agent-fixture")
+                    .is_some(),
+                phase.offers_approval()
+            );
+            assert_eq!(
+                vcx.debug_bounds("ai-command-insert-agent-fixture")
+                    .is_some(),
+                phase.offers_reuse()
+            );
+            assert_eq!(
+                vcx.debug_bounds("ai-command-save-agent-fixture").is_some(),
+                phase.offers_reuse()
+            );
+            assert!(vcx.debug_bounds("ai-command-copy-agent-fixture").is_some());
+            assert_eq!(
+                vcx.debug_bounds("ai-running-agent-fixture").is_some(),
+                phase == AiCommandPhase::Running
+            );
+            let card = vcx.debug_bounds("ai-command-agent-fixture").unwrap();
+            let viewport = vcx.debug_bounds("ai-transcript-viewport").unwrap();
+            assert!(card.left() >= viewport.left() && card.right() <= viewport.right());
+        }
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.agent_steps = Vec::new().into()
+        });
+        assert!(vcx.debug_bounds("ai-command-run-agent-fixture").is_none());
+        assert!(
+            vcx.debug_bounds("ai-command-reject-agent-fixture")
+                .is_none()
+        );
+        assert!(
+            vcx.debug_bounds("ai-command-insert-agent-fixture")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn reasoning_disclosure_accepts_keyboard_and_persists_when_body_text_starts() {
+        let root = TestConfigDir::new("nyaterm-ai-thought-keyboard");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let (job, id) = vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let launch = app
+                    .ai
+                    .begin_chat_request("inspect".into(), AiMode::Ask, None);
+                app.ai
+                    .apply_chat_delta(launch.job_id, "", Some("A useful thought"));
+                let id = app.ai.chat_streaming_assistant_id().unwrap().to_string();
+                app.flush_ai_panel_snapshot(cx);
+                (launch.job_id, id)
+            })
+        });
+        compact_draw(&app, vcx);
+        assert!(vcx.update(|_, cx| app.read(cx).ai.expanded_message_thoughts().is_empty()));
+        // The first focusable element in this transcript is its reasoning disclosure.
+        vcx.update(|window, cx| {
+            window.blur(cx);
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+        });
+        let enter = gpui::Keystroke::parse("enter").unwrap();
+        vcx.simulate_event(gpui::KeyDownEvent {
+            keystroke: enter.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        vcx.simulate_event(gpui::KeyUpEvent { keystroke: enter });
+        compact_draw(&app, vcx);
+        assert!(vcx.update(|_, cx| app.read(cx).ai.expanded_message_thoughts().contains(&id)));
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.ai.apply_chat_delta(job, "Answer", None);
+                app.flush_ai_panel_snapshot(cx);
+            })
+        });
+        compact_draw(&app, vcx);
+        assert!(vcx.update(|_, cx| app.read(cx).ai.expanded_message_thoughts().contains(&id)));
+        let space = gpui::Keystroke::parse("space").unwrap();
+        vcx.simulate_event(gpui::KeyDownEvent {
+            keystroke: space.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        vcx.simulate_event(gpui::KeyUpEvent { keystroke: space });
+        compact_draw(&app, vcx);
+        assert!(!vcx.update(|_, cx| app.read(cx).ai.expanded_message_thoughts().contains(&id)));
+    }
+
+    #[test]
+    fn long_commands_and_collapsed_output_fit_light_and_dark_panel_layouts() {
+        let root = TestConfigDir::new("nyaterm-ai-command-themes");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        for theme in ["github-dark", "solarized-light"] {
+            let palette = nyaterm_ui::theme_palette(theme);
+            vcx.update(|_, cx| {
+                nyaterm_ui::apply_component_theme(palette, gpui::font("Arial"), px(12.), cx)
+            });
+            edit_panel_snapshot(&app, vcx, |snapshot| {
+                let mut card = chat_card("agent-fixture");
+                card.command = "printf '%s' ".repeat(32);
+                let mut message = transcript_message(0);
+                Arc::make_mut(&mut message).command_cards = vec![card];
+                snapshot.messages = vec![message].into();
+                snapshot.chrome.palette = palette;
+                let mut step = linked_command_step(AiAgentStepStatus::Completed);
+                step.step.kind = crate::features::ai::presentation::AiAgentStepKind::Observation;
+                step.step.exit_code = Some(0);
+                step.step.observation = Some("resource output\n".repeat(400));
+                snapshot.agent_steps = vec![step].into();
+            });
+            let command = vcx.debug_bounds("ai-command-body-agent-fixture").unwrap();
+            let viewport = vcx.debug_bounds("ai-transcript-viewport").unwrap();
+            assert!(command.left() >= viewport.left() && command.right() <= viewport.right());
+            assert!(command.size.height > px(18.), "long command should wrap");
+            assert!(
+                vcx.debug_bounds("ai-command-output-agent-fixture")
+                    .is_some()
+            );
+            for selector in [
+                "ai-command-output-agent-fixture-content",
+                "ai-command-details-agent-fixture-content",
+            ] {
+                let content = vcx.debug_bounds(selector).unwrap();
+                let card = vcx.debug_bounds("ai-command-agent-fixture").unwrap();
+                assert!(
+                    content.left() - card.left() < px(16.),
+                    "disclosures must align with the card's left padding"
+                );
+                assert!(
+                    content.size.width < card.size.width * 0.75,
+                    "disclosure buttons must keep their content width"
+                );
+            }
+            assert!(vcx.debug_bounds("ai-command-copy-agent-fixture").is_some());
+        }
     }
 }

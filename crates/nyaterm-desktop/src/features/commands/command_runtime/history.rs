@@ -2,17 +2,10 @@ use futures::StreamExt as _;
 use gpui::Context;
 use nyaterm_core::{AiCommandCard, truncate_preview};
 
+use crate::features::ai::presentation::AiAgentStepKind;
 use crate::features::{NyaTermApp, ai::is_agent_command_card, runtime_jobs::AiAgentStepStatus};
 
 impl NyaTermApp {
-    pub(in crate::features) fn insert_ai_command_card(
-        &mut self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_ai_command_card(index, false, cx);
-    }
-
     pub(in crate::features) fn run_ai_command_card(
         &mut self,
         index: usize,
@@ -183,7 +176,7 @@ impl NyaTermApp {
             return;
         }
         if should_continue_agent && self.ai.settings_config().agent_background_execution_enabled {
-            match self.begin_ai_agent_background_execution(&card.command, &target_session_id, cx) {
+            match self.begin_ai_agent_background_execution(&card, &target_session_id, cx) {
                 Ok(()) => {
                     self.record_ai_command_card_audit(&card, true, false, cx);
                     self.defer_ai_panel_snapshot_flush(cx);
@@ -194,6 +187,7 @@ impl NyaTermApp {
                     self.upsert_ai_agent_step(
                         step_index,
                         AiAgentStepStatus::Failed,
+                        AiAgentStepKind::Diagnostic,
                         "Failed",
                         self.ai.panel_status().to_string(),
                     );
@@ -206,7 +200,7 @@ impl NyaTermApp {
             command.push('\r');
         }
         let input_bytes = if should_continue_agent {
-            match self.begin_ai_agent_observation(&card.command, &target_session_id, cx) {
+            match self.begin_ai_agent_observation(&card, &target_session_id, cx) {
                 Ok(Some(wrapped_command)) => wrapped_command.into_bytes(),
                 Ok(None) => command.clone().into_bytes(),
                 Err(error) => {
@@ -215,6 +209,7 @@ impl NyaTermApp {
                     self.upsert_ai_agent_step(
                         step_index,
                         AiAgentStepStatus::Failed,
+                        AiAgentStepKind::Diagnostic,
                         "Failed",
                         self.ai.panel_status().to_string(),
                     );
@@ -234,6 +229,7 @@ impl NyaTermApp {
                 self.upsert_ai_agent_step(
                     state.step_index,
                     AiAgentStepStatus::Running,
+                    AiAgentStepKind::Command,
                     "Running",
                     truncate_preview(&state.command, 140),
                 );

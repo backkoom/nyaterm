@@ -209,6 +209,7 @@ pub(in crate::features) struct AiChatJobOutput {
 
 #[derive(Debug, Clone)]
 pub(in crate::features) struct AiAgentLoopState {
+    pub(in crate::features) command_card_id: Option<String>,
     pub(in crate::features) ai_session_id: String,
     pub(in crate::features) terminal_session_id: String,
     pub(in crate::features) available_targets: Vec<nyaterm_core::AiTerminalTarget>,
@@ -226,8 +227,12 @@ pub(in crate::features) struct AiAgentLoopState {
     pub(in crate::features) stable_since: Instant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::features) struct AiAgentStepView {
+    pub(in crate::features) kind: crate::features::ai::presentation::AiAgentStepKind,
+    pub(in crate::features) source_message_id: Option<String>,
+    pub(in crate::features) command_card_id: Option<String>,
+    pub(in crate::features) exit_code: Option<i32>,
     pub(in crate::features) step_index: u16,
     pub(in crate::features) status: AiAgentStepStatus,
     pub(in crate::features) title: String,

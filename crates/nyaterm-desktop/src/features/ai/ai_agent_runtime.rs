@@ -20,6 +20,7 @@ use super::ai_jobs::{
     AiJobRunOptions, ai_job_cancelled, observation_summary, remote_command_observation,
     run_ai_ask_job,
 };
+use super::presentation::AiAgentStepKind;
 use super::state::AiAgentObservationPoll;
 use super::{
     AGENT_DEFAULT_STEP_TIMEOUT, AGENT_OBSERVATION_MIN_WAIT, AGENT_OBSERVATION_POLL_INTERVAL,
@@ -31,10 +32,12 @@ impl NyaTermApp {
         &mut self,
         step_index: u16,
         status: AiAgentStepStatus,
+        kind: AiAgentStepKind,
         title: impl Into<String>,
         detail: impl Into<String>,
     ) {
-        self.ai.upsert_agent_step(step_index, status, title, detail);
+        self.ai
+            .upsert_agent_step(step_index, status, kind, title, detail);
     }
 
     pub(in crate::features) fn toggle_ai_agent_thought_expanded(
@@ -120,10 +123,11 @@ impl NyaTermApp {
 
     pub(in crate::features) fn begin_ai_agent_observation(
         &mut self,
-        command: &str,
+        card: &AiCommandCard,
         terminal_session_id: &str,
         cx: &mut Context<Self>,
     ) -> Result<Option<String>, String> {
+        let command = card.command.as_str();
         let before = self.ai_header_presentation();
         let terminal_session_id = terminal_session_id.to_string();
         if self.session.session_info(&terminal_session_id).is_none()
@@ -165,6 +169,7 @@ impl NyaTermApp {
         let available_target_ids = self.ai_effective_target_session_ids();
         let available_targets = self.ai_terminal_targets_for_sessions(&available_target_ids);
         self.ai.set_agent_loop(AiAgentLoopState {
+            command_card_id: Some(card.id.clone()),
             ai_session_id: self.ai.chat_session_id().to_string(),
             terminal_session_id: terminal_session_id.clone(),
             available_targets,
@@ -191,6 +196,7 @@ impl NyaTermApp {
         self.upsert_ai_agent_step(
             step_index,
             AiAgentStepStatus::Running,
+            AiAgentStepKind::Command,
             "Running",
             truncate_preview(command.trim(), 140),
         );
@@ -200,10 +206,11 @@ impl NyaTermApp {
 
     pub(in crate::features) fn begin_ai_agent_background_execution(
         &mut self,
-        command: &str,
+        card: &AiCommandCard,
         terminal_session_id: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        let command = card.command.as_str();
         let before = self.ai_header_presentation();
         let terminal_session_id = terminal_session_id.to_string();
         let session = self
@@ -263,6 +270,7 @@ impl NyaTermApp {
         let available_target_ids = self.ai_effective_target_session_ids();
         let available_targets = self.ai_terminal_targets_for_sessions(&available_target_ids);
         let state = AiAgentLoopState {
+            command_card_id: Some(card.id.clone()),
             ai_session_id: self.ai.chat_session_id().to_string(),
             terminal_session_id: terminal_session_id.clone(),
             available_targets,
@@ -289,6 +297,7 @@ impl NyaTermApp {
         self.upsert_ai_agent_step(
             step_index,
             AiAgentStepStatus::Running,
+            AiAgentStepKind::Command,
             format!("{target_label} background"),
             truncate_preview(command.trim(), 140),
         );
@@ -422,6 +431,7 @@ impl NyaTermApp {
                 self.upsert_ai_agent_step(
                     state.step_index,
                     AiAgentStepStatus::Failed,
+                    AiAgentStepKind::Diagnostic,
                     "Timed out",
                     observation_summary(&observation),
                 );
@@ -445,10 +455,9 @@ impl NyaTermApp {
                     exit_code: None,
                     duration_ms,
                 };
-                self.upsert_ai_agent_step(
+                self.ai.record_agent_observation(
                     state.step_index,
-                    AiAgentStepStatus::Completed,
-                    "Observed",
+                    &observation,
                     observation_summary(&observation),
                 );
                 self.start_ai_agent_continuation(state, observation, cx);
@@ -480,10 +489,9 @@ impl NyaTermApp {
             Some(code) => format!("AI Agent captured command output with exit code {code}"),
             None => "AI Agent captured command output".to_string(),
         });
-        self.upsert_ai_agent_step(
+        self.ai.record_agent_observation(
             state.step_index,
-            AiAgentStepStatus::Completed,
-            "Observed",
+            &observation,
             observation_summary(&observation),
         );
         self.start_ai_agent_continuation(state, observation, cx);
@@ -528,6 +536,7 @@ impl NyaTermApp {
         self.upsert_ai_agent_step(
             state.step_index,
             AiAgentStepStatus::Failed,
+            AiAgentStepKind::Diagnostic,
             "Output dropped",
             observation_summary(&observation),
         );
@@ -686,16 +695,6 @@ impl NyaTermApp {
         self.defer_ai_panel_snapshot_flush(cx);
     }
 
-    pub(in crate::features) fn reject_ai_agent_command_card(
-        &mut self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(card) = self.ai.command_card(index) {
-            self.reject_ai_agent_command_card_value(card, cx);
-        }
-    }
-
     pub(in crate::features) fn reject_ai_agent_command_card_by_id(
         &mut self,
         card_id: String,
@@ -732,9 +731,11 @@ impl NyaTermApp {
         self.ai.upsert_agent_step(
             step_index,
             AiAgentStepStatus::Rejected,
+            AiAgentStepKind::Diagnostic,
             "Rejected",
             "User denied command execution",
         );
+        self.ai.associate_agent_command(step_index, &card.id);
         self.ai.clear_chat_command_cards();
         self.submit_ai_command_audit(
             AppendAiAuditRequest {
@@ -755,6 +756,7 @@ impl NyaTermApp {
         let now = Instant::now();
         let target_ids = self.ai_effective_target_session_ids();
         let state = AiAgentLoopState {
+            command_card_id: Some(card.id.clone()),
             ai_session_id: self.ai.chat_session_id().to_string(),
             terminal_session_id: terminal_session_id.clone(),
             available_targets: self.ai_terminal_targets_for_sessions(&target_ids),

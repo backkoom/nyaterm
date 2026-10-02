@@ -10,6 +10,7 @@ mod claude_code_runtime;
 mod codex_runtime;
 mod helper_resolver;
 mod panel;
+pub(in crate::features) mod presentation;
 mod provider_runtime;
 mod state;
 

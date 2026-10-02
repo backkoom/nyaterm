@@ -231,7 +231,7 @@ impl NyaTermApp {
         let settings_panel = cx.new(|cx| SettingsPanel::new(app_entity.downgrade(), cx));
         let transfer_panel = cx.new(|_| TransferPanel::new(app_entity.downgrade()));
         let notes_panel = cx.new(|cx| NotesPanel::new(app_entity.downgrade(), cx));
-        let ai_panel = cx.new(|_| AiPanel::new(app_entity.downgrade()));
+        let ai_panel = cx.new(|cx| AiPanel::new(app_entity.downgrade(), cx));
         let start_workspace = StartWorkspaceFeatureState::new(&connection_groups, &settings, cx);
 
         // Settings are loaded after gpui-kit initialization, so this is the

@@ -703,10 +703,8 @@ fn ai_agent_job_output(
     } else {
         approval_note
     };
-    let text = approval_note
-        .as_deref()
-        .map(|note| format!("Agent proposed `{}`; {note}", card.command))
-        .unwrap_or_else(|| format!("Agent proposed `{}`", card.command));
+    // The command and approval note are presented by the linked execution block.
+    let text = String::new();
 
     Ok(AiChatJobOutput {
         mode: AiMode::Agent,
@@ -809,6 +807,10 @@ mod tests {
             vec![execute_tool(Some("terminal-b"))],
         )
         .expect("target-aware Agent output");
+        assert!(
+            output.text.is_empty(),
+            "command proposal belongs only in the execution block"
+        );
 
         assert_eq!(
             output.command_cards[0]

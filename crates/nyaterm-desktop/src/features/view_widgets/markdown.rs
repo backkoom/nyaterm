@@ -13,6 +13,24 @@ pub(in crate::features) fn markdown_content_view(
     palette: ThemePalette,
     content: &str,
 ) -> impl IntoElement {
+    markdown_view(palette, content, 12., 18.)
+}
+
+/// Assistant prose has its own reading scale; reasoning and other compact
+/// surfaces keep the existing Markdown metrics.
+pub(in crate::features) fn markdown_answer_view(
+    palette: ThemePalette,
+    content: &str,
+) -> impl IntoElement {
+    markdown_view(palette, content, 14., 22.)
+}
+
+fn markdown_view(
+    palette: ThemePalette,
+    content: &str,
+    text_size: f32,
+    line_height: f32,
+) -> gpui::Div {
     let blocks = parse_markdown_blocks(content);
     let mut root = div()
         .min_w_0()
@@ -20,13 +38,20 @@ pub(in crate::features) fn markdown_content_view(
         .flex()
         .flex_col()
         .gap_1()
-        .text_size(px(12.))
-        .line_height(px(18.));
+        .text_size(px(text_size))
+        .line_height(px(line_height))
+        .when(text_size > 12., |root| root.gap_2());
     if blocks.is_empty() {
         return root;
     }
     for (index, block) in blocks.into_iter().enumerate() {
-        root = root.child(markdown_block_view(palette, index, block));
+        root = root.child(markdown_block_view(
+            palette,
+            index,
+            block,
+            text_size,
+            line_height,
+        ));
     }
     root
 }
@@ -94,13 +119,15 @@ fn markdown_block_view(
     palette: ThemePalette,
     index: usize,
     block: MarkdownBlock,
+    text_size: f32,
+    line_height: f32,
 ) -> gpui::AnyElement {
     match block {
         MarkdownBlock::Paragraph(text) => div()
             .id(SharedString::from(format!("md-p-{index}")))
-            .text_size(px(12.))
+            .text_size(px(text_size))
             .text_color(rgb(palette.text))
-            .line_height(px(18.))
+            .line_height(px(line_height))
             .child(markdown_inline_text(palette, &text))
             .into_any_element(),
         MarkdownBlock::Bullet(text) => div()
@@ -111,7 +138,7 @@ fn markdown_block_view(
             .pl_1()
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(px(text_size))
                     .text_color(rgb(palette.text_muted))
                     .child("•"),
             )
@@ -119,9 +146,9 @@ fn markdown_block_view(
                 div()
                     .min_w_0()
                     .flex_1()
-                    .text_size(px(12.))
+                    .text_size(px(text_size))
                     .text_color(rgb(palette.text))
-                    .line_height(px(18.))
+                    .line_height(px(line_height))
                     .child(markdown_inline_text(palette, &text)),
             )
             .into_any_element(),
@@ -133,7 +160,7 @@ fn markdown_block_view(
             .pl_1()
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(px(text_size))
                     .text_color(rgb(palette.text_muted))
                     .child(format!("{n}.")),
             )
@@ -141,9 +168,9 @@ fn markdown_block_view(
                 div()
                     .min_w_0()
                     .flex_1()
-                    .text_size(px(12.))
+                    .text_size(px(text_size))
                     .text_color(rgb(palette.text))
-                    .line_height(px(18.))
+                    .line_height(px(line_height))
                     .child(markdown_inline_text(palette, &text)),
             )
             .into_any_element(),
@@ -195,18 +222,19 @@ fn markdown_block_view(
                 .pl_3()
                 .border_l_2()
                 .border_color(rgb(palette.border))
-                .text_size(px(12.))
+                .text_size(px(text_size))
                 .text_color(rgb(palette.text_muted))
-                .line_height(px(18.))
+                .line_height(px(line_height))
                 .child(body)
                 .into_any_element()
         }
         MarkdownBlock::Heading { level, text } => {
-            let size = match level {
-                1 => 16.,
-                2 => 14.,
-                _ => 13.,
-            };
+            let size = text_size - 12.
+                + match level {
+                    1 => 16.,
+                    2 => 14.,
+                    _ => 13.,
+                };
             div()
                 .id(SharedString::from(format!("md-h-{index}")))
                 .text_size(px(size))
@@ -245,7 +273,7 @@ fn markdown_block_view(
                         .py_1()
                         .border_r_1()
                         .border_color(rgb(palette.border))
-                        .text_size(px(11.))
+                        .text_size(px(text_size - 1.))
                         .font_weight(FontWeight(700.))
                         .text_color(rgb(palette.text))
                         .child(markdown_inline_text(palette, &cell)),
@@ -273,7 +301,7 @@ fn markdown_block_view(
                             .py_1()
                             .border_r_1()
                             .border_color(rgb(palette.surface_elevated))
-                            .text_size(px(11.))
+                            .text_size(px(text_size - 1.))
                             .text_color(rgb(palette.text))
                             .child(markdown_inline_text(palette, &cell)),
                     );

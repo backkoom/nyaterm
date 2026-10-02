@@ -1,48 +1,14 @@
+use rust_i18n::t;
+
 use gpui::{
     App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px,
     rgb, svg,
 };
-use nyaterm_core::AiCommandCard;
 use nyaterm_ui::{NyaButton, NyaButtonVariant};
 
-use crate::features::formatting::risk_label;
 use crate::theme::ThemePalette;
 
 use super::AiPanel;
-
-pub(super) struct AiCommandCardPresentation {
-    pub palette: ThemePalette,
-    pub key: String,
-    pub risk: &'static str,
-    pub title: String,
-    pub command: String,
-    pub explanation: String,
-    pub risk_reason: String,
-    pub agent_command: bool,
-    pub expected: String,
-    pub rollback: String,
-}
-
-impl AiCommandCardPresentation {
-    pub(super) fn new(palette: ThemePalette, key: String, card: AiCommandCard) -> Self {
-        Self {
-            palette,
-            key,
-            risk: risk_label(card.risk_level.as_ref()),
-            title: if card.title.trim().is_empty() {
-                "Command".to_string()
-            } else {
-                card.title
-            },
-            command: card.command,
-            explanation: card.explanation,
-            risk_reason: card.risk_reason.unwrap_or_default(),
-            agent_command: card.id.starts_with("agent-"),
-            expected: card.expected_effect,
-            rollback: card.rollback.unwrap_or_default(),
-        }
-    }
-}
 
 pub(super) fn ai_send_button(
     _palette: ThemePalette,
@@ -68,6 +34,11 @@ pub(super) fn ai_send_button(
                     NyaButtonVariant::Secondary
                 } else {
                     NyaButtonVariant::Primary
+                })
+                .tooltip(if running {
+                    t!("ai.cancelTask")
+                } else {
+                    t!("ai.sendMessage")
                 })
                 .disabled(disabled)
                 .on_click(cx.listener(move |panel, _, _, cx| {
