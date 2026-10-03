@@ -42,6 +42,9 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn start_ai_ask(&mut self, cx: &mut Context<Self>) {
+        if self.ai.history_is_pending() {
+            return;
+        }
         self.sync_ai_active_scope(cx);
         if self.ai.chat_or_agent_is_running() {
             self.ai
@@ -731,6 +734,10 @@ impl NyaTermApp {
         };
         cx.spawn(async move |this, cx| {
             while let Some(event) = rx.next().await {
+                let stream_event = matches!(
+                    &event,
+                    AiChatWorkerEvent::Delta { .. } | AiChatWorkerEvent::AgentToolCallDelta { .. }
+                );
                 if this
                     .update(cx, |this, cx| {
                         let before = this.ai_header_presentation();
@@ -742,8 +749,12 @@ impl NyaTermApp {
                         let dirty =
                             this.ai.chat_event_is_wanted() && this.apply_ai_chat_event(event, cx);
                         this.ai.switch_scope(&visible_scope);
-                        if dirty {
-                            this.flush_ai_panel_snapshot(cx);
+                        if dirty && scope == visible_scope {
+                            if stream_event {
+                                this.schedule_ai_stream_refresh(cx);
+                            } else {
+                                this.flush_ai_panel_snapshot(cx);
+                            }
                             this.notify_root_if_ai_header_changed(before, cx);
                         }
                     })
@@ -752,6 +763,24 @@ impl NyaTermApp {
                     break;
                 }
             }
+        })
+        .detach();
+    }
+
+    pub(in crate::features) fn schedule_ai_stream_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(generation) = self.ai.request_stream_refresh() else {
+            return;
+        };
+        let timer = cx
+            .background_executor()
+            .timer(std::time::Duration::from_millis(33));
+        cx.spawn(async move |this, cx| {
+            timer.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.ai.take_stream_refresh(generation) {
+                    this.flush_ai_panel_snapshot(cx);
+                }
+            });
         })
         .detach();
     }

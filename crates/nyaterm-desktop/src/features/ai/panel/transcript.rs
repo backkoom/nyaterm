@@ -95,11 +95,10 @@ impl AiTranscriptRow {
                                     .reasoning_content
                                     .as_deref()
                                     .is_some_and(|text| !text.trim().is_empty())
-                                    || crate::features::formatting::extract_think_content(
+                                    || crate::features::formatting::markdown::think_content_presence(
                                         &message.content,
                                     )
                                     .1
-                                    .is_some()
                                 {
                                     rows.push(Self::ActivityMessage {
                                         index,
@@ -266,7 +265,8 @@ impl AiTranscriptRow {
                 Self::ActivityMessage { index: b, .. },
             )
             | (Self::FinalMessage { index: a, id }, Self::FinalMessage { index: b, .. }) => {
-                previous.messages[*a] != next.messages[*b]
+                (!std::sync::Arc::ptr_eq(&previous.messages[*a], &next.messages[*b])
+                    && previous.messages[*a] != next.messages[*b])
                     || (previous.streaming_assistant_id.as_ref() == Some(id))
                         != (next.streaming_assistant_id.as_ref() == Some(id))
                     || (next.streaming_assistant_id.as_ref() == Some(id)

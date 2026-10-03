@@ -17,6 +17,83 @@ use crate::models::{AiMessageMenuState, AiPreparedRequest};
 use super::{AiFeatureFocus, AiFeatureInit, AiFeatureState, AiSettingsMutation};
 
 #[test]
+fn history_load_keeps_the_current_chat_on_failure_or_after_a_new_request() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let launch = state.begin_chat_request("original".into(), AiMode::Ask, None);
+    state.apply_chat_delta(launch.job_id, "answer", None);
+    state.cancel_chat_and_agent();
+    let source = state.chat_session_id().to_string();
+    let messages = state.chat_messages().to_vec();
+    let job = state.begin_history_operation("load").unwrap();
+    assert!(state.history_load_is_current(job, "unbound:", &source));
+    state.finish_history_message_load(
+        job,
+        &source,
+        "other".into(),
+        Err("fixture failure".into()),
+        "loaded".into(),
+    );
+    assert_eq!(state.chat_session_id(), source);
+    assert_eq!(state.chat_messages(), messages);
+    assert_eq!(state.history_error(), Some("fixture failure"));
+
+    let job = state.begin_history_operation("load").unwrap();
+    let (epoch, captured) = state.visible_scope_guard();
+    state.begin_chat_request("new question".into(), AiMode::Ask, None);
+    assert!(!state.history_load_is_current(job, "unbound:", &source));
+    assert_ne!(epoch.load(Ordering::Acquire), captured);
+    let current = state.chat_messages().to_vec();
+    state.finish_history_message_load(
+        job,
+        &source,
+        "other".into(),
+        Ok(Vec::new()),
+        "loaded".into(),
+    );
+    assert_eq!(state.chat_session_id(), source);
+    assert_eq!(state.chat_messages(), current);
+}
+
+#[test]
+fn switching_terminals_or_starting_a_new_chat_invalidates_the_history_binding_guard() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    state.switch_visible_scope("terminal:a");
+    let source = state.chat_session_id().to_string();
+    let job = state.begin_history_operation("load").unwrap();
+    let (epoch, captured) = state.visible_scope_guard();
+    state.switch_visible_scope("terminal:b");
+    assert!(!state.history_load_is_current(job, "terminal:a", &source));
+    state.switch_visible_scope("terminal:a");
+    assert_ne!(epoch.load(Ordering::Acquire), captured);
+    state.start_new_chat();
+    assert!(!state.history_load_is_current(job, "terminal:a", &source));
+    let current = state.chat_session_id().to_string();
+    state.finish_history_message_load(
+        job,
+        &source,
+        "other".into(),
+        Ok(Vec::new()),
+        "loaded".into(),
+    );
+    assert_eq!(state.chat_session_id(), current);
+}
+
+#[test]
+fn stream_refreshes_coalesce_and_immediate_flush_invalidates_old_timers() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let generation = state.request_stream_refresh().unwrap();
+    assert!(state.request_stream_refresh().is_none());
+    state.clear_panel_refresh_request();
+    assert!(!state.take_stream_refresh(generation));
+    let next = state.request_stream_refresh().unwrap();
+    assert!(state.take_stream_refresh(next));
+    assert!(!state.take_stream_refresh(next));
+}
+
+#[test]
 fn native_questions_keep_the_owner_run_across_scope_switches_and_reject_stale_answers() {
     use nyaterm_core::ai::harness::{AgentRunStatus, AgentToolRegistry, AgentToolResult};
     use serde_json::json;

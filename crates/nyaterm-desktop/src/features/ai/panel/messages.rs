@@ -14,10 +14,9 @@ use crate::features::ai::panel::components::ai_command_target_label;
 use crate::features::ai::panel::transcript::AiTranscriptRow;
 use crate::features::ai::panel::{AiAgentStepPresentation, AiPanel, AiPanelSnapshot};
 use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase, AiResponsePhase};
-use crate::features::formatting::extract_think_content;
 use crate::features::runtime_jobs::AiAgentStepView;
 use crate::features::shell::gpui_code_font_family;
-use crate::features::view_widgets::{markdown_answer_view, markdown_content_view};
+use crate::features::view_widgets::markdown::prepared_markdown_view;
 use crate::models::AiMessageMenuState;
 
 fn localized_risk(risk: Option<&RiskLevel>) -> String {
@@ -57,6 +56,12 @@ impl AiPanelSnapshot {
     }
 
     pub(super) fn command_step(&self, card_id: &str) -> Option<&AiAgentStepPresentation> {
+        if self.index.matches(self) {
+            return self
+                .index
+                .card_step(card_id)
+                .map(|index| &self.agent_steps[index]);
+        }
         self.agent_steps.iter().find(|presentation| {
             presentation.step.command_card_id.as_deref() == Some(card_id)
                 && presentation
@@ -85,6 +90,12 @@ impl AiPanelSnapshot {
     }
 
     pub(super) fn card_owner(&self, card_id: &str) -> Option<&str> {
+        if self.index.matches(self) {
+            return self
+                .index
+                .card_owner(card_id)
+                .map(|index| self.messages[index].id.as_str());
+        }
         self.messages
             .iter()
             .find(|message| message.command_cards.iter().any(|card| card.id == card_id))
@@ -95,35 +106,51 @@ impl AiPanelSnapshot {
         &'a self,
         message_id: &'a str,
     ) -> impl Iterator<Item = &'a AiAgentStepPresentation> + 'a {
-        self.agent_steps.iter().filter(move |presentation| {
-            let step = &presentation.step;
-            if step.kind == AiAgentStepKind::FinalAnswer {
-                return false;
-            }
-            let owns_source = step.source_message_id.as_deref() == Some(message_id);
-            let fallback = self.step_is_active(step.step_index)
-                && self.streaming_assistant_id.as_deref() == Some(message_id)
-                && !step
-                    .source_message_id
-                    .as_deref()
-                    .is_some_and(|id| self.messages.iter().any(|message| message.id == id));
-            if !owns_source && !fallback {
-                return false;
-            }
-            let has_card = step
-                .command_card_id
-                .as_deref()
-                .is_some_and(|id| self.command_step(id).is_some());
-            !has_card
-        })
+        let indices: std::borrow::Cow<'a, [usize]> = if self.index.matches(self) {
+            std::borrow::Cow::Borrowed(self.index.steps(message_id))
+        } else {
+            std::borrow::Cow::Owned(
+                self.agent_steps
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, presentation)| {
+                        let step = &presentation.step;
+                        if step.kind == AiAgentStepKind::FinalAnswer {
+                            return false;
+                        }
+                        let owns_source = step.source_message_id.as_deref() == Some(message_id);
+                        let fallback = self.step_is_active(step.step_index)
+                            && self.streaming_assistant_id.as_deref() == Some(message_id)
+                            && !step.source_message_id.as_deref().is_some_and(|id| {
+                                self.messages.iter().any(|message| message.id == id)
+                            });
+                        if !owns_source && !fallback {
+                            return false;
+                        }
+                        let has_card = step
+                            .command_card_id
+                            .as_deref()
+                            .is_some_and(|id| self.command_step(id).is_some());
+                        !has_card
+                    })
+                    .map(|(index, _)| index)
+                    .collect(),
+            )
+        };
+        (0..indices.len()).map(move |position| &self.agent_steps[indices[position]])
     }
 
     pub(super) fn step_in_message(&self, step_index: u16) -> bool {
-        let Some(step) = self
-            .agent_steps
-            .iter()
-            .find(|step| step.step.step_index == step_index)
-        else {
+        let step = if self.index.matches(self) {
+            self.index
+                .step_position(step_index)
+                .map(|position| &self.agent_steps[position])
+        } else {
+            self.agent_steps
+                .iter()
+                .find(|step| step.step.step_index == step_index)
+        };
+        let Some(step) = step else {
             return false;
         };
         if step.step.kind == AiAgentStepKind::FinalAnswer {
@@ -133,7 +160,7 @@ impl AiPanelSnapshot {
             .step
             .source_message_id
             .as_deref()
-            .filter(|id| self.messages.iter().any(|message| message.id == *id))
+            .filter(|id| self.index.message(self, id).is_some())
             .or_else(|| {
                 if self.step_is_active(step_index) {
                     self.streaming_assistant_id.as_deref()
@@ -141,7 +168,7 @@ impl AiPanelSnapshot {
                     None
                 }
             });
-        source.is_some_and(|id| self.messages.iter().any(|message| message.id == id))
+        source.is_some_and(|id| self.index.message(self, id).is_some())
     }
 }
 
@@ -266,7 +293,7 @@ impl AiPanel {
         message: &AiMessage,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.ai_message_bubble_inner(snapshot, message, false, false, cx)
+        self.ai_message_bubble_inner(snapshot, message, false, false, false, cx)
     }
 
     pub(super) fn ai_activity_message(
@@ -276,7 +303,7 @@ impl AiPanel {
         reasoning_only: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.ai_message_bubble_inner(snapshot, message, true, reasoning_only, cx)
+        self.ai_message_bubble_inner(snapshot, message, true, reasoning_only, false, cx)
     }
 
     pub(super) fn ai_final_message(
@@ -285,10 +312,7 @@ impl AiPanel {
         message: &AiMessage,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut answer = message.clone();
-        answer.content = extract_think_content(&message.content).0;
-        answer.reasoning_content = None;
-        self.ai_message_bubble(snapshot, &answer, cx)
+        self.ai_message_bubble_inner(snapshot, message, false, false, true, cx)
     }
 
     fn ai_message_bubble_inner(
@@ -297,6 +321,7 @@ impl AiPanel {
         message: &AiMessage,
         activity: bool,
         reasoning_only: bool,
+        final_answer: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = snapshot.chrome.palette;
@@ -311,17 +336,15 @@ impl AiPanel {
         } else {
             t!("ai.thinking")
         };
-        let (display, embedded_thought) = extract_think_content(&message.content);
-        let reasoning = message
-            .reasoning_content
-            .as_deref()
-            .filter(|text| !text.trim().is_empty())
-            .map(str::to_string)
-            .or(embedded_thought);
+        let prepared = self.prepared_message(&message.id);
+        let display = prepared
+            .map(|content| content.display.as_str())
+            .unwrap_or_default();
+        let reasoning = prepared.and_then(|content| content.reasoning.as_deref());
         let menu_text = if display.is_empty() {
             message.content.clone()
         } else {
-            display.clone()
+            display.to_string()
         };
         let menu_id = message.id.clone();
         let mut body = div()
@@ -359,16 +382,20 @@ impl AiPanel {
                 }),
             );
         if activity {
-            if let Some(reasoning) = reasoning.as_ref().filter(|text| {
+            if let Some(_reasoning) = reasoning.filter(|text| {
                 text.trim() != display.trim()
                     && !message
                         .command_cards
                         .iter()
                         .any(|card| card.explanation.trim() == text.trim())
             }) {
-                body = body.child(markdown_content_view(palette, reasoning));
+                body = body.child(prepared_markdown_view(
+                    palette,
+                    &prepared.expect("prepared reasoning").thought,
+                    false,
+                ));
             }
-        } else if let Some(reasoning) = reasoning {
+        } else if let Some(_reasoning) = reasoning.filter(|_| !final_answer) {
             let open = snapshot.expanded_message_thoughts.contains(&message.id);
             let id = message.id.clone();
             let header = disclosure(
@@ -400,7 +427,11 @@ impl AiPanel {
                         .min_w_0()
                         .w_full()
                         .text_color(rgb(palette.text_muted))
-                        .child(markdown_content_view(palette, &reasoning)),
+                        .child(prepared_markdown_view(
+                            palette,
+                            &prepared.expect("prepared reasoning").thought,
+                            false,
+                        )),
                 );
             }
         } else if thinking {
@@ -419,7 +450,7 @@ impl AiPanel {
             });
         if !reasoning_only && !display.is_empty() && !duplicate_explanation {
             body = body.child(if is_user {
-                crate::features::ai::panel::components::ai_user_pre_wrap_text(palette, &display)
+                crate::features::ai::panel::components::ai_user_pre_wrap_text(palette, display)
             } else {
                 div()
                     .debug_selector({
@@ -428,7 +459,11 @@ impl AiPanel {
                     })
                     .min_w_0()
                     .w_full()
-                    .child(markdown_answer_view(palette, &display))
+                    .child(prepared_markdown_view(
+                        palette,
+                        &prepared.expect("prepared answer").answer,
+                        true,
+                    ))
                     .into_any_element()
             });
         }
@@ -526,14 +561,16 @@ impl AiPanel {
         }
         if step.kind == AiAgentStepKind::FinalAnswer {
             return row
-                .child(markdown_answer_view(palette, &step.detail))
+                .child(self.cached_markdown(palette, &step.detail, true))
                 .into_any_element();
         }
         if let Some(thought) = step.thought.as_ref().filter(|text| !text.trim().is_empty()) {
             let duplicate = step.source_message_id.as_ref().is_some_and(|id| {
-                snapshot.messages.iter().any(|message| {
+                snapshot.index.message(snapshot, id).is_some_and(|message| {
                     &message.id == id
-                        && (extract_think_content(&message.content).0.trim() == thought.trim()
+                        && (self
+                            .prepared_message(&message.id)
+                            .is_some_and(|prepared| prepared.display.trim() == thought.trim())
                             || message
                                 .reasoning_content
                                 .as_deref()
@@ -544,7 +581,7 @@ impl AiPanel {
                 // Planning metadata is an internal progress hint. Provider reasoning
                 // is already displayed as prose in the owning activity message.
                 if step.kind != AiAgentStepKind::Planning && !duplicate {
-                    row = row.child(markdown_content_view(palette, thought));
+                    row = row.child(self.cached_markdown(palette, thought, false));
                 }
             } else {
                 row = row.child(disclosure(
@@ -558,7 +595,7 @@ impl AiPanel {
                     }),
                 ));
                 if presentation.thought_open {
-                    row = row.child(markdown_content_view(palette, thought));
+                    row = row.child(self.cached_markdown(palette, thought, false));
                 }
             }
         }
@@ -654,7 +691,7 @@ impl AiPanel {
             .flex()
             .flex_col()
             .gap_2()
-            .child(markdown_content_view(snapshot.chrome.palette, &explanation));
+            .child(self.cached_markdown(snapshot.chrome.palette, &explanation, false));
         if phase.offers_approval() {
             return row
                 .child(self.render_command_card(snapshot, card, true, cx))
@@ -832,10 +869,12 @@ impl AiPanel {
                 block = block.child(div().text_color(rgb(color)).child(step.detail.clone()));
             }
             let thought_in_message = step.source_message_id.as_ref().is_some_and(|id| {
-                snapshot.messages.iter().any(|message| {
+                snapshot.index.message(snapshot, id).is_some_and(|message| {
                     &message.id == id
                         && (message.reasoning_content.is_some()
-                            || extract_think_content(&message.content).1.is_some())
+                            || self
+                                .prepared_message(&message.id)
+                                .is_some_and(|prepared| prepared.reasoning.is_some()))
                 })
             });
             if let Some(thought) = step.thought.as_ref().filter(|thought| {
@@ -856,7 +895,7 @@ impl AiPanel {
                     }),
                 ));
                 if presentation.thought_open {
-                    block = block.child(markdown_content_view(palette, thought));
+                    block = block.child(self.cached_markdown(palette, thought, false));
                 }
             }
             if let Some(output) = &step.observation {

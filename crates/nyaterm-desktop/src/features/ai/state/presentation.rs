@@ -4,7 +4,7 @@ use nyaterm_core::ai::CommandObservation;
 
 use crate::features::ai::presentation::{AiAgentStepKind, AiResponsePhase};
 use crate::features::ai::state::AiFeatureState;
-use crate::features::formatting::extract_think_content;
+use crate::features::formatting::markdown::think_content_presence;
 use crate::features::runtime_jobs::{AiAgentStepStatus, AiAgentStepView};
 
 impl AiFeatureState {
@@ -30,6 +30,9 @@ impl AiFeatureState {
     }
 
     pub(super) fn refresh_response_phase(&mut self) {
+        if self.chat.response_phase == AiResponsePhase::Responding {
+            return;
+        }
         let Some(message) = self
             .chat
             .streaming_assistant_id
@@ -38,12 +41,12 @@ impl AiFeatureState {
         else {
             return;
         };
-        let (visible, thought) = extract_think_content(&message.content);
+        let (visible, thought) = think_content_presence(&message.content);
         // Once visible text has started, late reasoning chunks must not revive Thinking.
-        if !visible.is_empty() {
+        if visible {
             self.chat.response_phase = AiResponsePhase::Responding;
         } else if self.chat.response_phase != AiResponsePhase::ToolArguments
-            && (thought.is_some() || message.reasoning_content.is_some())
+            && (thought || message.reasoning_content.is_some())
         {
             self.chat.response_phase = AiResponsePhase::Thinking;
         }

@@ -185,6 +185,8 @@ impl AiChatState {
 /// Stored sessions, the history browser and the counters shown beside it.
 struct AiHistoryState {
     open: bool,
+    restore_focus: Option<FocusHandle>,
+    error: Option<String>,
     query: String,
     job_id: u64,
     pending: bool,
@@ -286,6 +288,8 @@ struct AiPanelState {
     detected_error: Option<AiDetectedErrorState>,
     error_notice_at: HashMap<String, Instant>,
     panel_refresh_requested: bool,
+    stream_refresh_generation: u64,
+    stream_refresh_pending: bool,
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -361,6 +365,8 @@ impl AiFeatureState {
             archived_sessions: HashMap::new(),
             history: AiHistoryState {
                 open: false,
+                restore_focus: None,
+                error: None,
                 query: String::new(),
                 job_id: 0,
                 pending: false,
@@ -389,6 +395,8 @@ impl AiFeatureState {
                 detected_error: None,
                 error_notice_at: HashMap::new(),
                 panel_refresh_requested: false,
+                stream_refresh_generation: 0,
+                stream_refresh_pending: false,
             },
         }
     }
@@ -518,18 +526,23 @@ impl AiFeatureState {
         );
     }
 
-    fn restore_archived_session(&mut self, session_id: &str) {
-        let Some((scope, mut archived)) = self.archived_sessions.remove(session_id) else {
-            return;
-        };
-        if scope != self.active_scope_key {
-            return;
+    fn restore_archived_session(&mut self, session_id: &str) -> bool {
+        if !self
+            .archived_sessions
+            .get(session_id)
+            .is_some_and(|(scope, _)| scope == &self.active_scope_key)
+        {
+            return false;
         }
+        let Some((_, mut archived)) = self.archived_sessions.remove(session_id) else {
+            return false;
+        };
         self.archive_current_session();
         archived.chat.rx = self.chat.rx.take();
         self.chat = archived.chat;
         self.agent = archived.agent;
         self.panel.status = archived.status;
+        true
     }
 
     pub(in crate::features) fn scope_for_agent_marker(&self, marker_id: &str) -> Option<String> {
@@ -821,6 +834,7 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn begin_chat_job(&mut self) -> AiChatLaunch {
+        self.visible_scope_epoch.fetch_add(1, Ordering::AcqRel);
         self.chat.job_id = self.chat.job_id.wrapping_add(1).max(1);
         let cancel = Arc::new(AtomicBool::new(false));
         self.chat.cancel = Some(cancel.clone());
@@ -1013,8 +1027,10 @@ impl AiFeatureState {
             let message = Arc::make_mut(message);
             message.content.push_str(text_delta);
             if let Some(delta) = reasoning_delta.filter(|delta| !delta.trim().is_empty()) {
-                let existing = message.reasoning_content.take().unwrap_or_default();
-                message.reasoning_content = Some(format!("{existing}{delta}"));
+                message
+                    .reasoning_content
+                    .get_or_insert_with(String::new)
+                    .push_str(delta);
             }
         }
         self.refresh_response_phase();
@@ -1442,6 +1458,35 @@ impl AiFeatureState {
         self.history.open
     }
 
+    pub(in crate::features) fn remember_history_focus(&mut self, focus: Option<FocusHandle>) {
+        self.history.restore_focus = focus;
+    }
+
+    pub(in crate::features) fn take_history_focus(&mut self) -> Option<FocusHandle> {
+        self.history.restore_focus.take()
+    }
+
+    pub(in crate::features) fn history_has_restore_focus(&self) -> bool {
+        self.history.restore_focus.is_some()
+    }
+
+    pub(in crate::features) fn history_error(&self) -> Option<&str> {
+        self.history.error.as_deref()
+    }
+
+    pub(in crate::features) fn history_load_is_current(
+        &self,
+        job_id: u64,
+        scope: &str,
+        source: &str,
+    ) -> bool {
+        self.history.job_id == job_id
+            && self.history.pending
+            && self.active_scope_key == scope
+            && self.chat.session_id == source
+            && !self.chat_or_agent_is_running()
+    }
+
     pub(in crate::features) fn history_query(&self) -> &str {
         &self.history.query
     }
@@ -1537,6 +1582,7 @@ impl AiFeatureState {
         }
         self.history.job_id = self.history.job_id.wrapping_add(1).max(1);
         self.history.pending = true;
+        self.history.error = None;
         self.panel.status = status.into();
         Some(self.history.job_id)
     }
@@ -1556,7 +1602,7 @@ impl AiFeatureState {
                 self.panel.status = "AI history loaded".to_string();
             }
             Err(error) => {
-                self.history.sessions.clear();
+                self.history.error = Some(error.clone());
                 self.panel.status = format!("failed to load AI history: {error}");
             }
         }
@@ -1575,13 +1621,15 @@ impl AiFeatureState {
             return false;
         }
         self.history.pending = false;
-        if self.chat.session_id != source_session_id {
+        if self.chat.session_id != source_session_id || self.chat_or_agent_is_running() {
             self.panel.status = "AI session load cancelled".to_string();
             return true;
         }
         match result {
             Ok(messages) => {
-                self.restore_archived_session(&target_session_id);
+                if !self.restore_archived_session(&target_session_id) {
+                    self.archive_current_session();
+                }
                 self.chat.session_id = target_session_id;
                 self.chat.messages = messages.into_iter().map(Arc::new).collect();
                 self.chat.streaming_assistant_id = None;
@@ -1605,6 +1653,7 @@ impl AiFeatureState {
                 self.panel.status = loaded_status;
             }
             Err(error) => {
+                self.history.error = Some(error.clone());
                 self.panel.status = format!("failed to load AI session: {error}");
             }
         }
@@ -2094,6 +2143,23 @@ impl AiFeatureState {
 
     pub(in crate::features) fn clear_panel_refresh_request(&mut self) {
         self.panel.panel_refresh_requested = false;
+        self.panel.stream_refresh_generation = self.panel.stream_refresh_generation.wrapping_add(1);
+        self.panel.stream_refresh_pending = false;
+    }
+
+    pub(in crate::features) fn request_stream_refresh(&mut self) -> Option<u64> {
+        if self.panel.stream_refresh_pending {
+            return None;
+        }
+        self.panel.stream_refresh_pending = true;
+        Some(self.panel.stream_refresh_generation)
+    }
+
+    pub(in crate::features) fn take_stream_refresh(&mut self, generation: u64) -> bool {
+        if generation != self.panel.stream_refresh_generation {
+            return false;
+        }
+        std::mem::take(&mut self.panel.stream_refresh_pending)
     }
 
     pub(in crate::features) fn process_agent_output(
@@ -2331,6 +2397,7 @@ impl AiFeatureState {
     /// Provider settings are deliberately untouched; the response preview is
     /// seeded from the configured default mode exactly as before.
     pub(in crate::features) fn start_new_chat(&mut self) {
+        self.visible_scope_epoch.fetch_add(1, Ordering::AcqRel);
         self.archive_current_session();
         self.chat.prompt_draft.clear();
         self.chat.target_session_ids.clear();

@@ -205,7 +205,7 @@ impl NyaTermApp {
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
                     let transfer_rename_dismissed = this.dismiss_transfer_rename_if_open(cx);
                     let remote_menus_open = this.remote_ops.docker_menus_open();
                     let ai_menus_open = this.ai.transient_menus_are_open();
@@ -221,6 +221,9 @@ impl NyaTermApp {
                             this.defer_remote_panel_snapshot_flush(cx);
                         }
                         if ai_menus_open {
+                            if this.ai.history_is_open() {
+                                this.close_ai_history(window, cx);
+                            }
                             this.ai.close_transient_menus();
                             this.defer_ai_panel_snapshot_flush(cx);
                         }

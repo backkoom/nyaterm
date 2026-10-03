@@ -15,7 +15,7 @@ pub(in crate::features) use labels::{
 mod ai_history;
 pub(in crate::features) use ai_history::group_ai_sessions_by_date;
 
-mod markdown;
+pub(in crate::features) mod markdown;
 pub(in crate::features) use markdown::{
     InlineMdStyle, MarkdownBlock, extract_think_content, parse_inline_markdown,
     parse_markdown_blocks,

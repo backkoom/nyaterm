@@ -22,6 +22,24 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) {
         let palette = snapshot.chrome.palette;
+        if self.snapshot.as_ref().is_some_and(|previous| {
+            previous.chrome.palette == palette
+                && previous.messages.len() == snapshot.messages.len()
+                && previous
+                    .messages
+                    .iter()
+                    .zip(snapshot.messages.iter())
+                    .all(|(a, b)| Arc::ptr_eq(a, b) || a.command_cards == b.command_cards)
+                && previous.command_cards == snapshot.command_cards
+                && previous.agent_steps.len() == snapshot.agent_steps.len()
+                && previous
+                    .agent_steps
+                    .iter()
+                    .zip(snapshot.agent_steps.iter())
+                    .all(|(a, b)| a.step.command == b.step.command)
+        }) {
+            return;
+        }
         let commands: HashSet<String> = snapshot
             .messages
             .iter()

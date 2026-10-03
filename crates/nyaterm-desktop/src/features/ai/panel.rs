@@ -31,8 +31,10 @@ use crate::features::runtime_jobs::AiAgentStepView;
 
 mod command_syntax;
 mod components;
+mod content;
 mod execution;
 pub(super) mod harness;
+mod index;
 mod messages;
 mod transcript;
 use components::{ai_message_menu_button, ai_message_menu_position, ai_send_button, ai_setup_step};
@@ -79,6 +81,7 @@ pub(in crate::features) struct AiAgentStepPresentation {
 
 #[derive(Clone)]
 pub(in crate::features) struct AiPanelSnapshot {
+    index: Arc<index::AiSnapshotIndex>,
     pub native_run: Option<super::state::harness::NativeRunView>,
     pub native_answer_inputs: Vec<Entity<nyaterm_ui::NyaInputState>>,
     pub chrome: AiPanelChrome,
@@ -132,6 +135,7 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub owner_terminal_id: Option<String>,
     pub owner_connection_id: Option<String>,
     pub history_pending: bool,
+    pub history_error: Option<String>,
     pub history_actions_disabled: bool,
     pub execution_menu_open: bool,
     pub command_execution_mode: AgentCommandExecutionMode,
@@ -153,8 +157,10 @@ pub(in crate::features) struct AiPanel {
     transcript_rows: Arc<[AiTranscriptRow]>,
     transcript_text_style: Option<(gpui::TextStyle, gpui::Pixels, String)>,
     command_syntax: command_syntax::CommandSyntaxCache,
+    content: content::ContentCache,
     mention_scroll: ScrollHandle,
     model_scroll: ScrollHandle,
+    history_scroll: ScrollHandle,
     picker_reveal_pending: bool,
     focused_question: Option<(String, String)>,
     #[cfg(test)]
@@ -175,8 +181,10 @@ impl AiPanel {
             transcript_rows: Arc::from([]),
             transcript_text_style: None,
             command_syntax: command_syntax::CommandSyntaxCache::default(),
+            content: content::ContentCache::default(),
             mention_scroll: ScrollHandle::new(),
             model_scroll: ScrollHandle::new(),
+            history_scroll: ScrollHandle::new(),
             picker_reveal_pending: false,
             focused_question: None,
             #[cfg(test)]
@@ -188,9 +196,11 @@ impl AiPanel {
 
     pub(in crate::features) fn set_snapshot(
         &mut self,
-        snapshot: AiPanelSnapshot,
+        mut snapshot: AiPanelSnapshot,
         cx: &mut Context<Self>,
     ) {
+        snapshot.index = Arc::new(index::AiSnapshotIndex::build(&snapshot));
+        self.refresh_content(&snapshot, cx);
         self.refresh_command_syntax(&snapshot, cx);
         let rows = AiTranscriptRow::project(&snapshot);
         let update = AiTranscriptUpdate::between(
@@ -317,9 +327,10 @@ impl AiPanel {
             .as_ref()
             .map(|field| NyaSearchInput::new("ai-model-search", field).into_any_element());
         let panel_entity = cx.weak_entity();
-        let composer_disabled = snapshot.running || !snapshot.enabled;
+        let composer_disabled = snapshot.running || snapshot.history_pending || !snapshot.enabled;
         let send_disabled = !snapshot.running
-            && (!snapshot.enabled
+            && (snapshot.history_pending
+                || !snapshot.enabled
                 || (!snapshot.external_agent && !snapshot.selected_model_exists)
                 || snapshot.prompt_draft.trim().is_empty());
 
@@ -1591,23 +1602,23 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
-        let query = snapshot.history_query.trim().to_ascii_lowercase();
+        let query = snapshot.history_query.trim().to_lowercase();
         let filtered: Vec<_> = snapshot
             .history_sessions
             .iter()
             .filter(|session| {
                 query.is_empty()
-                    || session.title.to_ascii_lowercase().contains(&query)
-                    || session.id.to_ascii_lowercase().contains(&query)
+                    || session.title.to_lowercase().contains(&query)
+                    || session.id.to_lowercase().contains(&query)
             })
             .cloned()
             .collect();
         let total_count = snapshot.history_sessions.len();
         let filtered_count = filtered.len();
         let mut grouped = [
-            ("Current terminal", Vec::new()),
-            ("Same connection", Vec::new()),
-            ("Other sessions", Vec::new()),
+            (t!("ai.historyCurrentTerminal"), Vec::new()),
+            (t!("ai.historySameConnection"), Vec::new()),
+            (t!("ai.historyOtherSessions"), Vec::new()),
         ];
         for session in filtered {
             let group = if session.scope.r#type == AiSessionScopeType::Terminal
@@ -1631,13 +1642,11 @@ impl AiPanel {
         }
         let mut search_input = snapshot.history_search_input.as_ref().map(|field| {
             NyaSearchInput::new("ai-history-search", field).on_key_down(cx.listener(
-                |panel, event: &gpui::KeyDownEvent, _, cx| {
+                |panel, event: &gpui::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape" {
                         cx.stop_propagation();
                         panel.with_app(cx, |app, cx| {
-                            app.ai.close_history();
-                            app.forget_text_inputs("ai.history-search");
-                            app.defer_ai_panel_snapshot_flush(cx);
+                            app.close_ai_history(window, cx);
                         });
                     }
                 },
@@ -1687,11 +1696,11 @@ impl AiPanel {
                     .text_size(px(11.))
                     .text_color(rgb(palette.text_dimmed))
                     .child(if snapshot.history_pending {
-                        "Loading history..."
+                        t!("ai.historyLoading")
                     } else if total_count == 0 {
-                        "No chat history yet"
+                        t!("ai.noHistory")
                     } else {
-                        "No matching history"
+                        t!("ai.noHistoryMatches")
                     }),
             );
         } else {
@@ -1714,9 +1723,9 @@ impl AiPanel {
                             .px_2()
                             .text_size(px(9.))
                             .text_color(rgb(palette.text_dimmed))
-                            .child(date.label()),
+                            .child(t!(date.label_key())),
                     );
-                    for session in date_sessions.into_iter().take(48) {
+                    for session in date_sessions {
                         let session_id = session.id.clone();
                         let delete_id = session.id.clone();
                         let active = snapshot.current_ai_session_id == session.id;
@@ -1724,9 +1733,16 @@ impl AiPanel {
                             .history_running_ids
                             .iter()
                             .any(|id| id == &session.id);
+                        let open_disabled =
+                            snapshot.history_pending || snapshot.running || occupied;
+                        let delete_disabled = snapshot.history_pending || occupied;
                         rows = rows.child(
                             div()
                                 .id(SharedString::from(format!("ai-session-{}", session.id)))
+                                .debug_selector({
+                                    let id = session.id.clone();
+                                    move || format!("ai-history-session-{id}")
+                                })
                                 .h(px(32.))
                                 .px_2()
                                 .rounded_md()
@@ -1750,9 +1766,13 @@ impl AiPanel {
                                         .text_size(px(12.))
                                         .text_color(rgb(palette.text))
                                         .overflow_hidden()
-                                        .cursor_pointer()
+                                        .when(!open_disabled, |this| this.cursor_pointer())
+                                        .when(open_disabled, |this| this.opacity(0.5))
                                         .child(truncate_preview(&session.title, 28))
                                         .on_click(cx.listener(move |panel, _, _, cx| {
+                                            if open_disabled {
+                                                return;
+                                            }
                                             let session_id = session_id.clone();
                                             panel.with_app(cx, move |app, cx| {
                                                 app.load_ai_session_messages(session_id, cx);
@@ -1767,11 +1787,11 @@ impl AiPanel {
                                             "{}{}",
                                             agent_kind_label(&session.agent_kind),
                                             if occupied {
-                                                " · running"
+                                                t!("ai.historyInUse")
                                             } else if session.external_session_id.is_some() {
-                                                " · resume"
+                                                t!("ai.historyResume")
                                             } else {
-                                                ""
+                                                "".into()
                                             }
                                         )),
                                 )
@@ -1780,10 +1800,15 @@ impl AiPanel {
                                     "icons/fe/delete.svg",
                                     14.,
                                     palette,
-                                    cx.listener(move |panel, _, _, cx| {
+                                    cx.listener(move |panel, _, window, cx| {
+                                        if delete_disabled {
+                                            return;
+                                        }
                                         let delete_id = delete_id.clone();
                                         panel.with_app(cx, move |app, cx| {
-                                            app.delete_ai_session(delete_id, cx);
+                                            app.open_ai_delete_history_confirm(
+                                                delete_id, window, cx,
+                                            );
                                         });
                                     }),
                                 )),
@@ -1795,11 +1820,13 @@ impl AiPanel {
 
         div()
             .id(SharedString::from("ai-history-popover"))
+            .debug_selector(|| "ai-history-popover".to_string())
             .absolute()
             .top(px(4.))
             .left(px(8.))
             .right(px(8.))
-            .max_h(px(352.))
+            .h(px(if filtered_count == 0 { 156. } else { 352. }))
+            .max_h(gpui::relative(0.95))
             .rounded_md()
             .border_1()
             .border_color(rgb(palette.border))
@@ -1808,10 +1835,12 @@ impl AiPanel {
             .flex()
             .flex_col()
             .overflow_hidden()
+            .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .when_some(search_input, |this, search_input| {
                 this.child(
                     div()
+                        .flex_none()
                         .p_2()
                         .border_b_1()
                         .border_color(rgb(palette.border))
@@ -1821,6 +1850,7 @@ impl AiPanel {
             .child(
                 div()
                     .h(px(32.))
+                    .flex_none()
                     .px_2()
                     .border_b_1()
                     .border_color(rgb(palette.border))
@@ -1832,7 +1862,11 @@ impl AiPanel {
                             .text_size(px(11.))
                             .font_weight(FontWeight(700.))
                             .text_color(rgb(palette.text))
-                            .child(t!("ai.history")),
+                            .child(if snapshot.history_pending {
+                                t!("ai.historyLoading")
+                            } else {
+                                t!("ai.history")
+                            }),
                     )
                     .child(
                         div()
@@ -1865,14 +1899,35 @@ impl AiPanel {
                             .child(t!("ai.clearHistory")),
                     ),
             )
+            .when_some(snapshot.history_error.as_ref(), |this, error| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .max_h(px(42.))
+                        .overflow_hidden()
+                        .px_2()
+                        .py_1()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette.danger))
+                        .child(format!("{}: {error}", t!("ai.historyLoadFailed"))),
+                )
+            })
             .child(
                 div()
                     .id(SharedString::from("ai-history-scroll"))
+                    .debug_selector(|| "ai-history-viewport".to_string())
                     .flex_1()
                     .min_h_0()
-                    .max_h(px(280.))
-                    .overflow_scrollbar()
-                    .child(rows),
+                    .relative()
+                    .child(
+                        div()
+                            .id("ai-history-list")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.history_scroll)
+                            .child(rows),
+                    )
+                    .vertical_scrollbar(&self.history_scroll),
             )
     }
 
@@ -1950,6 +2005,33 @@ impl AiPanel {
 
 impl gpui::Render for AiPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.history_open)
+            && let Some(app) = self.app.upgrade()
+            && !app.read(cx).ai.history_is_open()
+            && app.read(cx).ai.history_has_restore_focus()
+        {
+            let search_focused = app
+                .read(cx)
+                .existing_text_input("ai.history-search")
+                .is_some_and(|field| {
+                    let input = field.read(cx);
+                    input.focus_handle().contains_focused(window, cx)
+                        || input
+                            .component_focus_handle(cx)
+                            .contains_focused(window, cx)
+                });
+            let focus = app.update(cx, |app, _| {
+                let focus = app.ai.take_history_focus();
+                app.forget_text_inputs("ai.history-search");
+                focus
+            });
+            if search_focused && let Some(focus) = focus {
+                window.focus(&focus, cx);
+            }
+        }
         if let Some(snapshot) = &self.snapshot
             && let Some(view) = snapshot.native_run.as_ref().filter(|view| {
                 view.status == nyaterm_core::ai::harness::AgentRunStatus::WaitingForUser
@@ -2129,6 +2211,35 @@ impl NyaTermApp {
         self.start_ai_ask(cx);
     }
 
+    fn open_ai_delete_history_confirm(
+        &mut self,
+        session_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ai.history_is_pending() || self.ai.ai_session_is_running(&session_id) {
+            return;
+        }
+        self.open_confirm_dialog(
+            (
+                t!("ai.deleteHistoryTitle").to_string(),
+                t!("ai.deleteHistoryDesc").to_string(),
+                t!("ai.deleteSession").to_string(),
+                true,
+                move |app, _, cx| {
+                    if app.ai.history_is_pending() || app.ai.ai_session_is_running(&session_id) {
+                        return false;
+                    }
+                    app.delete_ai_session(session_id.clone(), cx);
+                    true
+                },
+            ),
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
     pub(in crate::features) fn open_ai_clear_history_confirm(
         &mut self,
         window: &mut Window,
@@ -2237,7 +2348,6 @@ impl NyaTermApp {
     }
 
     fn build_ai_panel_snapshot(&mut self, cx: &mut Context<Self>) -> AiPanelSnapshot {
-        self.sync_ai_active_scope(cx);
         let palette = self.theme_palette();
         let enabled = self.ai.settings_config().enabled;
         let agent_mode = self.ai.chat_run_mode() == AiMode::Agent;
@@ -2380,6 +2490,7 @@ impl NyaTermApp {
         let (viewport_width, viewport_height) = self.shell.viewport_size();
 
         AiPanelSnapshot {
+            index: Arc::default(),
             native_run,
             native_answer_inputs,
             ui_font_family: if self.settings.summary().ui_font_family.trim().is_empty() {
@@ -2511,6 +2622,7 @@ impl NyaTermApp {
                 .and_then(|id| self.session.metadata(id))
                 .and_then(|metadata| metadata.source_connection_id.clone()),
             history_pending: self.ai.history_is_pending(),
+            history_error: self.ai.history_error().map(str::to_string),
             history_actions_disabled: self.ai.history_actions_are_disabled(),
             execution_menu_open: self.ai.panel_execution_menu_is_open(),
             command_execution_mode: self
@@ -2639,6 +2751,7 @@ fn ai_model_provider_badge(
 
 #[cfg(test)]
 mod tests {
+    mod history_and_streaming;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::Instant;
@@ -3113,6 +3226,7 @@ mod tests {
     }
     struct CompactAiHost {
         panel: Entity<AiPanel>,
+        height: f32,
     }
 
     impl Render for CompactAiHost {
@@ -3121,7 +3235,10 @@ mod tests {
             _: &mut gpui::Window,
             _: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
-            div().w(px(320.)).h(px(800.)).child(self.panel.clone())
+            div()
+                .w(px(320.))
+                .h(px(self.height))
+                .child(self.panel.clone())
         }
     }
 
@@ -3150,7 +3267,10 @@ mod tests {
             app.flush_ai_panel_snapshot(cx);
         });
         let panel = app.read_with(cx, |app, _| app.ai_panel.clone());
-        let (_, vcx) = cx.add_window_view(move |_, _| CompactAiHost { panel });
+        let (_, vcx) = cx.add_window_view(move |_, _| CompactAiHost {
+            panel,
+            height: 800.,
+        });
         let vcx: &mut VisualTestContext = vcx;
         compact_draw(&app, vcx);
         (app, vcx)

@@ -11,9 +11,7 @@ use gpui::{
 };
 use nyaterm_core::{AgentCommandExecutionMode, truncate_preview};
 
-use crate::features::{
-    NyaTermApp, text_inputs::TextInputSetup, view_widgets::panel_header_with_actions,
-};
+use crate::features::{NyaTermApp, view_widgets::panel_header_with_actions};
 use crate::models::{
     ActivityBarZone, MainMode, NavItem, NetworkTab, PanelOpenMode, PanelSide, RightFocus,
     SecurityAuthTab, SettingsTab,
@@ -818,23 +816,7 @@ impl NyaTermApp {
                             t!("ai.history"),
                             true,
                             cx.listener(|this, _, window, cx| {
-                                if this.ai.toggle_history() {
-                                    this.refresh_ai_session_list(cx);
-                                    let query = this.ai.history_query().to_string();
-                                    this.reset_text_input("ai.history-search", &query, cx);
-                                    let field = this.text_input(
-                                        "ai.history-search",
-                                        &query,
-                                        TextInputSetup::placeholder(t!(
-                                            "ai.historySearchPlaceholder"
-                                        )),
-                                        cx,
-                                    );
-                                    window.focus(&field.read(cx).focus_handle(), cx);
-                                } else {
-                                    this.forget_text_inputs("ai.history-search");
-                                }
-                                this.defer_ai_panel_snapshot_flush(cx);
+                                this.toggle_ai_history(window, cx);
                             }),
                         ))
                         .child(header_svg_icon_button(
@@ -1145,8 +1127,10 @@ fn header_svg_icon_button_with_color(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let tooltip = tooltip.into();
+    let id = id.into();
     div()
-        .id(SharedString::from(id.into()))
+        .id(SharedString::from(id.clone()))
+        .debug_selector(move || id.clone())
         .size(px(28.))
         .flex()
         .items_center()

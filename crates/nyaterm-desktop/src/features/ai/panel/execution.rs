@@ -13,7 +13,7 @@ use crate::features::ai::panel::messages::disclosure;
 use crate::features::ai::panel::transcript::AiTranscriptRow;
 use crate::features::ai::panel::{AiPanel, AiPanelSnapshot};
 use crate::features::ai::presentation::{AiAgentStepKind, AiResponsePhase};
-use crate::features::formatting::extract_think_content;
+use crate::features::formatting::markdown::think_content_presence;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AiExecutionGroup {
@@ -32,6 +32,23 @@ impl AiExecutionGroup {
             .map(|(index, message)| (message.id.as_str(), index))
             .collect();
         let mut groups = Vec::new();
+        let mut steps_by_message: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (position, presentation) in snapshot.agent_steps.iter().enumerate() {
+            let step = &presentation.step;
+            let source = step
+                .source_message_id
+                .as_deref()
+                .filter(|id| indices.contains_key(id))
+                .or_else(|| {
+                    snapshot
+                        .step_is_active(step.step_index)
+                        .then_some(snapshot.streaming_assistant_id.as_deref())
+                        .flatten()
+                });
+            if let Some(index) = source.and_then(|id| indices.get(id)) {
+                steps_by_message.entry(*index).or_default().push(position);
+            }
+        }
         let mut start = 0;
         let mut owner = None;
         for end in 0..=snapshot.messages.len() {
@@ -40,29 +57,11 @@ impl AiExecutionGroup {
                 continue;
             }
             let range = start..end;
-            let steps: Vec<usize> = snapshot
-                .agent_steps
-                .iter()
-                .enumerate()
-                .filter_map(|(index, presentation)| {
-                    let step = &presentation.step;
-                    let source = step
-                        .source_message_id
-                        .as_deref()
-                        .filter(|id| indices.contains_key(id))
-                        .or_else(|| {
-                            if snapshot.step_is_active(step.step_index) {
-                                snapshot.streaming_assistant_id.as_deref()
-                            } else {
-                                None
-                            }
-                        });
-                    source
-                        .and_then(|id| indices.get(id))
-                        .filter(|index| range.contains(*index))
-                        .map(|_| index)
-                })
+            let mut steps: Vec<usize> = range
+                .clone()
+                .flat_map(|index| steps_by_message.get(&index).into_iter().flatten().copied())
                 .collect();
+            steps.sort_unstable();
             let has_execution = snapshot.messages[range.clone()].iter().any(|message| {
                 message.role == AiMessageRole::Assistant
                     && message.command_cards.iter().any(|card| {
@@ -83,7 +82,7 @@ impl AiExecutionGroup {
                     .find(|index| {
                         let message = &snapshot.messages[*index];
                         message.role == AiMessageRole::Assistant
-                            && !extract_think_content(&message.content).0.trim().is_empty()
+                            && think_content_presence(&message.content).0
                     })
                     .filter(|index| {
                         let message = &snapshot.messages[*index];

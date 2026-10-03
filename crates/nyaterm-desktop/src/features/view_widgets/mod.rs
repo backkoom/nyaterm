@@ -32,5 +32,5 @@ pub(in crate::features) use icons::{
     nyaterm_app_icon, nyaterm_logo_mark, themed_icon, transfer_entry_icon,
 };
 
-mod markdown;
-pub(in crate::features) use markdown::{markdown_answer_view, markdown_content_view};
+pub(in crate::features) mod markdown;
+pub(in crate::features) use markdown::markdown_content_view;
