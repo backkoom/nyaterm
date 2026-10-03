@@ -10,6 +10,9 @@ import { activeManifest, parsePluginPanelId, pluginApi } from "@/lib/plugins";
 import type { PluginScope } from "@/types/plugins";
 
 const THEME_VARIABLES = [
+  "--font-sans",
+  "--font-display",
+  "--font-mono",
   "--background",
   "--foreground",
   "--primary",

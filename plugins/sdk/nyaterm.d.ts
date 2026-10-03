@@ -9,6 +9,7 @@ type NyaTermJson =
 interface NyaTermPluginContext {
   pluginId: string;
   version: string;
+  /** Host CSS variables, including --font-sans, --font-display and --font-mono. */
   theme: Record<string, string>;
   language?: string;
   monitorIntervalSeconds?: number;

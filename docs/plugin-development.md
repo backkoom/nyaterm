@@ -25,6 +25,18 @@ Rust 模板还包含编译脚本，编译后自动填入当前平台的可执行
 将生成的 `.nyap` 安装到插件面板，检查权限并启用。UI 模板需先选中已连接终端；
 Rust 模板可以打开界面点击运行，也可以直接执行插件卡片上的原生命令。
 
+## 页面字体
+
+宿主会将应用的界面字体栈通过 `NyaTerm.context.theme` 中的 `--font-sans`、
+`--font-display` 同步到插件页面；修改设置时，已打开的页面也会收到更新，无需重载。
+`--font-mono` 提供宿主的默认等宽字体栈。SDK 默认使用界面字体，表单控件继承字体；
+插件自定义 CSS 应使用 `font-family: var(--font-sans, system-ui, sans-serif)`，
+代码区域可使用 `var(--font-mono, monospace)`，避免写死 `system-ui`。
+
+iframe 可以使用系统安装的字体，但不会继承主界面的 `@font-face`。
+若使用未安装到系统的内置字体或其他 Web 字体，需要在插件包内提供字体文件并声明
+`@font-face`。已有插件若写死字体，需要修改 CSS 并重新打包安装。
+
 ## 编写 Rust 后台
 
 入口实现 `Plugin`，由 `Server::from_env()` 启动服务。SDK 负责握手、传输、

@@ -1,6 +1,14 @@
 /* NyaTerm Plugin UI SDK v1. Include this as a classic script before plugin code. */
 (() => {
   "use strict";
+  // A sandboxed document cannot inherit typography from the host. Keep these
+  // defaults easy for plugin styles to override, including code/monospace text.
+  const typography = document.createElement("style");
+  typography.textContent = `
+    :where(html) { font-family: var(--font-sans, system-ui, sans-serif); }
+    :where(button, input, select, textarea) { font-family: inherit; }
+  `;
+  document.head.prepend(typography);
   const pending = new Map();
   const contextListeners = new Set();
   const monitors = new Map();

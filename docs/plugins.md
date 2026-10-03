@@ -194,7 +194,16 @@ must match exactly; no wildcards, paths or implicit subdomain grants.
 
 `NyaTerm.context` contains plugin identity/version and CSS theme variables;
 `NyaTerm.onContextChange(listener)` returns an unsubscribe function. Theme variables
-are applied to the iframe document automatically. This context contains no scope
+are applied to the iframe document automatically, including `--font-sans` and
+`--font-display` (the configured UI font stack) and `--font-mono`. Font changes
+are pushed to open panels without reloading them. The SDK defaults to the UI font
+and makes form controls inherit it; plugin styles should use
+`font-family: var(--font-sans, system-ui, sans-serif)` instead of a fixed family.
+Use `var(--font-mono, monospace)` for code. System-installed fonts are available
+inside the iframe, but the host's `@font-face` declarations are not inherited;
+package any required web fonts with the plugin and declare them in its CSS.
+Existing packages with a fixed font family need to update their CSS and be rebuilt.
+This context contains no scope
 token. Tokens are managed by the parent bridge. Scopes expire after 30 minutes;
 open panels renew at 25 minutes by recreating their document. Preserve needed
 nonsecret preferences in plugin storage.
