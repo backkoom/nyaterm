@@ -147,6 +147,7 @@ pub(in crate::features) struct TransferBrowserView<'a> {
     pub context_target: &'a TransferBrowserContextTarget,
     pub favorites_menu: &'a Option<TransferBrowserFavoritesMenuState>,
     pub path_menu: &'a Option<TransferBrowserPathMenuState>,
+    pub path_menu_scroll: &'a ScrollHandle,
     pub upload_menu: &'a Option<TransferBrowserUploadMenuState>,
     pub focus: &'a FocusHandle,
 }
@@ -196,6 +197,7 @@ pub(super) struct TransferBrowserState {
     pub(super) pending_rename_token: u64,
     pub(super) favorites_menu: Option<TransferBrowserFavoritesMenuState>,
     pub(super) path_menu: Option<TransferBrowserPathMenuState>,
+    pub(super) path_menu_scroll: ScrollHandle,
     pub(super) upload_menu: Option<TransferBrowserUploadMenuState>,
     pub(super) focus: FocusHandle,
 }
@@ -365,6 +367,7 @@ impl TransferFeatureState {
                 pending_rename_token: 0,
                 favorites_menu: None,
                 path_menu: None,
+                path_menu_scroll: ScrollHandle::default(),
                 upload_menu: None,
                 focus: focus.browser,
             },

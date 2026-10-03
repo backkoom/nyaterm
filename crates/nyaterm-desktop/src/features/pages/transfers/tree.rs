@@ -29,7 +29,7 @@ pub(super) fn transfer_tree_view(
         .track_focus(&snapshot.browser.tree_focus)
         .on_key_down(cx.listener(|panel, event: &KeyDownEvent, window, cx| {
             panel.with_app(cx, |app, cx| {
-                app.handle_transfer_tree_key_down(event, window, cx)
+                app.handle_transfer_browser_key_down(event, window, cx)
             });
         }))
         .child(

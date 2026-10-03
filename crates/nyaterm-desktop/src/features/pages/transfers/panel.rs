@@ -47,6 +47,7 @@ pub(in crate::features) struct TransferBrowserPresentation {
     pub path: String,
     pub home_dir: String,
     pub path_editing: bool,
+    pub expanded_children_path: Option<String>,
     /// The filtered, sorted listing straight from the state's memo. A progress batch
     /// leaves the memo alone, so this is a refcount bump on the hot path.
     pub visible_entries: Arc<[SftpFileEntry]>,
@@ -315,15 +316,35 @@ mod tests {
             _window: &mut gpui::Window,
             cx: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
-            div().w(px(320.)).h(px(720.)).flex().flex_col().child(
-                div().flex_1().min_h_0().overflow_hidden().child(
-                    self.app
-                        .read(cx)
-                        .transfer_panel
-                        .clone()
-                        .cached(crate::features::layout::cached_panel_style()),
-                ),
-            )
+            let overlay = self
+                .app
+                .read(cx)
+                .transfer
+                .browser_view()
+                .path_menu
+                .is_some()
+                .then(|| {
+                    self.app.update(cx, |app, cx| {
+                        app.transfer_browser_path_menu_overlay(cx)
+                            .into_any_element()
+                    })
+                });
+            div()
+                .relative()
+                .w(px(320.))
+                .h(px(720.))
+                .flex()
+                .flex_col()
+                .child(
+                    div().flex_1().min_h_0().overflow_hidden().child(
+                        self.app
+                            .read(cx)
+                            .transfer_panel
+                            .clone()
+                            .cached(crate::features::layout::cached_panel_style()),
+                    ),
+                )
+                .children(overlay)
         }
     }
 
@@ -338,7 +359,10 @@ mod tests {
             app.flush_transfer_panel_snapshot(cx);
         });
         let host_app = app.clone();
-        let (_, vcx) = cx.add_window_view(move |_, _| AppHost { app: host_app });
+        let (_, vcx) = cx.add_window_view(move |window, cx| {
+            let host = cx.new(|_| AppHost { app: host_app });
+            nyaterm_ui::nya_root(host, window, cx)
+        });
         let vcx: &mut VisualTestContext = vcx;
         vcx.run_until_parked();
         for _ in 0..3 {
@@ -349,6 +373,408 @@ mod tests {
             vcx.run_until_parked();
         }
         (app, vcx)
+    }
+
+    fn hosted_file_browser<'a>(
+        cx: &'a mut TestAppContext,
+        root: &Path,
+    ) -> (Entity<NyaTermApp>, &'a mut VisualTestContext) {
+        let (app, vcx) = hosted(cx, root);
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.session.register_session_metadata(
+                    "path-test",
+                    crate::models::SessionRuntimeMetadata {
+                        ssh_config: None,
+                        ssh_multiplex_key: None,
+                        source_connection_id: None,
+                        ai_execution_profile: nyaterm_core::AiExecutionProfile::Posix,
+                        launch_config: crate::models::SessionLaunchConfig::Local(
+                            nyaterm_transport::LocalSessionConfig::default(),
+                        ),
+                        disconnected: false,
+                    },
+                );
+                app.session.select_active_session("path-test");
+                app.start_transfer_event_drain(cx);
+                app.transfer.store_browser_session_cache(
+                    "path-test".to_string(),
+                    crate::models::TransferBrowserSessionCacheState {
+                        entries: std::sync::Arc::new(Vec::new()),
+                        current_path: "/remote".to_string(),
+                        current_raw_path_token: None,
+                        home_dir: root.display().to_string(),
+                        history: std::collections::VecDeque::from(["/remote".to_string()]),
+                        history_index: 0,
+                        visited_history: std::collections::VecDeque::from(["/history".to_string()]),
+                    },
+                );
+                app.restore_transfer_browser_session_cache("path-test", cx);
+                app.flush_transfer_panel_snapshot(cx);
+            });
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        (app, vcx)
+    }
+
+    #[test]
+    fn path_edit_button_builds_a_focused_selected_input_and_preserves_editing_shortcuts() {
+        let test_dir = TestConfigDir::new("nyaterm-path-edit");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let button = vcx
+            .debug_bounds("transfer-browser-path-edit")
+            .expect("edit button");
+        vcx.simulate_click(button.center(), Modifiers::none());
+        draw_path_fixture(vcx);
+        vcx.update(|window, cx| {
+            let app = app.read(cx);
+            let snapshot = app.transfer_panel.read(cx).snapshot().unwrap();
+            let field = snapshot
+                .browser
+                .path_field
+                .as_ref()
+                .expect("snapshot must carry the path input");
+            assert!(snapshot.browser.path_editing);
+            assert_eq!(field.read(cx).value(cx), "/remote");
+            assert!(field.read(cx).component_focus_handle(cx).is_focused(window));
+            let input = field.read(cx).component_state().unwrap();
+            assert_eq!(input.read(cx).selected_range(), 0..7);
+        });
+        let bounds = vcx
+            .debug_bounds("transfer-path-bar-input-shell")
+            .expect("path input renders");
+        assert!(bounds.size.width > px(0.));
+        assert!(bounds.size.height > px(0.));
+        vcx.simulate_input("/中文 folder");
+        vcx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).transfer.browser_view().path_draft,
+                "/中文 folder"
+            );
+            assert!(app.read(cx).transfer.browser_view().search.is_empty());
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("/pasted path".to_string()));
+        });
+        vcx.dispatch_action(nyaterm_ui::NyaSelectAll);
+        vcx.dispatch_action(nyaterm_ui::NyaPaste);
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).transfer.browser_view().path_draft,
+                "/pasted path"
+            );
+            assert!(app.read(cx).transfer.browser_view().search.is_empty());
+        });
+        vcx.simulate_keystrokes("escape");
+        vcx.update(|window, cx| {
+            let app = app.read(cx);
+            assert!(!app.transfer.browser_view().path_editing);
+            assert_eq!(app.transfer.browser_view().path, "/remote");
+            assert!(app.existing_text_input("transfer.browser.path").is_none());
+            assert!(app.transfer.browser_view().focus.is_focused(window));
+        });
+    }
+
+    #[test]
+    fn path_edit_shortcut_and_focus_restore_work_in_both_browser_views() {
+        let test_dir = TestConfigDir::new("nyaterm-path-shortcut");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        for mode in [
+            nyaterm_core::TransferBrowserViewMode::List,
+            nyaterm_core::TransferBrowserViewMode::Tree,
+        ] {
+            vcx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let mut settings = app.settings.summary().clone();
+                    settings.ui_file_explorer_view_mode = mode;
+                    app.settings.replace_summary(settings);
+                    app.flush_transfer_panel_snapshot(cx);
+                    let focus = if mode == nyaterm_core::TransferBrowserViewMode::Tree {
+                        app.transfer.tree_focus()
+                    } else {
+                        app.transfer.browser_view().focus
+                    };
+                    window.focus(focus, cx);
+                });
+                _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+            vcx.simulate_keystrokes("ctrl-l");
+            draw_path_fixture(vcx);
+            vcx.update(|_, cx| assert!(app.read(cx).transfer.browser_view().path_editing));
+            assert!(
+                vcx.debug_bounds("transfer-path-bar-input-shell").is_some(),
+                "path input must render in {mode:?}"
+            );
+            vcx.update(|window, cx| {
+                let field = app
+                    .read(cx)
+                    .existing_text_input("transfer.browser.path")
+                    .unwrap();
+                assert!(
+                    field.read(cx).component_focus_handle(cx).is_focused(window),
+                    "path focus in {mode:?}"
+                );
+            });
+            vcx.simulate_keystrokes("escape");
+            vcx.update(|window, cx| {
+                let app = app.read(cx);
+                assert!(
+                    !app.transfer.browser_view().path_editing,
+                    "Escape must cancel in {mode:?}"
+                );
+                let focus = if mode == nyaterm_core::TransferBrowserViewMode::Tree {
+                    app.transfer.tree_focus()
+                } else {
+                    app.transfer.browser_view().focus
+                };
+                assert!(focus.is_focused(window));
+            });
+        }
+    }
+
+    #[test]
+    fn blank_path_stays_in_edit_mode_and_clicking_outside_cancels() {
+        let test_dir = TestConfigDir::new("nyaterm-path-empty");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let display = vcx
+            .debug_bounds("transfer-browser-path-display")
+            .expect("path display");
+        vcx.simulate_click(
+            gpui::point(display.right() - px(2.), display.center().y),
+            Modifiers::none(),
+        );
+        draw_path_fixture(vcx);
+        vcx.simulate_input("   ");
+        vcx.simulate_keystrokes("enter");
+        vcx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(app.transfer.browser_view().path_editing);
+            assert_eq!(app.transfer.browser_view().path, "/remote");
+        });
+        vcx.simulate_click(gpui::point(px(10.), px(600.)), Modifiers::none());
+        vcx.update(|_, cx| assert!(!app.read(cx).transfer.browser_view().path_editing));
+    }
+
+    #[test]
+    fn path_history_click_navigates_and_enter_restores_a_directory_after_failure() {
+        let test_dir = TestConfigDir::new("nyaterm-path-navigation");
+        std::fs::create_dir_all(test_dir.path()).unwrap();
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let open_editor = |vcx: &mut VisualTestContext| {
+            let button = vcx
+                .debug_bounds("transfer-browser-path-edit")
+                .expect("edit button");
+            vcx.simulate_click(button.center(), Modifiers::none());
+            draw_path_fixture(vcx);
+        };
+        open_editor(vcx);
+        let history = vcx
+            .debug_bounds("transfer-browser-path-history-list")
+            .expect("history");
+        vcx.simulate_click(history.center(), Modifiers::none());
+        vcx.update(|_, cx| {
+            assert!(!app.read(cx).transfer.browser_view().path_editing);
+            assert!(
+                app.read(cx)
+                    .existing_text_input("transfer.browser.path")
+                    .is_none()
+            );
+            assert!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .visited_history
+                    .iter()
+                    .any(|path| path == "/history")
+            );
+        });
+        wait_for_browser(vcx, &app);
+        open_editor(vcx);
+        let target = test_dir.path().display().to_string();
+        vcx.simulate_input(&target);
+        vcx.simulate_keystrokes("enter");
+        wait_for_browser(vcx, &app);
+        vcx.update(|window, cx| {
+            let app = app.read(cx);
+            assert!(!app.transfer.browser_view().path_editing);
+            assert_eq!(app.transfer.browser_view().path, &target);
+            assert!(app.transfer.browser_view().focus.is_focused(window));
+        });
+        open_editor(vcx);
+        vcx.simulate_input(&test_dir.path().join("does-not-exist").display().to_string());
+        vcx.simulate_keystrokes("enter");
+        wait_for_browser(vcx, &app);
+        vcx.update(|_, cx| assert_eq!(app.read(cx).transfer.browser_view().path, &target));
+    }
+
+    fn wait_for_browser(vcx: &mut VisualTestContext, app: &Entity<NyaTermApp>) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            vcx.run_until_parked();
+            if vcx.update(|_, cx| !app.read(cx).transfer.browser_view().loading) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "directory listing timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+    }
+
+    fn draw_path_fixture(vcx: &mut VisualTestContext) {
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+    }
+
+    #[test]
+    fn path_menu_scrolls_to_the_last_directory_and_resets_when_reopened() {
+        use crate::models::{
+            TransferBrowserChildrenMenuStatus, TransferBrowserPathMenuKind,
+            TransferBrowserPathMenuState,
+        };
+        let test_dir = TestConfigDir::new("nyaterm-path-scroll");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let entries = (0..80)
+            .map(|index| {
+                let mut entry = super::super::tests_support::browser_entry(index);
+                entry.file_type = nyaterm_transport::SftpFileType::Directory;
+                entry
+            })
+            .collect::<Vec<_>>();
+        let menu = TransferBrowserPathMenuState {
+            session_id: Some("path-test".to_string()),
+            x: px(20.),
+            y: px(100.),
+            kind: TransferBrowserPathMenuKind::Children {
+                path: "/remote".to_string(),
+                branch_child_path: None,
+                request_id: None,
+                status: TransferBrowserChildrenMenuStatus::Ready(entries),
+            },
+        };
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.transfer.open_browser_path_menu(menu.clone());
+                app.flush_transfer_panel_snapshot(cx);
+                cx.notify();
+            });
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        let viewport = vcx
+            .debug_bounds("transfer-browser-path-menu-scroll")
+            .expect("scroll viewport");
+        assert!(viewport.size.height <= px(324.));
+        assert!(viewport.size.height > px(300.));
+        vcx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx)
+                    .transfer_panel
+                    .read(cx)
+                    .snapshot()
+                    .unwrap()
+                    .browser
+                    .expanded_children_path
+                    .as_deref(),
+                Some("/remote")
+            )
+        });
+        vcx.simulate_event(gpui::ScrollWheelEvent {
+            position: viewport.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
+            modifiers: Modifiers::none(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        let last = vcx
+            .debug_bounds("transfer-browser-path-menu-entry-/remote/entry-0079")
+            .expect("last directory");
+        assert!(last.bottom() <= viewport.bottom() + px(1.));
+        assert!(last.top() >= viewport.top());
+        assert_eq!(last.size.height, px(28.));
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.transfer.browser_view().path_menu_scroll.offset().y < px(0.));
+                app.transfer.open_browser_path_menu(menu.clone());
+                assert_eq!(
+                    app.transfer.browser_view().path_menu_scroll.offset().y,
+                    px(0.)
+                );
+                app.flush_transfer_panel_snapshot(cx);
+                cx.notify();
+            });
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        // Exercise the scrollbar overlay independently of wheel scrolling.
+        vcx.simulate_mouse_move(viewport.center(), None, Modifiers::none());
+        draw_path_fixture(vcx);
+        let thumb_start = gpui::point(viewport.right() - px(5.), viewport.top() + px(16.));
+        let thumb_end = gpui::point(thumb_start.x, viewport.bottom() - px(4.));
+        vcx.simulate_mouse_down(thumb_start, MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_move(thumb_end, MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_up(thumb_end, MouseButton::Left, Modifiers::none());
+        draw_path_fixture(vcx);
+        vcx.update(|_, cx| {
+            assert!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .path_menu_scroll
+                    .offset()
+                    .y
+                    < px(-1_000.)
+            );
+        });
+        vcx.simulate_click(gpui::point(px(5.), px(5.)), Modifiers::none());
+        vcx.update(|_, cx| {
+            assert!(
+                app.read(cx)
+                    .transfer_panel
+                    .read(cx)
+                    .snapshot()
+                    .unwrap()
+                    .browser
+                    .expanded_children_path
+                    .is_none()
+            )
+        });
+        for count in [2, 80] {
+            vcx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let mut overflow = menu.clone();
+                    overflow.kind = TransferBrowserPathMenuKind::Overflow {
+                        segments: (0..count)
+                            .map(|index| crate::models::TransferBrowserBreadcrumbSegment {
+                                label: format!("dir-{index}"),
+                                path: format!("/dir-{index}"),
+                            })
+                            .collect(),
+                    };
+                    app.transfer.open_browser_path_menu(overflow);
+                    app.flush_transfer_panel_snapshot(cx);
+                    cx.notify();
+                });
+                _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+            let bounds = vcx.debug_bounds("transfer-browser-path-menu").unwrap();
+            assert_eq!(bounds.size.height, px(if count == 2 { 72. } else { 324. }));
+        }
     }
 
     #[test]

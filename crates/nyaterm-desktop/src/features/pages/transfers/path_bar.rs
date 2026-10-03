@@ -58,6 +58,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
             let focus = field.read(cx).focus_handle();
             div()
                 .id("transfer-path-bar-input-shell")
+                .debug_selector(|| "transfer-path-bar-input-shell".to_string())
                 .h(px(metrics.control_height))
                 .min_w_0()
                 .flex_1()
@@ -81,8 +82,8 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                 .into_any_element()
         });
     let breadcrumbs = build_transfer_browser_breadcrumbs(&current_browser_path, &browser.home_dir);
-    // Shell padding, row gap, favorite margin and the favorite button.
-    let breadcrumb_width = (chrome.panel_width - 28. - metrics.control_height).max(0.);
+    // Shell padding, gaps, and the edit and favorite buttons.
+    let breadcrumb_width = (chrome.panel_width - 32. - metrics.control_height * 2.).max(0.);
     let (visible_breadcrumbs, overflow_breadcrumbs) =
         collapse_transfer_browser_breadcrumbs(&breadcrumbs, breadcrumb_width, metrics);
 
@@ -116,22 +117,24 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                             .flex()
                             .items_center()
                             .font_family(crate::features::shell::gpui_code_font_family())
-                            .on_key_down(cx.listener(|panel, event: &KeyDownEvent, window, cx| {
-                                panel.with_app(cx, |this, cx| {
-                                    this.mark_user_activity();
-                                    match event.keystroke.key.as_str() {
-                                        "enter" => {
-                                            cx.stop_propagation();
-                                            this.submit_transfer_browser_path_edit(window, cx);
+                            .capture_key_down(cx.listener(
+                                |panel, event: &KeyDownEvent, window, cx| {
+                                    panel.with_app(cx, |this, cx| {
+                                        this.mark_user_activity();
+                                        match event.keystroke.key.as_str() {
+                                            "enter" => {
+                                                cx.stop_propagation();
+                                                this.submit_transfer_browser_path_edit(window, cx);
+                                            }
+                                            "escape" => {
+                                                cx.stop_propagation();
+                                                this.cancel_transfer_browser_path_edit(window, cx);
+                                            }
+                                            _ => {}
                                         }
-                                        "escape" => {
-                                            cx.stop_propagation();
-                                            this.cancel_transfer_browser_path_edit(cx);
-                                        }
-                                        _ => {}
-                                    }
-                                })
-                            }))
+                                    })
+                                },
+                            ))
                             .children(path_input),
                     )
                 })
@@ -141,6 +144,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                             palette,
                             display_path: display_browser_path.clone(),
                             current_path: current_browser_path.clone(),
+                            expanded_children_path: browser.expanded_children_path.clone(),
                             all_segments: breadcrumbs.clone(),
                             visible_segments: visible_breadcrumbs.clone(),
                             overflow_segments: overflow_breadcrumbs.clone(),
@@ -150,6 +154,37 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                         },
                         cx,
                     ))
+                })
+                .when(!browser.path_editing, |this| {
+                    this.child(
+                        div()
+                            .id("transfer-browser-path-edit")
+                            .debug_selector(|| "transfer-browser-path-edit".to_string())
+                            .size(px(metrics.control_height))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .hover(|this| this.bg(rgb(palette.surface_elevated)))
+                            .tooltip(|window, cx| {
+                                nyaterm_ui::NyaTooltip::new(t!("fileExplorer.editPath"))
+                                    .build(window, cx)
+                            })
+                            .on_click(cx.listener(|panel, _, window, cx| {
+                                cx.stop_propagation();
+                                panel.with_app(cx, |this, cx| {
+                                    this.begin_transfer_browser_path_edit(window, cx);
+                                });
+                            }))
+                            .child(
+                                svg()
+                                    .size(px(14.))
+                                    .path("icons/edit.svg")
+                                    .text_color(rgb(palette.text_muted)),
+                            ),
+                    )
                 })
                 .child(
                     div()
@@ -204,24 +239,45 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                         ),
                 ),
         )
-        .when(browser.path_editing && !history_paths.is_empty(), |this| {
+        .when(browser.path_editing, |this| {
             this.child(
                 deferred(
                     div()
                         .absolute()
-                        .top(px(metrics.row_height()))
+                        .top_0()
                         .left_0()
                         .right_0()
-                        .occlude()
-                        .child(transfer_browser_path_history_list(
-                            palette,
-                            chrome.surface,
-                            current_browser_path,
-                            browser.home_dir.clone(),
-                            history_paths,
-                            metrics,
-                            cx,
-                        )),
+                        // Include the history popup in the outside-click boundary.
+                        .h(px(metrics.row_height()
+                            + if history_paths.is_empty() {
+                                0.
+                            } else {
+                                metrics.control_height * history_paths.len() as f32 + 3.
+                            }))
+                        .on_mouse_down_out(cx.listener(|panel, _, window, cx| {
+                            panel.with_app(cx, |this, cx| {
+                                this.cancel_transfer_browser_path_edit(window, cx);
+                            });
+                        }))
+                        .when(!history_paths.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .absolute()
+                                    .top(px(metrics.row_height()))
+                                    .left_0()
+                                    .right_0()
+                                    .occlude()
+                                    .child(transfer_browser_path_history_list(
+                                        palette,
+                                        chrome.surface,
+                                        current_browser_path,
+                                        browser.home_dir.clone(),
+                                        history_paths,
+                                        metrics,
+                                        cx,
+                                    )),
+                            )
+                        }),
                 )
                 .with_priority(1),
             )
@@ -241,6 +297,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn close_transfer_browser_path_menu(&mut self, cx: &mut Context<Self>) {
         self.transfer.close_browser_path_menu();
+        self.defer_transfer_panel_snapshot_flush(cx);
         cx.notify();
     }
 
@@ -330,12 +387,17 @@ impl NyaTermApp {
             TransferBrowserPathMenuKind::Overflow { segments } => 16. + segments.len() as f32 * 28.,
             TransferBrowserPathMenuKind::Children { status, .. } => match status {
                 TransferBrowserChildrenMenuStatus::Ready(entries) => {
-                    16. + entries.len().min(11) as f32 * 28.
+                    if entries.is_empty() {
+                        56.
+                    } else {
+                        16. + entries.len() as f32 * 28.
+                    }
                 }
                 TransferBrowserChildrenMenuStatus::Loading => 56.,
                 TransferBrowserChildrenMenuStatus::Error(_) => 112.,
             },
         };
+        let preferred_height = preferred_height.min(324.);
         let (viewport_w, viewport_h) = self.shell.viewport_size();
         let (menu_x, menu_y, menu_max_height) = transfer_menu_position(
             f32::from(menu.x),
@@ -345,6 +407,8 @@ impl NyaTermApp {
             viewport_w,
             viewport_h,
         );
+        let menu_height = preferred_height.min(menu_max_height);
+        let scroll = self.transfer.browser_view().path_menu_scroll.clone();
 
         let content = match menu.kind {
             TransferBrowserPathMenuKind::Overflow { segments } => {
@@ -438,10 +502,12 @@ impl NyaTermApp {
             .child(
                 div()
                     .id(SharedString::from("transfer-browser-path-menu"))
+                    .debug_selector(|| "transfer-browser-path-menu".to_string())
                     .absolute()
                     .top(px(menu_y))
                     .left(px(menu_x))
                     .w(px(280.))
+                    .h(px(menu_height))
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
@@ -450,11 +516,15 @@ impl NyaTermApp {
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
-                            .max_h(px(menu_max_height.min(324.)))
-                            .overflow_y_scrollbar()
+                            .id("transfer-browser-path-menu-scroll")
+                            .debug_selector(|| "transfer-browser-path-menu-scroll".to_string())
+                            .h_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&scroll)
                             .p_1()
                             .child(content),
-                    ),
+                    )
+                    .vertical_scrollbar(&scroll),
             )
     }
 
@@ -485,23 +555,46 @@ impl NyaTermApp {
     ) {
         let path = normalized_transfer_browser_path(self.transfer.browser_view().path);
         self.transfer.begin_browser_path_edit(path);
-        self.forget_text_inputs("transfer.self.transfer.browser_view().path");
+        self.forget_text_inputs("transfer.browser.path");
         self.start_transfer_browser_home_dir_job(cx);
         let field = self.text_input(
-            "transfer.self.transfer.browser_view().path",
+            "transfer.browser.path",
             &self.transfer.browser_view().path_draft.clone(),
             TextInputSetup::placeholder(t!("fileExplorer.editPath")),
             cx,
         );
         window.focus(&field.read(cx).focus_handle(), cx);
-        field.update(cx, |field, cx| field.select_all(window, cx));
+        // The input is not in the window's dispatch tree until the next paint.
+        // Set its selection directly instead of dispatching SelectAll too early.
+        field.update(cx, |field, cx| {
+            field.select_all_with_cursor_at_end(window, cx)
+        });
         cx.notify();
     }
 
-    pub(super) fn cancel_transfer_browser_path_edit(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn cancel_transfer_browser_path_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.transfer.browser_view().path_editing {
+            return;
+        }
         self.transfer.cancel_browser_path_edit();
-        self.forget_text_inputs("transfer.self.transfer.browser_view().path");
+        self.forget_text_inputs("transfer.browser.path");
+        self.focus_transfer_browser_after_path_edit(window, cx);
         cx.notify();
+    }
+
+    fn focus_transfer_browser_after_path_edit(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let focus = if self.settings.summary().ui_file_explorer_view_mode
+            == nyaterm_core::TransferBrowserViewMode::Tree
+        {
+            self.transfer.tree_focus()
+        } else {
+            self.transfer.browser_view().focus
+        };
+        window.focus(focus, cx);
     }
 
     pub(in crate::features) fn apply_transfer_browser_path_input(
@@ -522,17 +615,17 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let path = expand_transfer_browser_home_path(
-            self.transfer.browser_view().path_draft,
-            self.transfer.browser_view().home_dir,
-        );
-        if path.is_empty() {
+        if self.transfer.browser_view().path_draft.trim().is_empty() {
             self.transfer
                 .set_browser_status("enter a remote directory path");
             cx.notify();
             return;
         }
-        if path == "~" || path.starts_with("~/") {
+        let path = expand_transfer_browser_home_path(
+            self.transfer.browser_view().path_draft,
+            self.transfer.browser_view().home_dir,
+        );
+        if path == "~" || path.starts_with("~/") || path.starts_with("~\\") {
             let status = if self.transfer.browser_view().home_dir_pending {
                 "remote home is still resolving".to_string()
             } else {
@@ -543,8 +636,9 @@ impl NyaTermApp {
             return;
         }
         self.transfer.finish_browser_path_edit();
-        self.forget_text_inputs("transfer.self.transfer.browser_view().path");
+        self.forget_text_inputs("transfer.browser.path");
         self.open_transfer_browser_directory(path, window, cx);
+        self.focus_transfer_browser_after_path_edit(window, cx);
     }
 }
 
@@ -556,6 +650,7 @@ fn transfer_browser_breadcrumb_row(
         palette,
         display_path,
         current_path,
+        expanded_children_path,
         all_segments,
         visible_segments,
         overflow_segments,
@@ -565,6 +660,7 @@ fn transfer_browser_breadcrumb_row(
     } = presentation;
     let mut row = div()
         .id(SharedString::from("transfer-browser-path-display"))
+        .debug_selector(|| "transfer-browser-path-display".to_string())
         .min_w_0()
         .flex_1()
         .flex()
@@ -573,6 +669,12 @@ fn transfer_browser_breadcrumb_row(
         .font_family(crate::features::shell::gpui_code_font_family())
         .text_size(px(metrics.font_size))
         .line_height(px(metrics.line_height))
+        .cursor_text()
+        .on_click(cx.listener(|panel, _, window, cx| {
+            panel.with_app(cx, |this, cx| {
+                this.begin_transfer_browser_path_edit(window, cx);
+            });
+        }))
         .tooltip(move |window, cx| {
             nyaterm_ui::NyaTooltip::new(display_path.clone()).build(window, cx)
         });
@@ -610,6 +712,7 @@ fn transfer_browser_breadcrumb_row(
                         })
                     }),
                 )
+                .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
                     svg()
                         .size(px(14.))
@@ -634,6 +737,7 @@ fn transfer_browser_breadcrumb_row(
         .clamp(16., metrics.max_label_width);
     for segment in visible_segments {
         let is_current = segment.path == current_path;
+        let is_expanded = expanded_children_path.as_deref() == Some(segment.path.as_str());
         let branch_child_path = all_segments
             .iter()
             .position(|candidate| candidate.path == segment.path)
@@ -655,6 +759,10 @@ fn transfer_browser_breadcrumb_row(
                             "transfer-browser-breadcrumb-label-{}",
                             segment.path
                         )))
+                        .debug_selector({
+                            let path = segment.path.clone();
+                            move || format!("transfer-browser-breadcrumb-label-{path}")
+                        })
                         .h(px(metrics.control_height))
                         .max_w(px(if is_current {
                             current_label_width
@@ -677,6 +785,7 @@ fn transfer_browser_breadcrumb_row(
                                 .text_color(rgb(palette.text))
                         })
                         .on_click(cx.listener(move |panel, _, window, cx| {
+                            cx.stop_propagation();
                             panel.with_app(cx, |this, cx| {
                                 if is_current {
                                     this.begin_transfer_browser_path_edit(window, cx);
@@ -697,6 +806,10 @@ fn transfer_browser_breadcrumb_row(
                             "transfer-browser-breadcrumb-children-{}",
                             segment.path
                         )))
+                        .debug_selector({
+                            let path = segment.path.clone();
+                            move || format!("transfer-browser-breadcrumb-children-{path}")
+                        })
                         .h(px(metrics.control_height))
                         .w(px(metrics.children_width))
                         .flex_none()
@@ -705,6 +818,7 @@ fn transfer_browser_breadcrumb_row(
                         .justify_center()
                         .rounded_r_sm()
                         .text_color(rgb(palette.text_muted))
+                        .when(is_expanded, |this| this.bg(rgb(palette.surface_elevated)))
                         .cursor_pointer()
                         .hover(|this| {
                             this.bg(rgb(palette.surface_elevated))
@@ -727,10 +841,15 @@ fn transfer_browser_breadcrumb_row(
                                 })
                             }),
                         )
+                        .on_click(|_, _, cx| cx.stop_propagation())
                         .child(
                             svg()
                                 .size(px(11.))
-                                .path("icons/chevron-down.svg")
+                                .path(if is_expanded {
+                                    "icons/chevron-down.svg"
+                                } else {
+                                    "icons/menu/chevron-right.svg"
+                                })
                                 .text_color(rgb(palette.text_muted)),
                         ),
                 ),
@@ -743,6 +862,7 @@ struct TransferBrowserBreadcrumbRowPresentation {
     palette: crate::theme::ThemePalette,
     display_path: String,
     current_path: String,
+    expanded_children_path: Option<String>,
     all_segments: Vec<TransferBrowserBreadcrumbSegment>,
     visible_segments: Vec<TransferBrowserBreadcrumbSegment>,
     overflow_segments: Vec<TransferBrowserBreadcrumbSegment>,
@@ -803,7 +923,12 @@ fn transfer_browser_path_menu_entries(
                     "transfer-browser-path-menu-entry-{}",
                     segment.path
                 )))
+                .debug_selector({
+                    let path = segment.path.clone();
+                    move || format!("transfer-browser-path-menu-entry-{path}")
+                })
                 .h(px(28.))
+                .flex_none()
                 .w_full()
                 .px_2()
                 .flex()
@@ -984,9 +1109,10 @@ fn transfer_browser_path_history_list(
 ) -> impl IntoElement {
     let mut list = div()
         .id(SharedString::from("transfer-browser-path-history-list"))
+        .debug_selector(|| "transfer-browser-path-history-list".to_string())
         .mt(px(1.))
-        .max_h(px(metrics.control_height * 5.))
-        .overflow_scrollbar()
+        .h(px(metrics.control_height * paths.len().min(5) as f32 + 2.))
+        .overflow_y_scrollbar()
         .rounded_b_md()
         .border_1()
         .border_color(rgb(palette.border))
@@ -1004,7 +1130,12 @@ fn transfer_browser_path_history_list(
                 .id(SharedString::from(format!(
                     "transfer-browser-path-history-{path}"
                 )))
+                .debug_selector({
+                    let path = path.clone();
+                    move || format!("transfer-browser-path-history-{path}")
+                })
                 .h(px(metrics.control_height))
+                .flex_none()
                 .w_full()
                 .px_2()
                 .flex()
@@ -1023,6 +1154,7 @@ fn transfer_browser_path_history_list(
                     panel.with_app(cx, |this, cx| {
                         this.transfer.dismiss_browser_path_edit();
                         this.open_transfer_browser_directory(open_path.clone(), window, cx);
+                        this.focus_transfer_browser_after_path_edit(window, cx);
                     })
                 }))
                 .child(truncate_preview(&display_path, 72)),
@@ -1074,7 +1206,8 @@ mod tests {
 
     use super::{
         TransferBrowserPathMetrics, build_transfer_browser_breadcrumbs,
-        collapse_transfer_browser_breadcrumbs, transfer_browser_child_directories,
+        collapse_transfer_browser_breadcrumbs, expand_transfer_browser_home_path,
+        transfer_browser_child_directories,
     };
 
     fn entry(name: &str, path: &str, file_type: SftpFileType) -> SftpFileEntry {
@@ -1239,6 +1372,44 @@ mod tests {
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
             vec![".hidden", "dir2", "dir10"]
+        );
+    }
+
+    #[test]
+    fn typed_paths_expand_home_and_preserve_unicode_spaces_and_relative_paths() {
+        for (input, expected) in [
+            ("~", "/home/nya"),
+            ("~/中文 folder", "/home/nya/中文 folder"),
+            ("~\\中文 folder", "/home/nya/中文 folder"),
+            (" /var/中文 folder/ ", "/var/中文 folder"),
+            ("../relative dir", "../relative dir"),
+        ] {
+            assert_eq!(
+                expand_transfer_browser_home_path(input, "/home/nya"),
+                expected
+            );
+        }
+        assert_eq!(expand_transfer_browser_home_path("~/dir", ""), "~/dir");
+        assert_eq!(expand_transfer_browser_home_path("~\\dir", ""), "~\\dir");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn typed_windows_paths_preserve_drive_and_unc_roots() {
+        for path in [
+            r"C:\",
+            r"C:\中文 folder",
+            r"\\server\share\",
+            r"\\server\share\中文 folder",
+        ] {
+            assert_eq!(
+                expand_transfer_browser_home_path(path, r"C:\Users\nya"),
+                path
+            );
+        }
+        assert_eq!(
+            expand_transfer_browser_home_path(r"~\中文 folder", r"C:\Users\nya"),
+            r"C:\Users\nya\中文 folder"
         );
     }
 }

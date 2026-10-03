@@ -563,7 +563,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                             )
                         }),
                 )
-                .when(!tree_mode, |this| {
+                .when(!tree_mode || browser.path_editing, |this| {
                     this.child(super::super::path_bar::transfer_browser_path_row(
                         panel,
                         current_browser_path.clone(),

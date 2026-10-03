@@ -125,6 +125,15 @@ impl NyaTermApp {
             path: browser.path.clone(),
             home_dir: browser.home_dir.clone(),
             path_editing: browser.path_editing,
+            expanded_children_path: browser
+                .path_menu
+                .as_ref()
+                .and_then(|menu| match &menu.kind {
+                    crate::models::TransferBrowserPathMenuKind::Children { path, .. } => {
+                        Some(path.clone())
+                    }
+                    crate::models::TransferBrowserPathMenuKind::Overflow { .. } => None,
+                }),
             all_entries: browser.entries.clone(),
             visible_entries,
             loading: browser.loading,
