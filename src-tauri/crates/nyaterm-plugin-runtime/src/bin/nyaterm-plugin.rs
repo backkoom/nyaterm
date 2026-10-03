@@ -29,7 +29,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let sdk = include_bytes!("../../../../../plugins/sdk/nyaterm.js").to_vec();
             if files.get("ui/nyaterm-sdk.js").is_some_and(|bytes| bytes != &sdk) { return Err("ui/nyaterm-sdk.js is reserved for the host SDK".into()); }
             files.insert("ui/nyaterm-sdk.js".into(), sdk);
-            if files.len() > 1023 || files.values().map(Vec::len).sum::<usize>() > 256 * 1024 * 1024 { return Err("Plugin package exceeds file count or expanded size limit".into()); }
+            if files.len() > 1022 || files.values().map(Vec::len).sum::<usize>() > 256 * 1024 * 1024 { return Err("Plugin package exceeds file count or expanded size limit".into()); }
             let parent = output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
             std::fs::create_dir_all(parent)?;
             let mut staging = tempfile::NamedTempFile::new_in(parent)?;
@@ -83,7 +83,7 @@ fn collect(
             .ok_or("Non-UTF-8 plugin path")?
             .replace('\\', "/");
         validate_path(&relative)?;
-        if files.len() >= 1023 || metadata.len() > 64 * 1024 * 1024 {
+        if files.len() >= 1022 || metadata.len() > 64 * 1024 * 1024 {
             return Err("Plugin source is too large".into());
         }
         if files.values().map(Vec::len).sum::<usize>() + metadata.len() as usize > 256 * 1024 * 1024

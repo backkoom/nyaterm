@@ -85,6 +85,7 @@ tauri-build = { version = "2", features = [] }
 tokio = { version = "1", features = ["test-util"] }
 
 [dependencies]
+tempfile = "3"
 nyaterm-gpu = { path = "crates/nyaterm-gpu" }
 nyaterm-otp = { path = "crates/otp" }
 nyaterm-mcp-protocol = { path = "crates/nyaterm-mcp-protocol" }

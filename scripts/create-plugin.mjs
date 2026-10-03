@@ -40,10 +40,12 @@ if (existsSync(target))
 const { version } = JSON.parse(
   readFileSync(path.join(root, "package.json"), "utf8"),
 );
-const sdkPath = path
-  .relative(target, path.join(root, "plugins/sdk/rust/nyaterm-plugin-sdk"))
-  .split(path.sep)
-  .join("/");
+const distributed = !existsSync(
+  path.join(root, "plugins/sdk/rust/nyaterm-plugin-sdk/Cargo.toml"),
+);
+const sdkDependency = distributed
+  ? '{ git = "https://github.com/nyakang/nyaterm", rev = "ac014d96672b5c33736bdc364be9c21b44ec95dc" }'
+  : `{ path = ${JSON.stringify(path.relative(target, path.join(root, "plugins/sdk/rust/nyaterm-plugin-sdk")).split(path.sep).join("/"))} }`;
 const manifest = {
   manifestVersion: 1,
   id,
@@ -105,7 +107,7 @@ try {
   if (template === "rust") {
     put(
       "Cargo.toml",
-      `[package]\nname = "nyaterm-plugin-starter"\nversion = "1.0.0"\nedition = "2024"\nrust-version = "1.94"\n\n[dependencies]\nnyaterm-plugin-sdk = { path = ${JSON.stringify(sdkPath)} }\ntokio = { version = "1", features = ["rt", "macros"] }\n`,
+      `[package]\nname = "nyaterm-plugin-starter"\nversion = "1.0.0"\nedition = "2024"\nrust-version = "1.94"\n\n[dependencies]\nnyaterm-plugin-sdk = ${sdkDependency}\ntokio = { version = "1", features = ["rt", "macros"] }\n`,
     );
     put(
       "src/main.rs",
@@ -117,9 +119,12 @@ try {
     );
   }
   const packer = path.join(root, "scripts/package-plugin.mjs");
+  const packCommand = distributed
+    ? `nyaterm-plugin pack . ../${id}.nyap`
+    : `node ${JSON.stringify(packer)} . ../${id}.nyap`;
   put(
     "README.md",
-    `# ${id}\n\nGenerated from the NyaTerm ${template} template.\n\n${template === "rust" ? "1. Install Rust 1.94 or newer, then run `node build.mjs` here. This builds the SDK backend and fills the current platform executable in manifest.json.\n2." : "1."} Package from this directory:\n\n\`\`\`sh\nnode ${JSON.stringify(packer)} . ../${id}.nyap\n\`\`\`\n\nInstall the .nyap from NyaTerm's Plugins panel, review permissions, enable it and open its panel. ${template === "rust" ? "The native command reuses the process; check status/logs in Plugins. Stop the backend to reset its counter. Never print protocol data to stdout: use Context::log or stderr. The Rust SDK is a relative local dependency; distribute this source with the SDK or change its path when moving the project. For framed transport change backend.transport to stdio-framed; the SDK selects the transport from the host environment. Add other-platform binaries under bin/ and their executable entries before packing." : "Select a connected terminal before inspecting its session. The UI runs in an isolated iframe; use the SDK instead of Tauri APIs or direct file/network access."}\n\nEdit manifest.json to add permissions and contributions. UI scripts and styles must be local; use textContent for host/plugin data. Packaging includes only manifest.json, ui/, assets/ and bin/; target and source are excluded. The packager injects the current UI SDK. To update an installed plugin, bump manifest.version (and Cargo version for Rust) because released versions are immutable.\n`,
+    `# ${id}\n\nGenerated from the NyaTerm ${template} template.\n\n${template === "rust" ? "1. Install Rust 1.94 or newer, then run `node build.mjs` here. This builds the SDK backend and fills the current platform executable in manifest.json.\n2." : "1."} Package from this directory:\n\n\`\`\`sh\n${packCommand}\n\`\`\`\n\nInstall the .nyap from NyaTerm's Plugins panel, review permissions, enable it and open its panel. ${template === "rust" ? "The native command reuses the process; check status/logs in Plugins. Stop the backend to reset its counter. Never print protocol data to stdout: use Context::log or stderr. The standalone CLI pins the Rust SDK to a public Git commit; source-checkout templates use a local SDK dependency. For framed transport change backend.transport to stdio-framed; the SDK selects the transport from the host environment. Add other-platform binaries under bin/ and their executable entries before packing." : "Select a connected terminal before inspecting its session. The UI runs in an isolated iframe; use the SDK instead of Tauri APIs or direct file/network access."}\n\nEdit manifest.json to add permissions and contributions. UI scripts and styles must be local; use textContent for host/plugin data. Packaging includes only manifest.json, ui/, assets/ and bin/; target and source are excluded. The packager injects the current UI SDK. To update an installed plugin, bump manifest.version (and Cargo version for Rust) because released versions are immutable.\n`,
   );
   renameSync(stage, target);
 } catch (error) {

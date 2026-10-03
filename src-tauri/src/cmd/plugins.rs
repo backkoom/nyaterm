@@ -7,6 +7,50 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tauri::command]
+pub async fn get_plugin_marketplace(
+    manager: tauri::State<'_, Arc<PluginManager>>,
+) -> AppResult<crate::core::plugins::MarketplaceCatalog> {
+    manager.marketplace_catalog().await
+}
+
+#[tauri::command]
+pub async fn inspect_marketplace_plugin(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    manager: tauri::State<'_, Arc<PluginManager>>,
+    plugin_id: String,
+    version: String,
+    expected_sha256: String,
+) -> AppResult<crate::core::plugins::MarketplacePreview> {
+    manager
+        .inspect_marketplace(&app, window.label(), &plugin_id, &version, &expected_sha256)
+        .await
+}
+
+#[tauri::command]
+pub async fn install_marketplace_plugin(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    manager: tauri::State<'_, Arc<PluginManager>>,
+    token: String,
+) -> AppResult<InstalledPlugin> {
+    manager
+        .install_marketplace(&app, window.label(), &token)
+        .await
+}
+
+#[tauri::command]
+pub async fn cancel_marketplace_plugin_review(
+    window: tauri::WebviewWindow,
+    manager: tauri::State<'_, Arc<PluginManager>>,
+    token: String,
+) -> AppResult<()> {
+    manager
+        .cancel_marketplace_review(window.label(), &token)
+        .await
+}
+
+#[tauri::command]
 pub async fn list_plugins(
     manager: tauri::State<'_, Arc<PluginManager>>,
 ) -> AppResult<Vec<InstalledPlugin>> {

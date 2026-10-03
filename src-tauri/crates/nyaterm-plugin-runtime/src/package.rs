@@ -19,11 +19,13 @@ pub struct PackagePreview {
     pub digest: String,
     pub expanded_bytes: u64,
     pub probe_scripts: BTreeMap<String, String>,
+    pub signature: crate::trust::SignatureStatus,
 }
 
 pub struct PreparedPackage {
     pub preview: PackagePreview,
     pub directory: tempfile::TempDir,
+    pub(crate) provenance: crate::registry::Provenance,
 }
 
 /// Inspect and extract into a private staging directory. Nothing becomes active here.
@@ -99,7 +101,10 @@ pub fn prepare(path: &Path, staging_parent: &Path, app_version: &str) -> Result<
         if name == "checksums.json" && bytes.len() > 256 * 1024 {
             return Err(invalid("Checksums document is too large"));
         }
-        if name != "checksums.json" {
+        if name == "signature.json" && bytes.len() > 4096 {
+            return Err(invalid("Signature document is too large"));
+        }
+        if name != "checksums.json" && name != "signature.json" {
             hashes.insert(name.clone(), hex::encode(Sha256::digest(&bytes)));
         }
         if let Some(parent) = target.parent() {
@@ -114,6 +119,7 @@ pub fn prepare(path: &Path, staging_parent: &Path, app_version: &str) -> Result<
             "Plugin package checksums do not match its complete contents",
         ));
     }
+    let signature = crate::trust::inspect(directory.path(), crate::trust::OFFICIAL_PLUGIN_KEYS)?;
     let manifest = Manifest::parse(
         &std::fs::read(directory.path().join("manifest.json"))?,
         app_version,
@@ -146,11 +152,13 @@ pub fn prepare(path: &Path, staging_parent: &Path, app_version: &str) -> Result<
         }
     }
     Ok(PreparedPackage {
+        provenance: crate::registry::Provenance::Local,
         preview: PackagePreview {
             manifest,
             digest: package_digest,
             expanded_bytes,
             probe_scripts,
+            signature,
         },
         directory,
     })
@@ -188,6 +196,7 @@ pub(crate) mod tests {
         entries.extend_from_slice(extra);
         let checksums = entries
             .iter()
+            .filter(|(name, _)| *name != "signature.json")
             .map(|(name, bytes)| (name.to_string(), hex::encode(Sha256::digest(bytes))))
             .collect::<BTreeMap<_, _>>();
         let mut zip = zip::ZipWriter::new(File::create(path).unwrap());

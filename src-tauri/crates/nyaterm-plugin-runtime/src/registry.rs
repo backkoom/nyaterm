@@ -6,11 +6,52 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "source", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Provenance {
+    #[default]
+    Local,
+    Marketplace {
+        #[serde(rename = "repositoryId")]
+        repository_id: String,
+        publisher: String,
+        #[serde(rename = "signingKeyId")]
+        signing_key_id: String,
+        #[serde(rename = "packageSha256")]
+        package_sha256: String,
+    },
+}
+
+impl Provenance {
+    fn continuous_with(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Local, Self::Local) => true,
+            (
+                Self::Marketplace {
+                    repository_id: a,
+                    publisher: p,
+                    ..
+                },
+                Self::Marketplace {
+                    repository_id: b,
+                    publisher: q,
+                    ..
+                },
+            ) => a == b && p == q,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledVersion {
     pub manifest: Manifest,
     pub digest: String,
+    #[serde(default)]
+    pub provenance: Provenance,
+    #[serde(default)]
+    pub signature: crate::trust::SignatureStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +132,23 @@ impl Registry {
                 if record.manifest.id != *id || record.manifest.version != *version {
                     return Err(invalid("Invalid plugin version record"));
                 }
+                if let Provenance::Marketplace {
+                    repository_id,
+                    publisher,
+                    signing_key_id,
+                    package_sha256,
+                } = &record.provenance
+                    && (repository_id != crate::marketplace::REPOSITORY_ID
+                        || publisher != &record.manifest.publisher
+                        || package_sha256 != &record.digest
+                        || !valid_id(signing_key_id)
+                        || record.signature
+                            != (crate::trust::SignatureStatus::Verified {
+                                key_id: signing_key_id.clone(),
+                            }))
+                {
+                    return Err(invalid("Invalid marketplace provenance record"));
+                }
             }
         }
         Ok(Self {
@@ -153,6 +211,8 @@ impl Registry {
         let record = InstalledVersion {
             manifest: package.preview.manifest.clone(),
             digest: package.preview.digest.clone(),
+            provenance: package.provenance.clone(),
+            signature: package.preview.signature.clone(),
         };
         let id = record.manifest.id.clone();
         let version = record.manifest.version.clone();
@@ -175,9 +235,18 @@ impl Registry {
                 "Plugin publisher changed; uninstall before installing from a new publisher",
             ));
         }
+        if plugin
+            .versions
+            .values()
+            .any(|v| !v.provenance.continuous_with(&record.provenance))
+        {
+            return Err(invalid(
+                "Plugin source changed; uninstall before installing from a different repository or local source",
+            ));
+        }
         let mut moved_target = None;
         if let Some(existing) = plugin.versions.get(&version) {
-            if existing.digest != record.digest {
+            if existing.digest != record.digest || existing.provenance != record.provenance {
                 return Err(invalid(
                     "An installed version cannot be replaced by different content",
                 ));
@@ -323,6 +392,37 @@ impl Registry {
 mod tests {
     use super::*;
     use crate::package::{prepare, tests::package};
+
+    #[test]
+    fn legacy_records_migrate_to_local_provenance() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("plugins");
+        let path = temp.path().join("test.nyap");
+        package(&path, &[]);
+        let mut registry = Registry::open(root.clone(), "1.2.12".into()).unwrap();
+        let prepared = prepare(&path, &root, "1.2.12").unwrap();
+        let digest = prepared.preview.digest.clone();
+        registry.install(prepared, &digest).unwrap();
+        let index = root.join("registry.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
+        let record = json["example.tools"]["versions"]["1.0.0"]
+            .as_object_mut()
+            .unwrap();
+        record.remove("provenance");
+        record.remove("signature");
+        std::fs::write(index, serde_json::to_vec(&json).unwrap()).unwrap();
+        let migrated = Registry::open(root, "1.2.12".into()).unwrap();
+        assert_eq!(
+            migrated
+                .get("example.tools")
+                .unwrap()
+                .active()
+                .unwrap()
+                .provenance,
+            Provenance::Local
+        );
+    }
 
     #[test]
     fn updates_rollback_and_revocation_require_fresh_activation() {

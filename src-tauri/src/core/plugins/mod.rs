@@ -1,5 +1,7 @@
 mod gateway;
 mod lifecycle;
+mod marketplace;
+pub use marketplace::{MarketplaceCatalog, MarketplacePreview};
 mod monitoring;
 pub use monitoring::MonitorSubscription;
 mod probe;
@@ -101,6 +103,7 @@ pub struct PluginManager {
     storage_lock: Mutex<()>,
     diagnostics: Diagnostics,
     monitors: std::sync::Mutex<monitoring::Monitors>,
+    marketplace_reviews: Mutex<HashMap<String, marketplace::Review>>,
 }
 
 impl PluginManager {
@@ -121,6 +124,7 @@ impl PluginManager {
             storage_lock: Mutex::new(()),
             diagnostics: Diagnostics::default(),
             monitors: std::sync::Mutex::new(monitoring::Monitors::default()),
+            marketplace_reviews: Mutex::new(HashMap::new()),
         })
     }
 
@@ -320,6 +324,10 @@ impl PluginManager {
     }
 
     pub async fn revoke_window(&self, label: &str) {
+        self.marketplace_reviews
+            .lock()
+            .await
+            .retain(|_, review| review.window_label != label);
         self.monitors.lock().unwrap().revoke(|k| k.window == label);
         self.scopes.lock().await.retain(|_, scope| {
             if scope.window_label == label {
@@ -351,6 +359,7 @@ impl PluginManager {
     }
 
     pub async fn revoke_all(&self) {
+        self.marketplace_reviews.lock().await.clear();
         self.monitors.lock().unwrap().revoke(|_| true);
         for (_, scope) in self.scopes.lock().await.drain() {
             scope.cancellation.cancel();

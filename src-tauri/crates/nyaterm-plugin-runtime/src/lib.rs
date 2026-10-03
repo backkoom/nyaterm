@@ -1,11 +1,13 @@
 //! Tauri-independent installation, manifest validation and sidecar transport.
 pub mod diagnostics;
 pub mod manifest;
+pub mod marketplace;
 pub mod monitoring;
 pub mod package;
 pub mod probe;
 pub mod registry;
 pub mod sidecar;
+pub mod trust;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

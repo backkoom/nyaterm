@@ -52,7 +52,37 @@ verify consistency and the reviewed package digest prevents a file swap between
 inspection and installation; these are not publisher authentication. Publisher
 names are self-declared. A changed publisher label cannot overwrite an existing
 ID without uninstalling it first, but that continuity check is not a signature.
-The local v1 format does not include cryptographic publisher signing.
+Local packages may remain unsigned. The official Plugin Store uses repository
+Ed25519 signing: `signature.json` signs the exact bytes of `checksums.json`, which
+covers every content file (including `manifest.json`) but excludes `checksums.json`
+and `signature.json` themselves. Publisher verification and package signatures are
+separate concepts; a signature authenticates the Store's reviewed artifact.
+
+The Marketplace downloads and verifies packages in Rust, checks the catalog's final
+SHA-256 and size, and cross-checks ID, version, publisher, permissions and signing
+key. Public keys are pinned in the client; catalog metadata cannot add trusted keys.
+The review dialog shows the verified package before installation, and installation
+leaves the plugin disabled until its runtime permissions are separately granted.
+Installed versions persist provenance; switching between local and Store sources
+requires uninstalling first. Old registry records default to local provenance.
+
+The Store lives in [`nyakang/nyaterm-plugins`](https://github.com/nyakang/nyaterm-plugins).
+Its records and signing workflow are independent of author plugin source. First
+rollout requires initializing the official key and configuring the protected
+`plugin-signing` environment; an empty client trust store rejects every Store install.
+
+The standalone [`@nyaterm/plugin-cli`](../plugins/cli/README.md) package bundles the
+authoring binary, SDK and templates, with a workflow to assemble six platforms:
+
+```sh
+npm install -g @nyaterm/plugin-cli
+nyaterm-plugin create example.hello ./hello
+nyaterm-plugin pack ./hello ./hello-1.0.0.nyap
+nyaterm-plugin inspect ./hello-1.0.0.nyap
+```
+
+Publication to npm is a separate release step. Distributed Rust templates use a
+pinned public Git SDK dependency; source-checkout templates retain local paths.
 
 Plugin files live in the active runtime's `plugins/` directory (normally
 `~/.nyaterm/plugins/`):

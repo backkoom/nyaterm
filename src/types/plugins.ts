@@ -53,7 +53,15 @@ export interface InstalledPlugin {
   activeVersion: string;
   enabled: boolean;
   grantedPermissions: PluginPermission[];
-  versions: Record<string, { manifest: PluginManifest; digest: string }>;
+  versions: Record<
+    string,
+    {
+      manifest: PluginManifest;
+      digest: string;
+      provenance?: PluginProvenance;
+      signature?: PluginSignatureStatus;
+    }
+  >;
 }
 
 export interface PluginPackagePreview {
@@ -61,6 +69,62 @@ export interface PluginPackagePreview {
   digest: string;
   expandedBytes: number;
   probeScripts?: Record<string, string>;
+  signature: PluginSignatureStatus;
+}
+
+export type PluginSignatureStatus =
+  | { status: "unsigned" }
+  | { status: "untrusted" | "verified"; keyId: string };
+export type PluginProvenance =
+  | { source: "local" }
+  | {
+      source: "marketplace";
+      repositoryId: string;
+      publisher: string;
+      signingKeyId: string;
+      packageSha256: string;
+    };
+export interface MarketplaceArtifact {
+  target: string;
+  url: string;
+  sha256: string;
+  size: number;
+  signingKeyId: string;
+}
+export interface MarketplaceVersion {
+  version: string;
+  releasedAt: string;
+  releaseNotes: string;
+  permissions: string[];
+  artifacts: MarketplaceArtifact[];
+}
+export interface MarketplacePlugin {
+  id: string;
+  name: string;
+  description: string;
+  publisher: string;
+  verified: boolean;
+  tags: string[];
+  source: string;
+  homepage: string;
+  license: string;
+  permissions: string[];
+  latestVersion: string;
+  versions: MarketplaceVersion[];
+}
+export interface MarketplaceCatalog {
+  target: string;
+  catalog: {
+    catalogVersion: number;
+    repository: { id: string; name: string };
+    generatedAt: string;
+    plugins: MarketplacePlugin[];
+  };
+}
+export interface MarketplacePreview {
+  token: string;
+  package: PluginPackagePreview;
+  repositoryId: string;
 }
 
 export interface PluginMonitorSnapshot {

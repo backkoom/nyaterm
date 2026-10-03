@@ -31,13 +31,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePlugins } from "@/context/PluginContext";
 import { getErrorMessage } from "@/lib/errors";
 import { activeManifest, openPlugin, pluginApi } from "@/lib/plugins";
 import type { InstalledPlugin, PluginPackagePreview } from "@/types/plugins";
 import { PluginDiagnostics } from "./PluginDiagnostics";
+import { PluginMarketplace } from "./PluginMarketplace";
 
 export function PluginsPanel({ sessionId }: { sessionId: string | null }) {
+  const { t } = useTranslation();
+  return (
+    <Tabs defaultValue="marketplace" className="h-full min-h-0 gap-0">
+      <TabsList className="m-3 shrink-0">
+        <TabsTrigger value="marketplace">{t("plugins.store.marketplace")}</TabsTrigger>
+        <TabsTrigger value="installed">{t("plugins.store.installedTab")}</TabsTrigger>
+      </TabsList>
+      <TabsContent value="marketplace" className="min-h-0 overflow-auto">
+        <PluginMarketplace />
+      </TabsContent>
+      <TabsContent value="installed" className="min-h-0 overflow-auto">
+        <InstalledPluginsPanel sessionId={sessionId} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function InstalledPluginsPanel({ sessionId }: { sessionId: string | null }) {
   const { t } = useTranslation();
   const { plugins, loaded, error, refresh, locked } = usePlugins();
   const [busy, setBusy] = useState(false);
@@ -132,6 +152,18 @@ export function PluginsPanel({ sessionId }: { sessionId: string | null }) {
                 {t(plugin.enabled ? "plugins.enabled" : "plugins.disabled")}
               </Badge>
               {manifest.backend && <Badge variant="outline">{t("plugins.native")}</Badge>}
+              <Badge variant="outline">
+                {t(
+                  plugin.versions[plugin.activeVersion]?.provenance?.source === "marketplace"
+                    ? "plugins.store.marketplace"
+                    : "plugins.store.local",
+                )}
+              </Badge>
+              <Badge variant="outline">
+                {t(
+                  `plugins.store.${plugin.versions[plugin.activeVersion]?.signature?.status ?? "unsigned"}`,
+                )}
+              </Badge>
             </div>
             <p className="break-words text-sm text-muted-foreground">{manifest.description}</p>
             <p className="break-all text-xs text-muted-foreground">
@@ -270,6 +302,10 @@ export function PluginsPanel({ sessionId }: { sessionId: string | null }) {
                 })}
               </p>
               <p className="text-xs text-muted-foreground">{t("plugins.publisherUnverified")}</p>
+              <Badge variant="outline">{t("plugins.store.local")}</Badge>
+              <Badge variant="outline">
+                {t(`plugins.store.${preview.package.signature.status}`)}
+              </Badge>
               <div className="space-y-1">
                 <p className="font-medium">{t("plugins.permissionsTitle")}</p>
                 {preview.package.manifest.permissions.map((permission) => (

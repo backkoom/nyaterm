@@ -1,6 +1,8 @@
 import { invoke } from "@/lib/invoke";
 import type {
   InstalledPlugin,
+  MarketplaceCatalog,
+  MarketplacePreview,
   PluginDiagnosticsSnapshot,
   PluginMonitorSubscription,
   PluginPackagePreview,
@@ -8,6 +10,13 @@ import type {
 } from "@/types/plugins";
 
 export const pluginApi = {
+  marketplace: () => invoke<MarketplaceCatalog>("get_plugin_marketplace"),
+  inspectMarketplace: (pluginId: string, version: string, expectedSha256: string) =>
+    invoke<MarketplacePreview>("inspect_marketplace_plugin", { pluginId, version, expectedSha256 }),
+  installMarketplace: (token: string) =>
+    invoke<InstalledPlugin>("install_marketplace_plugin", { token }),
+  cancelMarketplaceReview: (token: string) =>
+    invoke<void>("cancel_marketplace_plugin_review", { token }),
   probeScripts: (pluginId: string, expectedVersion: string) =>
     invoke<Record<string, string>>("get_plugin_probe_scripts", { pluginId, expectedVersion }),
   subscribeMonitor: (token: string, monitorId: string, intervalSeconds: number) =>
