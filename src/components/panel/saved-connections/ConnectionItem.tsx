@@ -3,6 +3,7 @@ import { FolderOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MdContentCopy, MdDelete, MdDriveFileRenameOutline, MdEdit, MdLink } from "react-icons/md";
 import { toast } from "sonner";
+import { PluginContextMenuItems } from "@/components/plugins/PluginContextMenuItems";
 import { Badge } from "@/components/ui/badge";
 import {
   ContextMenu,
@@ -741,6 +742,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
             ? t("savedConnections.deleteSelected")
             : t("savedConnections.delete")}
         </ContextMenuItem>
+        <PluginContextMenuItems menu="connection" connectionId={conn.id} />
       </ContextMenuContent>
     </ContextMenu>
   );

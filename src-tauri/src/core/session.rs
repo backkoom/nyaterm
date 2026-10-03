@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
@@ -848,6 +848,9 @@ impl SessionManager {
         }
         if removed {
             if let Some(app) = self.app_handle.get() {
+                if let Some(plugins) = app.try_state::<Arc<super::plugins::PluginManager>>() {
+                    plugins.revoke_session(id).await;
+                }
                 let _ = app.emit("sessions-changed", ());
                 crate::tray::schedule_refresh(app);
             }

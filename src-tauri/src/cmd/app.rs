@@ -407,6 +407,12 @@ pub fn set_app_lock_state(
             AppLockStateChangedPayload { locked },
         );
         if locked {
+            if let Some(manager) = app.try_state::<Arc<crate::core::plugins::PluginManager>>() {
+                let manager = manager.inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    manager.revoke_all().await;
+                });
+            }
             if let Some(manager) = app.try_state::<Arc<crate::core::mcp::McpManager>>() {
                 let manager = manager.inner().clone();
                 tauri::async_runtime::spawn(async move {

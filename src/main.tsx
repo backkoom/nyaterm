@@ -8,6 +8,9 @@ import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "@fontsource-variable/noto-sans-sc";
 import "./index.css";
+import { PluginProvider } from "./context/PluginContext";
+import { PluginApprovalHost } from "./components/plugins/PluginApprovalHost";
+import { PluginCommandHost } from "./components/plugins/PluginCommandHost";
 import {
   applyThemeToDOM,
   THEME_CACHE_KEY,
@@ -50,7 +53,9 @@ if (windowType) {
   // Child window: lightweight provider stack, no full App
   // These entry points are independent and should load in parallel; serial awaits would add an
   // unnecessary chunk round trip to every child-window open.
-  const childRoot = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
+  const childRoot = ReactDOM.createRoot(
+    document.getElementById("root") as HTMLElement,
+  );
   // Commit an inline-background loading shell before loading provider and page chunks. This lets
   // the parent reveal a stable surface without reintroducing the macOS white or empty window.
   childRoot.render(
@@ -141,7 +146,11 @@ if (windowType) {
       <ErrorBoundary>
         <AppProvider>
           <ThemeProvider>
-            <App />
+            <PluginProvider>
+              <App />
+              <PluginApprovalHost />
+              <PluginCommandHost />
+            </PluginProvider>
             <Toaster />
           </ThemeProvider>
         </AppProvider>

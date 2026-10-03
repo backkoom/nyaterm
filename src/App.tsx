@@ -12,6 +12,8 @@ import type { RdpCertificateVerifyRequest } from "./components/dialog/connection
 import type { DockerSudoPasswordRequest } from "./components/dialog/docker/DockerSudoPasswordDialog";
 import type { QuickSwitcherSession } from "./components/dialog/terminal/SessionQuickSwitcherDialog";
 import { useApp } from "./context/AppContext";
+import { usePlugins } from "./context/PluginContext";
+import { activeManifest, parsePluginPanelId } from "./lib/plugins";
 import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
 import { useAppWindowEvents } from "./hooks/useAppWindowEvents";
@@ -171,6 +173,7 @@ function isSftpOnlySession(
 
 /** Root layout: header, activity bars, sidebars, terminal area, dialogs. */
 function App() {
+  const { plugins } = usePlugins();
   useMacSelectionGuard();
   // Keep dynamic session titles (local PTY shell integration) flowing for the
   // main window's tab labels and window title.
@@ -3058,7 +3061,22 @@ function App() {
 
   const getPanelTitle = useCallback(
     (panelId: string) => {
+      const pluginPanel = parsePluginPanelId(panelId);
+      if (pluginPanel) {
+        const plugin = plugins.find(
+          (plugin) => plugin.id === pluginPanel.pluginId,
+        );
+        return (
+          (plugin &&
+            activeManifest(plugin)?.contributions.panels.find(
+              (panel) => panel.id === pluginPanel.panelId,
+            )?.title) ||
+          t("plugins.title")
+        );
+      }
       switch (panelId) {
+        case "plugins":
+          return t("plugins.title");
         case "securityAuth":
           return t("securityAuth.title");
         case "aiAssistant":
@@ -3069,7 +3087,7 @@ function App() {
           return t(`panel.${panelId}`);
       }
     },
-    [t],
+    [t, plugins],
   );
 
   const renderPanelContent = useCallback(

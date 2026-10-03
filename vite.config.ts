@@ -12,37 +12,45 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
+
+  optimizeDeps: {
+    entries: ["index.html"],
+  },
+
   css: {
     transformer: "lightningcss",
     lightningcss: {
       targets: browserslistToTargets(browserslist("safari >= 14, chrome >= 105")),
     },
   },
+
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
   },
+
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
-    exclude: [...configDefaults.exclude, "**/src-tauri/vendor/**"],
+    exclude: [...configDefaults.exclude, "**/src-tauri/vendor/**", "**/temp/**"],
   },
 
   clearScreen: false,
+
   server: {
     port: 1420,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
-        protocol: "ws",
-        host,
-        port: 1421,
-      }
+          protocol: "ws",
+          host,
+          port: 1421,
+        }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/temp/**"],
     },
   },
 

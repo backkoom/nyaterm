@@ -4942,6 +4942,7 @@ dependencies = [
  "nucleo-matcher",
  "nyaterm-mcp-protocol",
  "nyaterm-otp",
+ "nyaterm-plugin-runtime",
  "open",
  "opendal",
  "pbkdf2 0.12.2",
@@ -5007,6 +5008,26 @@ dependencies = [
 [[package]]
 name = "nyaterm-otp"
 version = "0.1.0"
+
+[[package]]
+name = "nyaterm-plugin-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "regex",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
+ "zip 8.6.0",
+]
 
 [[package]]
 name = "objc2"

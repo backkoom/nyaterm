@@ -16,9 +16,12 @@ import {
   MdOutlineStickyNote2,
   MdSend,
   MdSettings,
+  MdExtension,
 } from "react-icons/md";
 import { PiRecordFill } from "react-icons/pi";
 import { SiDocker, SiNvidia } from "react-icons/si";
+import { usePlugins } from "@/context/PluginContext";
+import { activeManifest, getPluginPanels, pluginPanelId } from "@/lib/plugins";
 import type { ActivityBarItem } from "@/components/layout/ActivityBar";
 import {
   ACTIVITY_BAR_ITEM_IDS,
@@ -104,6 +107,14 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
   if (!seen.has("syncBackupHistory")) {
     layout.left_bottom = insertBeforeOrPush(layout.left_bottom, "settings", "syncBackupHistory");
     seen.add("syncBackupHistory");
+  }
+  if (!seen.has("plugins")) {
+    layout.left_bottom = insertBeforeOrPush(
+      layout.left_bottom,
+      "settings",
+      "plugins",
+    );
+    seen.add("plugins");
   }
   if (!seen.has("notes")) {
     layout.left_top = insertAfter(layout.left_top, "fileExplorer", "notes");
@@ -245,6 +256,8 @@ export function useActivityBarController({
   setIsLocked,
   t,
 }: UseActivityBarControllerOptions) {
+  const { plugins, openIntent } = usePlugins();
+  const pluginPanels = useMemo(() => getPluginPanels(plugins), [plugins]);
   const itemRegistry = useMemo<Record<string, { icon: ReactNode; tooltip: string }>>(
     () => ({
       fileExplorer: { icon: <FaRegFolder />, tooltip: t("panel.fileExplorer") },
@@ -253,6 +266,13 @@ export function useActivityBarController({
       securityAuth: { icon: <LuKeyRound />, tooltip: t("securityAuth.title") },
       syncBackupHistory: { icon: <MdBackup />, tooltip: t("panel.syncBackupHistory") },
       settings: { icon: <MdSettings />, tooltip: t("settings.title") },
+      plugins: { icon: <MdExtension />, tooltip: t("plugins.title") },
+      ...Object.fromEntries(
+        pluginPanels.map((panel) => [
+          panel.activityId,
+          { icon: <MdExtension />, tooltip: panel.title },
+        ]),
+      ),
       savedConnections: { icon: <BiServer />, tooltip: t("panel.savedConnections") },
       aiAssistant: { icon: <MdAutoAwesome />, tooltip: t("ai.title") },
       activeSessions: { icon: <MdLink />, tooltip: t("panel.activeSessions") },
@@ -270,10 +290,62 @@ export function useActivityBarController({
       },
       lock: { icon: <MdLock />, tooltip: t("statusBar.lock") },
     }),
-    [recordingSessions, t],
+    [recordingSessions, t, pluginPanels],
   );
 
   const layout = uiConfig.activity_bar_layout;
+  useEffect(() => {
+    const allIds = new Set(
+      ACTIVITY_LAYOUT_ZONES.flatMap((zone) => layout[zone]),
+    );
+    if (!pluginPanels.some((panel) => !allIds.has(panel.activityId))) return;
+    updateUi((prev) => {
+      const existing = new Set(
+        ACTIVITY_LAYOUT_ZONES.flatMap((zone) => prev.activity_bar_layout[zone]),
+      );
+      const added = pluginPanels
+        .map((panel) => panel.activityId)
+        .filter((id) => !existing.has(id));
+      return added.length
+        ? {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              right_top: [...prev.activity_bar_layout.right_top, ...added],
+            },
+          }
+        : {};
+    });
+  }, [layout, pluginPanels, updateUi]);
+
+  useEffect(() => {
+    if (!openIntent) return;
+    const plugin = plugins.find(
+      (plugin) => plugin.id === openIntent.pluginId && plugin.enabled,
+    );
+    const manifest = plugin && activeManifest(plugin);
+    const panelId =
+      openIntent.panelId ??
+      manifest?.contributions.commands.find(
+        (command) => command.id === openIntent.commandId,
+      )?.panel;
+    if (
+      !panelId ||
+      !manifest?.contributions.panels.some((panel) => panel.id === panelId)
+    )
+      return;
+    const id = pluginPanelId(openIntent.pluginId, panelId);
+    updateUi((prev) => {
+      const side = getItemSide(id, prev.activity_bar_layout) ?? "right";
+      const list = side === "left" ? "left_open_panels" : "right_open_panels";
+      return {
+        ...(side === "left"
+          ? { active_left_panel: id }
+          : { active_right_panel: id }),
+        [list]: [...new Set([...(prev[list] ?? []), id])],
+        activity_bar_layout: showActivityBarItem(prev.activity_bar_layout, id),
+      };
+    });
+  }, [openIntent, plugins, updateUi]);
 
   useEffect(() => {
     if (!normalizeActivityBarState(uiConfig)) return;

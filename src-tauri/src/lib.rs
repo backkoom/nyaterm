@@ -69,8 +69,12 @@ pub fn run() {
         runtime.config_dir().to_path_buf(),
         runtime.executable_dir().to_path_buf(),
     );
+    let plugin_manager = core::plugins::PluginManager::new(
+        runtime.config_dir().join("plugins"),
+        env!("CARGO_PKG_VERSION").into(),
+    );
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().invoke_system(core::plugins::guarded_invoke_script());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         if external_open::handle_external_open_args(
@@ -117,6 +121,7 @@ pub fn run() {
         .manage(docker_sudo_manager.clone())
         .manage(remote_stats_sampler.clone())
         .manage(mcp_manager.clone())
+        .manage(plugin_manager)
         .manage(app_lock_state)
         .manage(external_open_state)
         .manage(portable_update_state)
@@ -139,7 +144,32 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(app::on_window_event)
+        .register_asynchronous_uri_scheme_protocol(
+            "nyaterm-plugin",
+            |context, request, responder| {
+                let app = context.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    responder.respond(
+                        core::plugins::serve_asset(&app, &request.uri().to_string()).await,
+                    );
+                });
+            },
+        )
         .invoke_handler(tauri::generate_handler![
+            cmd::plugins::get_plugin_diagnostics,
+            cmd::plugins::clear_plugin_logs,
+            cmd::plugins::stop_plugin_backend,
+            cmd::plugins::list_plugins,
+            cmd::plugins::inspect_plugin_package,
+            cmd::plugins::install_plugin_package,
+            cmd::plugins::configure_plugin,
+            cmd::plugins::activate_plugin_version,
+            cmd::plugins::uninstall_plugin,
+            cmd::plugins::create_plugin_scope,
+            cmd::plugins::close_plugin_scope,
+            cmd::plugins::plugin_host_call,
+            cmd::plugins::plugin_backend_call,
+            cmd::plugins::respond_plugin_approval,
             cmd::app::quit_application,
             cmd::app::hide_main_window,
             cmd::app::open_download_dir,
@@ -445,6 +475,9 @@ pub fn run() {
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
             ) {
                 if matches!(_event, tauri::RunEvent::Exit) {
+                    if let Some(manager) = _app.try_state::<Arc<core::plugins::PluginManager>>() {
+                        tauri::async_runtime::block_on(manager.revoke_all());
+                    }
                     if let Some(manager) = _app.try_state::<Arc<RecordingManager>>() {
                         manager.finish_all_scopes();
                     }

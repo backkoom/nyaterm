@@ -1,5 +1,6 @@
 import type { TerminalWindowNode } from "@/lib/tabWindows";
 import { collectSessionPanes } from "@/lib/workspaceTabs";
+import { parsePluginPanelId } from "@/lib/plugins";
 import type {
   ActivityBarLayout,
   ActivityBarZone,
@@ -18,7 +19,7 @@ export const ACTIVITY_LAYOUT_ZONES = [
 
 export const DEFAULT_ACTIVITY_BAR_LAYOUT: ActivityBarLayout = {
   left_top: ["fileExplorer", "notes", "network", "securityAuth"],
-  left_bottom: ["syncBackupHistory", "settings"],
+  left_bottom: ["syncBackupHistory", "plugins", "settings"],
   right_top: [
     "savedConnections",
     "aiAssistant",
@@ -43,6 +44,7 @@ export const ACTIVITY_BAR_ITEM_IDS = new Set<string>([
 ]);
 
 export const ACTIVITY_BAR_PANEL_ITEM_IDS = new Set<string>([
+  "plugins",
   "fileExplorer",
   "notes",
   "network",
@@ -84,7 +86,7 @@ export function normalizePanelOpenMode(
 }
 
 export function canUseFloatingPanel(id: string): boolean {
-  return ACTIVITY_BAR_PANEL_ITEM_IDS.has(id) && !NON_PANEL_IDS.has(id);
+  return (ACTIVITY_BAR_PANEL_ITEM_IDS.has(id) || Boolean(parsePluginPanelId(id))) && !NON_PANEL_IDS.has(id);
 }
 
 const MONITOR_PANEL_VISIBILITY: Record<string, (ui: UiConfig) => boolean> = {
@@ -295,7 +297,7 @@ export function getHiddenActivityItemsForSide(
 ): string[] {
   const hidden = new Set(ui.activity_bar_layout.hidden_items ?? []);
   return getActivityBarItemIdsForSide(ui.activity_bar_layout, side).filter(
-    (id) => itemIds.has(id) && hidden.has(id) && isActivityItemAvailable(id, ui),
+    (id) => (itemIds.has(id) || Boolean(parsePluginPanelId(id))) && hidden.has(id) && isActivityItemAvailable(id, ui),
   );
 }
 

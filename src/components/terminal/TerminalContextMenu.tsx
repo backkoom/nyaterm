@@ -20,6 +20,7 @@ import {
   MdTravelExplore,
 } from "react-icons/md";
 import { PiRecordFill } from "react-icons/pi";
+import { PluginContextMenuItems } from "@/components/plugins/PluginContextMenuItems";
 import { useTerminalAppSettings } from "@/context/AppContext";
 import { resolveDisplayKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
@@ -500,6 +501,7 @@ export default function TerminalContextMenu({
               {dk("terminal.selectAll")}
             </ContextMenuShortcut>
           </ContextMenuItem>
+          <PluginContextMenuItems menu="terminal" sessionId={sessionId} disabled={appLocked} />
         </ContextMenuContent>
       </ContextMenu>
       <TranslationDialog

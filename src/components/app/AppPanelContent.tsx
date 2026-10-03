@@ -14,6 +14,9 @@ import ProcessManager from "@/components/panel/ProcessManager";
 import RecordingPanel from "@/components/panel/RecordingPanel";
 import ResourceMonitor from "@/components/panel/ResourceMonitor";
 import SyncBackupHistoryPanel from "@/components/panel/SyncBackupHistoryPanel";
+import { PluginPanel } from "@/components/plugins/PluginPanel";
+import { PluginsPanel } from "@/components/plugins/PluginsPanel";
+import { parsePluginPanelId } from "@/lib/plugins";
 import SavedConnections from "@/components/panel/saved-connections";
 import SecurityAuthPanel from "@/components/panel/security-auth";
 import type { NetworkHistoryStore } from "@/hooks/useNetworkHistory";
@@ -144,6 +147,8 @@ export default function AppPanelContent({
         );
       case "network":
         return <NetworkPanel />;
+      case "plugins":
+        return <PluginsPanel sessionId={activeSessionId} />;
       case "notes":
         return <NotesPanel />;
       case "securityAuth":
@@ -218,7 +223,9 @@ export default function AppPanelContent({
       case "aiAssistant":
         return null;
       default:
-        return null;
+        return parsePluginPanelId(panelId) && panelId ? (
+          <PluginPanel activityId={panelId} sessionId={activeSessionId} />
+        ) : null;
     }
   })();
 

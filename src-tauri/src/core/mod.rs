@@ -16,6 +16,7 @@ pub mod monitoring;
 pub mod network;
 pub mod note_export;
 mod output;
+pub mod plugins;
 pub mod portable_snapshot;
 mod quick_commands;
 pub mod rdp;

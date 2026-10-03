@@ -17,6 +17,7 @@ pub mod macos_menu;
 pub mod mcp;
 pub mod note;
 pub mod otp;
+pub mod plugins;
 pub mod process;
 pub mod proxy;
 pub mod rdp;
