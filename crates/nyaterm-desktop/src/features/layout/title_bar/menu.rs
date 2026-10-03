@@ -319,7 +319,10 @@ impl NyaTermApp {
                 })),
             NyaMenuItem::action(t!("menu.unsplit"))
                 .icon("icons/menu/fit.svg")
-                .disabled(self.shell.workspace_split().is_none())
+                .disabled(
+                    !self.terminal_windows_is_multi_leaf()
+                        && self.shell.workspace_split().is_none(),
+                )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.unsplit_workspace(cx);
                 })),
@@ -557,16 +560,19 @@ impl NyaTermApp {
         vec![
             NyaMenuItem::action(t!("menu.autoTile"))
                 .icon("icons/view-grid.svg")
+                .disabled(self.session.session_order_len() < 2)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.apply_smart_split(SmartSplitMode::Auto, cx);
                 })),
             NyaMenuItem::action(t!("menu.tileHorizontally"))
                 .icon("icons/menu/horizontal.svg")
+                .disabled(self.session.session_order_len() < 2)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.apply_smart_split(SmartSplitMode::Horizontal, cx);
                 })),
             NyaMenuItem::action(t!("menu.tileVertically"))
                 .icon("icons/menu/vertical.svg")
+                .disabled(self.session.session_order_len() < 2)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.apply_smart_split(SmartSplitMode::Vertical, cx);
                 })),

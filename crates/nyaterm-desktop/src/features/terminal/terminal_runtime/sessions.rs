@@ -60,6 +60,21 @@ impl NyaTermApp {
             self.notify_locked_tab_close_blocked(cx);
             return;
         }
+        let preferred_next = self.terminal.terminal_window_tree().and_then(|mut root| {
+            let group = root.leaf_for_tab(&session_id).map(str::to_string)?;
+            let groups = root.leaf_ids();
+            let index = groups.iter().position(|id| id == &group).unwrap_or(0);
+            let next = root.remove_tab(&session_id)?;
+            let surviving = next.leaf_ids();
+            let group = if next.leaf_tabs(&group).is_some() {
+                group
+            } else {
+                surviving
+                    .get(index.min(surviving.len().saturating_sub(1)))?
+                    .clone()
+            };
+            next.leaf_tabs(&group)?.1.map(str::to_string)
+        });
         // Tauri: closing a strip tab closes the whole tab tree; closing a secondary leaf
         // only removes that pane. Strip close uses the tab-root id.
         let close_ids = if !self.is_secondary_pane_session(&session_id) {
@@ -102,7 +117,10 @@ impl NyaTermApp {
         if was_active {
             self.ai.reset_agent_runtime();
             self.sync_session_event_bridge_policy();
-            if let Some(next_session_id) = self.session.next_session_after(&session_id) {
+            if let Some(next_session_id) = preferred_next
+                .filter(|id| self.session.has_session(id))
+                .or_else(|| self.session.next_session_after(&session_id))
+            {
                 self.activate_session_id(&next_session_id, cx);
                 self.shell.set_status(format!(
                     "session closed; active {}",

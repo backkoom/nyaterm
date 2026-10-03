@@ -5,11 +5,12 @@ use crate::models::{BottomPanelMode, NavItem, StartupCommandAction};
 use crate::shortcuts::{
     CloseTab, CopySelectedConnections, DuplicateSession, DuplicateSessionWithCommand, LockScreen,
     ManageSyncGroups, MultiplexSsh, MultiplexSshWithCommand, NewLocalTerminal, NewSession, NextTab,
-    OpenChat, OpenNewSessionMenu, OpenSettings, PreviousTab, QuickSwitch, RenameFile, ResetZoom,
-    ShortcutId, ShortcutInvocation, ShowAllCommands, ShowCommandSuggestions, SwitchToTab,
-    TemporarySshLink, TerminalClear, TerminalCopy, TerminalFind, TerminalPaste,
-    TerminalPasteSelected, TerminalSelectAll, ToggleLeftSidebar, ToggleNativeFullscreen,
-    TogglePaneFocus, ToggleRecording, ToggleRightSidebar, ZoomIn, ZoomOut,
+    NextTerminalGroup, OpenChat, OpenNewSessionMenu, OpenSettings, PreviousTab,
+    PreviousTerminalGroup, QuickSwitch, RenameFile, ResetZoom, ShortcutId, ShortcutInvocation,
+    ShowAllCommands, ShowCommandSuggestions, SwitchToTab, TemporarySshLink, TerminalClear,
+    TerminalCopy, TerminalFind, TerminalPaste, TerminalPasteSelected, TerminalSelectAll,
+    ToggleLeftSidebar, ToggleNativeFullscreen, TogglePaneFocus, ToggleRecording,
+    ToggleRightSidebar, ZoomIn, ZoomOut,
 };
 
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
@@ -78,8 +79,8 @@ impl NyaTermApp {
             ShortcutId::OpenNewSessionMenu => {
                 if self.session.active_id().is_some() {
                     let anchor = self
-                        .shell
-                        .focused_terminal_leaf()
+                        .current_terminal_group()
+                        .as_deref()
                         .map(|id| {
                             crate::features::shell::NewSessionMenuAnchor::TerminalLeaf(
                                 id.to_string(),
@@ -93,16 +94,34 @@ impl NyaTermApp {
             ShortcutId::QuickSwitch => self.open_quick_switch(window, cx),
             ShortcutId::NewLocalTerminal => self.start_local_session(window, cx),
             ShortcutId::CloseTab => self.close_active_session(cx),
-            ShortcutId::NextTab => self.select_relative_session(1, cx),
-            ShortcutId::PreviousTab => self.select_relative_session(-1, cx),
+            ShortcutId::NextTab | ShortcutId::PreviousTab => {
+                self.select_relative_session(
+                    if invocation.id == ShortcutId::NextTab {
+                        1
+                    } else {
+                        -1
+                    },
+                    cx,
+                );
+                if let Some(active) = self.session.active_id_owned() {
+                    self.focus_terminal_session(&active, window, cx);
+                }
+            }
+            ShortcutId::NextTerminalGroup => self.select_relative_terminal_group(1, window, cx),
+            ShortcutId::PreviousTerminalGroup => {
+                self.select_relative_terminal_group(-1, window, cx)
+            }
             ShortcutId::SwitchToTab => {
                 let index = invocation.tab_index.unwrap_or(1);
                 let index = if index == 9 {
-                    self.session.ordered_sessions().len().saturating_sub(1)
+                    self.terminal_group_tab_count().saturating_sub(1)
                 } else {
                     index.saturating_sub(1)
                 };
                 self.select_session_index(index, cx);
+                if let Some(active) = self.session.active_id_owned() {
+                    self.focus_terminal_session(&active, window, cx);
+                }
             }
             ShortcutId::DuplicateSession => self.duplicate_active_session(window, cx),
             ShortcutId::MultiplexSsh => self.multiplex_active_ssh_session(window, cx),
@@ -116,6 +135,7 @@ impl NyaTermApp {
                 if self.session.active_id().is_some() {
                     self.shell
                         .set_pane_focus_mode(!self.shell.pane_focus_mode());
+                    self.sync_terminal_frame_snapshot_priority();
                     cx.notify();
                 }
             }
@@ -200,6 +220,11 @@ impl NyaTermApp {
             .on_action(direct_handler!(CloseTab, CloseTab))
             .on_action(direct_handler!(NextTab, NextTab))
             .on_action(direct_handler!(PreviousTab, PreviousTab))
+            .on_action(direct_handler!(NextTerminalGroup, NextTerminalGroup))
+            .on_action(direct_handler!(
+                PreviousTerminalGroup,
+                PreviousTerminalGroup
+            ))
             .on_action(cx.listener(|this, action: &SwitchToTab, window, cx| {
                 this.execute_shortcut_invocation(
                     ShortcutInvocation {

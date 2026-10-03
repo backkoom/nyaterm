@@ -210,7 +210,7 @@ impl NyaTermApp {
             self.write_terminal_focus_report_to_session(session_id, true);
         }
         self.sync_terminal_windows_active_tab(session_id);
-        // Priority was refreshed via sync_workspace_split_from_active_tab.
+        self.sync_terminal_frame_snapshot_priority();
         // Recover paint immediately if this tab was backgrounded without grids.
         if !target_is_rdp && live_snapshot_missing {
             self.request_terminal_live_snapshot(session_id);
@@ -302,29 +302,7 @@ impl NyaTermApp {
         offset: isize,
         cx: &mut Context<Self>,
     ) {
-        let sessions = self.session.ordered_sessions();
-        if sessions.is_empty() {
-            self.shell.set_status("no sessions to switch".to_string());
-            cx.notify();
-            return;
-        }
-        let active_index = self
-            .session
-            .active_id()
-            .and_then(|active_id| {
-                sessions
-                    .iter()
-                    .position(|session| session.id.as_str() == active_id)
-            })
-            .unwrap_or(0);
-        let len = sessions.len() as isize;
-        let next_index = (active_index as isize + offset).rem_euclid(len) as usize;
-        let session_id = sessions[next_index].id.clone();
-        self.activate_session_id_with_surface_sync(&session_id, cx);
-        self.shell.show_workspace();
-        self.shell
-            .set_status(format!("active {}", short_id(&session_id)));
-        cx.notify();
+        self.select_relative_terminal_group_tab(offset, cx);
     }
 
     pub(in crate::features) fn select_session_index(
@@ -332,19 +310,7 @@ impl NyaTermApp {
         index: usize,
         cx: &mut Context<Self>,
     ) {
-        let sessions = self.session.ordered_sessions();
-        if sessions.is_empty() {
-            self.shell.set_status("no sessions to switch".to_string());
-            cx.notify();
-            return;
-        }
-        let index = index.min(sessions.len().saturating_sub(1));
-        let session_id = sessions[index].id.clone();
-        self.activate_session_id_with_surface_sync(&session_id, cx);
-        self.shell.show_workspace();
-        self.shell
-            .set_status(format!("active {}", short_id(&session_id)));
-        cx.notify();
+        self.select_terminal_group_tab(index, cx);
     }
 
     pub(in crate::features) fn toggle_open_tabs_menu(&mut self, cx: &mut Context<Self>) {
@@ -363,6 +329,11 @@ impl NyaTermApp {
         anchor: crate::features::shell::NewSessionMenuAnchor,
         cx: &mut Context<Self>,
     ) {
+        if let crate::features::shell::NewSessionMenuAnchor::TerminalLeaf(group) = &anchor
+            && let Some((_, Some(tab))) = self.terminal.terminal_group_tabs(group)
+        {
+            self.select_session(tab, cx);
+        }
         if self.shell.open_new_session_menu(anchor) {
             cx.notify();
         }

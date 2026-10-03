@@ -284,7 +284,13 @@ impl TerminalFeatureState {
                 tree: None,
                 drop: None,
                 restored: false,
+                restore_in_flight: false,
+                persistence_blocked: false,
                 file_drop_hover: None,
+                group_scrolls: HashMap::new(),
+                start_groups: HashMap::new(),
+                split_bounds: HashMap::new(),
+                workspace_bounds: None,
             },
         }
     }
@@ -838,6 +844,25 @@ mod tests {
                 .into_iter()
                 .collect::<std::collections::HashSet<_>>(),
             ordered.into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn single_group_restore_keeps_the_saved_tab_selection_and_order() {
+        let mut state = terminal_state();
+        let ordered = vec!["alpha".to_string(), "beta".to_string()];
+        state.ensure_terminal_windows_root(ordered.clone(), Some("beta".to_string()));
+        let saved = state
+            .serialize_terminal_window_layout(&ordered)
+            .expect("single group layout");
+        let mut restored = terminal_state();
+        let group = restored
+            .restore_terminal_window_layout(&saved, &ordered, Some("alpha"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            restored.terminal_group_tabs(&group),
+            Some((ordered, Some("beta".to_string())))
         );
     }
 

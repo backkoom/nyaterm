@@ -834,29 +834,6 @@ impl NyaTermApp {
                                 ),
                         )
                     })
-                    .when(
-                        !session_id.is_empty()
-                            && !self.shell.status().trim().is_empty()
-                            && !is_active,
-                        |this| {
-                            this.child(
-                                div()
-                                    .h(px(22.))
-                                    .flex()
-                                    .items_center()
-                                    .px_3()
-                                    .border_b_1()
-                                    .border_color(rgb(palette.border))
-                                    .bg(self.shell_surface_color(palette.input))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(palette.text_muted))
-                                            .child(self.shell.status().to_string()),
-                                    ),
-                            )
-                        },
-                    )
                     // Empty-workspace bootstrap actions stay available when no session is selected.
                     .when(session_id.is_empty(), |this| {
                         this.child(

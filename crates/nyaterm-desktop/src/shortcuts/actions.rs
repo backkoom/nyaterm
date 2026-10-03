@@ -22,6 +22,8 @@ actions!(
         CloseTab,
         NextTab,
         PreviousTab,
+        NextTerminalGroup,
+        PreviousTerminalGroup,
         DuplicateSession,
         MultiplexSsh,
         DuplicateSessionWithCommand,

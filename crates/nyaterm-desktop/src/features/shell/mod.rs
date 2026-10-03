@@ -39,3 +39,5 @@ pub(in crate::features) use tab_mouse::{
     SessionTabDragPayload, SessionTabDragPreview, SessionTabTooltip, TAB_MOUSE_ACTIONS,
     TabMouseActionTarget,
 };
+
+mod workspace_groups;

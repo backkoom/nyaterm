@@ -56,6 +56,17 @@ impl NyaTermApp {
             self.shell.clear_session_persistence_dirty();
             return;
         }
+        if !self.session.restore_is_complete()
+            || !self.terminal.terminal_windows_restore_is_complete()
+            || !self.shell.workspace_layout_restore_is_settled()
+        {
+            return;
+        }
+        if !self.terminal.terminal_layout_persistence_is_supported()
+            || !self.normalize_legacy_terminal_groups()
+        {
+            return;
+        }
         let dirty = self
             .shell
             .pending_session_persistence(self.settings.summary().startup_restore_window_layout);
@@ -474,7 +485,6 @@ impl NyaTermApp {
         // After all tabs reconnect, attempt multi-leaf then global pane layout restore.
         self.terminal.mark_terminal_windows_restore_pending();
         self.shell.set_workspace_pane_layout_restored(false);
-        self.try_restore_terminal_window_layout(cx);
         // Prefer stored ui.workspace_pane_layout only when no open_tabs per-tab roots exist.
         // open_tabs[].root maps to per-tab session_pane_roots (Tauri Tab.root).
         let pending_layouts = self
@@ -506,6 +516,8 @@ impl NyaTermApp {
                 }
             }
         }
+        self.try_restore_terminal_window_layout(cx);
+        self.normalize_legacy_terminal_groups();
         if self.terminal_windows_is_multi_leaf() {
             self.shell
                 .set_status("restored workspace tabs and window layout".to_string());
@@ -716,13 +728,11 @@ impl NyaTermApp {
             "restore skipped unsupported tab {} ({})",
             tab.title, tab.session_type
         ));
+        self.terminal.preserve_unread_terminal_layout();
         false
     }
 
     fn apply_restorable_workspace_pane_layout(&mut self, layout: RestorableWorkspacePaneNode) {
-        if self.terminal_windows_is_multi_leaf() {
-            return;
-        }
         let ordered = self
             .session
             .ordered_sessions()
@@ -733,6 +743,7 @@ impl NyaTermApp {
             return;
         }
         let Some(restored) = WorkspacePaneNode::restore_layout(&layout, &ordered) else {
+            self.terminal.preserve_unread_terminal_layout();
             return;
         };
         if !restored.is_split() {

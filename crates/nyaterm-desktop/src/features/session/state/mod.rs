@@ -446,6 +446,30 @@ impl SessionFeatureState {
     pub(in crate::features) fn start_has_pending(&self) -> bool {
         self.start.has_pending()
     }
+    #[cfg(test)]
+    pub(in crate::features) fn simulate_pending_start(
+        &mut self,
+        id: &str,
+        pending: PendingSessionStart,
+    ) {
+        self.start.register_pending(id.to_string(), pending);
+    }
+    #[cfg(test)]
+    pub(in crate::features) fn simulate_start_failure(&mut self, id: &str) {
+        if let SessionStartEventRequest::Pending {
+            pending,
+            was_active,
+        } = self.start.take_event_request(id)
+        {
+            self.start.record_failure(
+                id.to_string(),
+                pending,
+                "failed".to_string(),
+                was_active,
+                false,
+            );
+        }
+    }
 
     pub(in crate::features) fn start_has_failed(&self) -> bool {
         self.start.has_failed()

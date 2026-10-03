@@ -1063,10 +1063,20 @@ impl NyaTermApp {
         if self.shell.main_mode() != MainMode::Workspace {
             return Vec::new();
         }
-        if let Some(root) = self.terminal.windows.tree.as_ref()
-            && matches!(root, TerminalWindowNode::Split { .. })
-        {
-            return terminal_window_node_visible_tab_ids(root);
+        if self.shell.pane_focus_mode() {
+            if self.session.start_has_active_pending() || self.session.start_has_active_failed() {
+                return Vec::new();
+            }
+            return self.session.active_id().into_iter().collect();
+        }
+        if let Some(root) = self.terminal.windows.tree.as_ref() {
+            let mut visible = terminal_window_node_visible_tab_ids(root);
+            if (self.session.start_has_active_pending() || self.session.start_has_active_failed())
+                && let Some(group) = self.current_terminal_group()
+            {
+                visible.retain(|tab| root.leaf_for_tab(tab) != Some(group.as_str()));
+            }
+            return visible;
         }
         if let Some(root) = self.shell.workspace_split() {
             return workspace_pane_node_visible_session_ids(root);

@@ -110,7 +110,10 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let input_started_at = Instant::now();
-        if bytes.is_empty() {
+        if bytes.is_empty()
+            || self.session.start_has_active_pending()
+            || self.session.start_has_active_failed()
+        {
             return false;
         }
         // Tauri/xterm custom key path: non-smart buffer selections stay painted while

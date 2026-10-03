@@ -190,11 +190,15 @@ pub(super) struct ShellWorkspaceState {
     pub(super) split_resize: Option<WorkspaceSplitResizeState>,
     pub(super) pane_roots: HashMap<String, WorkspacePaneNode>,
     pub(super) tab_owner: HashMap<String, String>,
-    pub(super) focused_terminal_leaf_id: Option<String>,
     pub(super) pane_layout_restored: bool,
+    pub(super) pane_layout_loading: bool,
 }
 
 impl ShellFeatureState {
+    pub(in crate::features) fn workspace_layout_restore_is_settled(&self) -> bool {
+        self.workspace.pane_layout_restored && !self.workspace.pane_layout_loading
+    }
+
     pub(in crate::features) fn pane_focus_mode(&self) -> bool {
         self.workspace.pane_focus_mode
     }
@@ -274,8 +278,8 @@ impl ShellFeatureState {
                 split_resize: None,
                 pane_roots: HashMap::new(),
                 tab_owner: HashMap::new(),
-                focused_terminal_leaf_id: None,
                 pane_layout_restored: false,
+                pane_layout_loading: false,
             },
             diagnostics: ShellDiagnosticState::default(),
             resize_handle_hover: ResizeHandleHoverState::default(),
@@ -851,14 +855,6 @@ impl ShellFeatureState {
 
     pub(in crate::features) fn workspace_tab_owner(&self, session_id: &str) -> Option<&str> {
         self.workspace.tab_owner.get(session_id).map(String::as_str)
-    }
-
-    pub(in crate::features) fn set_focused_terminal_leaf(&mut self, leaf_id: Option<String>) {
-        self.workspace.focused_terminal_leaf_id = leaf_id;
-    }
-
-    pub(in crate::features) fn focused_terminal_leaf(&self) -> Option<&str> {
-        self.workspace.focused_terminal_leaf_id.as_deref()
     }
 
     pub(in crate::features) fn set_workspace_pane_layout_restored(&mut self, restored: bool) {

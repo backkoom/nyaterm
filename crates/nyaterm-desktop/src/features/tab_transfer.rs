@@ -308,6 +308,9 @@ impl NyaTermApp {
                 .terminal
                 .place_tab_before_in_terminal_windows(&root_tab_id, tab_id);
         }
+        if let MoveTabPlacement::AfterTab(tab_id) = placement {
+            self.reorder_session_relative(root_tab_id.clone(), tab_id.clone(), true, cx);
+        }
         if let MoveTabPlacement::TerminalLeaf { leaf_id, edge } = placement {
             let zone = edge.map_or(TabDockZone::Center, |edge| {
                 TabDockZone::Edge(match edge {

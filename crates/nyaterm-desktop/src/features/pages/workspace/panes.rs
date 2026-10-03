@@ -5,7 +5,6 @@ use gpui::{
 };
 
 use super::super::super::NyaTermApp;
-use super::PaneBorderEdges;
 use crate::features::formatting::short_id;
 use crate::features::view_widgets::connection_spinner;
 use crate::models::{WorkspacePaneNode, WorkspaceSplitDirection};
@@ -143,17 +142,13 @@ impl NyaTermApp {
     pub(super) fn render_workspace_pane_node(
         &mut self,
         node: WorkspacePaneNode,
-        show_chrome: bool,
-        border_edges: PaneBorderEdges,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let palette = self.theme_palette();
         match node {
             WorkspacePaneNode::Leaf { session_id } => {
-                let is_active = self.session.active_id() == Some(session_id.as_str());
                 let content = self.workspace_session_content(session_id.clone(), cx);
                 let focus_id = session_id.clone();
-                let mut pane = div()
+                let pane = div()
                     .id(SharedString::from(format!("workspace-leaf-{session_id}")))
                     .size_full()
                     .min_h_0()
@@ -171,19 +166,6 @@ impl NyaTermApp {
                         }
                         cx.notify();
                     }));
-                if show_chrome {
-                    // Tauri PaneWorkspace uses the pane border as the only split chrome.
-                    pane = pane
-                        .border_t(if border_edges.top { px(1.) } else { px(0.) })
-                        .border_r(if border_edges.right { px(1.) } else { px(0.) })
-                        .border_b(if border_edges.bottom { px(1.) } else { px(0.) })
-                        .border_l(if border_edges.left { px(1.) } else { px(0.) })
-                        .border_color(if is_active {
-                            rgb(palette.primary)
-                        } else {
-                            rgb(palette.border)
-                        });
-                }
                 pane.child(div().flex_1().min_h_0().overflow_hidden().child(content))
                     .into_any_element()
             }
@@ -194,9 +176,8 @@ impl NyaTermApp {
                 first,
                 second,
             } => {
-                let (first_edges, second_edges) = border_edges.split(direction);
-                let first_el = self.render_workspace_pane_node(*first, true, first_edges, cx);
-                let second_el = self.render_workspace_pane_node(*second, true, second_edges, cx);
+                let first_el = self.render_workspace_pane_node(*first, cx);
+                let second_el = self.render_workspace_pane_node(*second, cx);
                 let divider = self.workspace_split_resize_handle(id.clone(), direction, cx);
                 let primary_basis =
                     relative(WorkspacePaneNode::primary_weight(ratio_percent) / 100.);
