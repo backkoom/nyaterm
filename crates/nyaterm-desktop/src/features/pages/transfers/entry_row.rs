@@ -20,8 +20,16 @@ pub(super) fn format_browser_file_size(size: Option<u64>) -> String {
     match size {
         None | Some(0) => "-".to_string(),
         Some(size) if size < 1024 => format!("{size} B"),
-        Some(size) if size < 1024 * 1024 => format!("{:.1} KB", size as f64 / 1024.),
-        Some(size) => format!("{:.1} MB", size as f64 / (1024. * 1024.)),
+        Some(size) => {
+            const UNITS: [&str; 6] = ["KB", "MB", "GB", "TB", "PB", "EB"];
+            let mut unit_index = 0;
+            let mut divisor = 1024_u64;
+            while size / divisor >= 1024 && unit_index < UNITS.len() - 1 {
+                divisor *= 1024;
+                unit_index += 1;
+            }
+            format!("{:.1} {}", size as f64 / divisor as f64, UNITS[unit_index])
+        }
     }
 }
 
@@ -441,9 +449,46 @@ mod format_tests {
 
     #[test]
     fn browser_sizes_follow_tauri_labels_without_changing_transfer_progress() {
+        assert_eq!(format_browser_file_size(None), "-");
         assert_eq!(format_browser_file_size(Some(0)), "-");
         assert_eq!(format_browser_file_size(Some(512)), "512 B");
         assert_eq!(format_browser_file_size(Some(1536)), "1.5 KB");
         assert_eq!(format_browser_file_size(Some(1024 * 1024)), "1.0 MB");
+    }
+
+    #[test]
+    fn browser_sizes_promote_units_at_each_binary_threshold() {
+        for (exponent, unit, previous_unit) in [
+            (1, "KB", "B"),
+            (2, "MB", "KB"),
+            (3, "GB", "MB"),
+            (4, "TB", "GB"),
+            (5, "PB", "TB"),
+            (6, "EB", "PB"),
+        ] {
+            let threshold = 1024_u64.pow(exponent);
+            let below_threshold = if exponent == 1 {
+                "1023 B".to_string()
+            } else {
+                format!("1024.0 {previous_unit}")
+            };
+            assert_eq!(
+                format_browser_file_size(Some(threshold - 1)),
+                below_threshold
+            );
+            assert_eq!(
+                format_browser_file_size(Some(threshold)),
+                format!("1.0 {unit}")
+            );
+            assert_eq!(
+                format_browser_file_size(Some(threshold + threshold / 2)),
+                format!("1.5 {unit}")
+            );
+        }
+    }
+
+    #[test]
+    fn browser_sizes_handle_the_largest_byte_count() {
+        assert_eq!(format_browser_file_size(Some(u64::MAX)), "16.0 EB");
     }
 }
