@@ -9,8 +9,15 @@ impl Plugin for GpuMonitor {
             return Err(RpcError::method_not_found(method));
         }
         let result = context.host().remote_probe("gpu-overview").await?;
-        if result.get("exitStatus").and_then(Value::as_u64) != Some(0) {
-            return Err(RpcError::new(-32000, "GPU probe did not exit successfully"));
+        match result.get("exitStatus").and_then(Value::as_u64) {
+            Some(0) => {}
+            Some(status) => {
+                return Err(RpcError::new(
+                    -32000,
+                    format!("GPU probe failed (exit status {status})"),
+                ));
+            }
+            None => return Err(RpcError::new(-32000, "GPU probe returned no exit status")),
         }
         let output = result
             .get("stdout")

@@ -5,9 +5,9 @@
 
 ## 交付
 
-- 源码：`plugins/examples/gpu-monitor/`，插件 ID `nyaterm.gpu`，版本 `1.0.0`。
-- 包：`temp/plugins/gpu-monitor.nyap`，Windows x86_64，484,490 字节，8 个 ZIP 条目。
-- SHA-256：`1ce31438e052427f926068837d1643ca465ceb02f30d100055dab38535548264`。
+- 源码：`plugins/examples/gpu-monitor/`，插件 ID `nyaterm.gpu`，版本 `1.0.1`。
+- 包：`temp/plugins/gpu-monitor.nyap`，Windows x86_64，484,743 字节，8 个 ZIP 条目。
+- SHA-256：`e92a8888b3658e5fb72a0a576b09657db37f5dfac66cd4b133f637ff7d522bd3`。
 - 用法与构建：[GPU 插件 README](../plugins/examples/gpu-monitor/README.md)。
 - API：[插件开发说明](plugin-development.md)。
 
@@ -22,7 +22,7 @@ node plugins/examples/gpu-monitor/verify-ui.mjs
 当前包只声明 Windows x86_64；构建脚本支持在 Linux/macOS、x86_64/aarch64 宿主重建相应产物。
 不能据此宣称跨平台桌面验证完成。
 
-## 自动验证
+## 首版自动验证
 
 | 检查                                        | 结果与范围                                                                                                                       |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -50,6 +50,32 @@ GPU Monitor 冲突、共享需求、无重叠/补发、最后需求释放、取�
 执行器模拟远端输出，未建立网络 SSH 连接。私有 exec 通道代码经过 Tauri check/Clippy；
 `SessionCommand::Write` 不在 Probe 执行路径中。尚未实际验证 russh 网络取消或终端无输入干扰。
 jsdom 只验证构建产物逻辑和 DOM，不等同于 WebView2 的样式、opaque-origin 自定义协议或原生桌面验收。
+
+## 1.0.1 换行修复验证
+
+用户桌面运行 `1.0.0` 报告 `GPU probe did not exit successfully`。
+检查原始 `.nyap` 发现 `gpu.sh` 的 34 个换行全部为 CRLF。
+在 WSL Ubuntu 的真实 `/bin/sh -s` 中，原字节第二行报 `export: LC_ALL\r: bad variable name`，退出码 2；
+同样脚本仅转换为 LF 后成功，缺少 NVIDIA 工具时输出 `GPU_AVAILABLE\t0` 并退出 0。
+首版 Sidecar 测试模拟远端输出，未执行脚本，因而没有发现这一打包缺陷。
+
+`1.0.1` 将脚本源码和构建输出固定为 LF，构建脚本显式规范换行；
+后台错误区分非零退出码与没有退出状态，不记录原始 stdout/stderr。
+提高版本号使已安装的不可变 `1.0.0` 能通过正常更新流程安装修复。
+
+本次通过的检查：
+
+- `pnpm plugin:example:gpu`：独立 TypeScript、经典脚本 UI、release 后台构建。
+- `pnpm plugin:pack ...`：实际安装器的包校验；新版包所有 checksums 和 LF 字节另行核对。
+- `python plugins/examples/gpu-monitor/verify-probe.py --wsl Ubuntu`：执行最终包内的真实脚本，
+  验证 CRLF 失败、LF 无工具分支和隔离 `nvidia-smi` 样本的设备/CUDA/进程输出。
+- GPU Sidecar 测试 3 项通过：成功采集复用、退出码/缺失状态诊断、源码换行回归。
+- 最终 `1.0.1` 安装包 Sidecar 测试 1 项通过：实际安装/授权并启动 release 程序，两次固定 Probe 往返。
+- Runtime `clippy --all-targets --features sdk-fixture -- -D warnings` 通过。
+- 构建产物 GPU UI 冒烟通过。
+
+此修复只需更新插件包并重新授权，不需要修改或重新编译宿主。
+Linux Shell 验证使用本机 WSL 和固定 NVIDIA 样本，仍未连接真实 NVIDIA SSH 服务器。
 
 ## 用户 SSH 会话上的桌面验收（未执行）
 

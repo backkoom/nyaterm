@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "nyaterm.gpu",
   "name": "GPU Monitor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "NVIDIA GPU monitoring over an existing NyaTerm SSH session",
   "publisher": "NyaTerm",
   "engine": ">=1.2.12, <2.0.0",

@@ -14,7 +14,10 @@ use std::{
     time::Duration,
 };
 
-struct Host(AtomicUsize);
+struct Host {
+    calls: AtomicUsize,
+    exit_status: Option<u32>,
+}
 #[async_trait::async_trait]
 impl HostHandler for Host {
     async fn call(&self, method: &str, params: Value) -> Result<Value> {
@@ -23,17 +26,16 @@ impl HostHandler for Host {
             params,
             json!({"scopeToken":"gpu-scope","input":{"probeId":"gpu-overview"}})
         );
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(json!({"stdout":concat!(
             "GPU_AVAILABLE\t1\nGPU_CUDA_VERSION\t12.4\nGPU_CSV_BEGIN\n",
             "0, GPU-a, NVIDIA RTX 4090, 550.54, 43, 77, 31, 24564, 12345, 12219, 180.5, 450, 46, P2\n",
             "GPU_CSV_END\nGPU_PROCESS_CSV_BEGIN\nGPU-a, 4242, 2048, python\nGPU_PROCESS_CSV_END\n"
-        ),"stderr":"","exitStatus":0}))
+        ),"stderr":"private probe output must not appear in diagnostics","exitStatus":self.exit_status}))
     }
 }
 
-#[tokio::test]
-async fn real_gpu_backend_reuses_process_and_parses_reverse_probe_response() {
+async fn start_fixture(host: Arc<Host>) -> (tempfile::TempDir, Sidecar) {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("bin")).unwrap();
     let executable = if cfg!(windows) {
@@ -53,7 +55,6 @@ async fn real_gpu_backend_reuses_process_and_parses_reverse_probe_response() {
     value["backend"]["executables"] =
         json!({format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH):executable});
     let manifest = Manifest::parse(&serde_json::to_vec(&value).unwrap(), "1.2.12").unwrap();
-    let host = Arc::new(Host(AtomicUsize::new(0)));
     let sidecar = Sidecar::spawn(
         root.path(),
         &manifest,
@@ -63,6 +64,16 @@ async fn real_gpu_backend_reuses_process_and_parses_reverse_probe_response() {
     )
     .await
     .unwrap();
+    (root, sidecar)
+}
+
+#[tokio::test]
+async fn real_gpu_backend_reuses_process_and_parses_reverse_probe_response() {
+    let host = Arc::new(Host {
+        calls: AtomicUsize::new(0),
+        exit_status: Some(0),
+    });
+    let (_root, sidecar) = start_fixture(host.clone()).await;
     for _ in 0..2 {
         let value = sidecar
             .request(
@@ -77,8 +88,45 @@ async fn real_gpu_backend_reuses_process_and_parses_reverse_probe_response() {
         assert_eq!(overview.gpus[0].utilization_gpu_percent, Some(77.0));
         assert_eq!(overview.processes[0].gpu_index, Some(0));
     }
-    assert_eq!(host.0.load(Ordering::SeqCst), 2);
+    assert_eq!(host.calls.load(Ordering::SeqCst), 2);
     sidecar.stop();
+}
+
+#[tokio::test]
+async fn failed_probe_reports_exit_status_without_logging_raw_output() {
+    for (exit_status, message) in [
+        (Some(2), "GPU probe failed (exit status 2)"),
+        (None, "GPU probe returned no exit status"),
+    ] {
+        let host = Arc::new(Host {
+            calls: AtomicUsize::new(0),
+            exit_status,
+        });
+        let (_root, sidecar) = start_fixture(host).await;
+        let error = sidecar
+            .request(
+                "monitor/collect",
+                json!({"scopeToken":"gpu-scope","input":null}),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(message), "{error}");
+        assert!(!error.contains("private probe output"));
+        assert!(!error.contains("python"));
+        sidecar.stop();
+    }
+}
+
+#[test]
+fn gpu_probe_source_uses_portable_shell_line_endings() {
+    let source = include_bytes!("../../../../plugins/examples/gpu-monitor/assets/probes/gpu.sh");
+    assert!(
+        !source.contains(&b'\r'),
+        "Run the GPU plugin build to normalize Windows line endings"
+    );
+    assert!(!source.starts_with(&[0xef, 0xbb, 0xbf]));
 }
 
 /// Opt-in verification of the final archive, not the debug fixture binary.
@@ -137,10 +185,7 @@ async fn installed_release_package_collects_using_its_fixed_probe() {
     let digest = prepared.preview.digest.clone();
     let mut registry = Registry::open(temp.path().join("plugins"), "1.2.12".into()).unwrap();
     registry.install(prepared, &digest).unwrap();
-    let permissions = vec![
-        "native".into(),
-        "remote.probe".into(),
-    ];
+    let permissions = vec!["native".into(), "remote.probe".into()];
     registry
         .configure("nyaterm.gpu", true, permissions.clone())
         .unwrap();

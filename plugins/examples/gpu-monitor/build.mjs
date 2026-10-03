@@ -8,6 +8,10 @@ import tailwindcss from "@tailwindcss/vite";
 
 const root = fileURLToPath(new URL("./", import.meta.url));
 const repository = path.resolve(root, "../../..");
+// Execute on Linux even when this project was created/checked out on Windows.
+const probePath = path.join(root, "assets/probes/gpu.sh");
+const probe = readFileSync(probePath, "utf8").replace(/\r\n/g, "\n");
+writeFileSync(probePath, probe);
 const translations = {};
 for (const language of ["en", "zh-CN", "zh-TW", "ko"]) {
   const locale = JSON.parse(

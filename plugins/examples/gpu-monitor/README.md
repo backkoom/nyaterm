@@ -28,6 +28,19 @@ node plugins/examples/gpu-monitor/verify-ui.mjs
 更新或切换版本会停用插件并移除自动脚本授权，需重新审核。第二个有效的 `gpu.v1` Monitor 无法同时启用。
 `native` 后台是以当前用户权限运行的可信程序，宿主 RPC 权限不构成操作系统沙箱。
 
+当前版本 `1.0.1` 修复了 Windows 构建的脚本 CRLF 换行问题。构建时规范为 LF，Git 属性也固定 LF；
+已安装 `1.0.0` 时直接安装新版包并重新审核授权，无需为这次修复重新编译宿主。
+执行失败会记录退出码，缺少退出状态会单独提示，不把 stderr 或 GPU 进程列表写入日志。
+
+验证最终包中的实际脚本（需要 Python；Windows 使用已安装的 WSL Ubuntu）：
+
+```powershell
+python plugins/examples/gpu-monitor/verify-probe.py --wsl Ubuntu
+```
+
+Linux 使用 `python3 plugins/examples/gpu-monitor/verify-probe.py`。
+测试使用隔离的 `nvidia-smi` 固定样本，并验证 CRLF 失败和无 NVIDIA 工具的分支，不连接真实服务器。
+
 ## 行为和恢复
 
 - 立即采集一次，随后按既有 GPU 间隔采集，最短 3 秒；请求不重叠，完成后安排下一轮。

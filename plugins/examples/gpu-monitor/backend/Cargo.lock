@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-plugin-gpu"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nyaterm-gpu",
  "nyaterm-plugin-sdk",
