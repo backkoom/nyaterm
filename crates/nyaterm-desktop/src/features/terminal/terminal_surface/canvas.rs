@@ -751,6 +751,9 @@ impl NyaTermApp {
             .flex_1()
             .h_full()
             .min_h_0()
+            // Match the empty workbench's shell and content background layers so
+            // opening a session preserves its wallpaper shading.
+            .bg(self.shell_surface_color(palette.terminal_bg))
             .font(terminal_gpui_font)
             .text_size(px(terminal_font_size))
             .font_weight(FontWeight(
@@ -763,7 +766,7 @@ impl NyaTermApp {
                     .flex()
                     .flex_col()
                     .relative()
-                    .bg(self.shell_transparent_color(palette.terminal_bg))
+                    .bg(self.shell_surface_color(palette.terminal_bg))
                     .key_context(TERMINAL_KEY_CONTEXT)
                     .track_focus(&self.terminal.input.focus)
                     .on_action(cx.listener(|this, _: &TerminalTab, window, cx| {
