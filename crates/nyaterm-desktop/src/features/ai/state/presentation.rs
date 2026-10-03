@@ -49,12 +49,40 @@ impl AiFeatureState {
         }
     }
 
+    pub(in crate::features) fn expanded_execution_groups(&self) -> &HashSet<String> {
+        &self.chat.execution_groups_expanded
+    }
+
+    pub(in crate::features) fn toggle_execution_group(&mut self, id: String) {
+        if !self.chat.execution_groups_expanded.remove(&id) {
+            self.chat.execution_groups_expanded.insert(id);
+        }
+    }
+
     pub(in crate::features) fn expanded_message_thoughts(&self) -> &HashSet<String> {
         &self.chat.thought_expanded
     }
 
     pub(in crate::features) fn expanded_command_details(&self) -> &HashSet<String> {
         &self.chat.command_details_expanded
+    }
+
+    pub(in crate::features) fn expanded_command_scripts(&self) -> &HashSet<String> {
+        &self.chat.command_scripts_expanded
+    }
+
+    pub(in crate::features) fn toggle_command_script(&mut self, id: String) {
+        if !self.chat.command_scripts_expanded.remove(&id) {
+            self.chat.command_scripts_expanded.insert(id);
+        }
+    }
+
+    pub(in crate::features) fn agent_history_expanded(&self) -> bool {
+        self.chat.agent_history_expanded
+    }
+
+    pub(in crate::features) fn toggle_agent_history(&mut self) {
+        self.chat.agent_history_expanded = !self.chat.agent_history_expanded;
     }
 
     pub(in crate::features) fn toggle_message_thought(&mut self, id: String) {

@@ -4,11 +4,23 @@ use gpui::{
     App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px,
     rgb, svg,
 };
+use nyaterm_core::ai::AiCommandCard;
 use nyaterm_ui::{NyaButton, NyaButtonVariant};
 
+use crate::features::formatting::compact_id;
 use crate::theme::ThemePalette;
 
 use super::AiPanel;
+
+pub(super) fn ai_command_target_label(card: &AiCommandCard) -> String {
+    card.target
+        .as_ref()
+        .map(|target| target.label.trim())
+        .filter(|label| !label.is_empty())
+        .map(str::to_string)
+        .or_else(|| card.target_terminal_session_id.as_deref().map(compact_id))
+        .unwrap_or_default()
+}
 
 pub(super) fn ai_send_button(
     _palette: ThemePalette,
@@ -154,4 +166,41 @@ pub(super) fn ai_message_menu_position(
     let max_x = (viewport_width - menu_width - margin).max(margin);
     let max_y = (viewport_height - height - margin).max(margin);
     (x.clamp(margin, max_x), y.clamp(margin, max_y), max_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use nyaterm_core::ai::{AiCommandCard, AiTerminalTarget};
+
+    use super::ai_command_target_label;
+
+    #[test]
+    fn legacy_command_target_is_compact_and_keeps_its_execution_id() {
+        let mut card: AiCommandCard = serde_json::from_value(serde_json::json!({
+            "id": "legacy-command",
+            "title": "Inspect resources",
+            "command": "pwd",
+            "explanation": "",
+            "expectedEffect": "",
+            "targetTerminalSessionId": "af0280b6-e62b-4d17-8f3c-000000000001"
+        }))
+        .unwrap();
+        assert_eq!(ai_command_target_label(&card), "af0280b6..0001");
+        assert_eq!(
+            card.target_terminal_session_id.as_deref(),
+            Some("af0280b6-e62b-4d17-8f3c-000000000001")
+        );
+
+        card.target = Some(AiTerminalTarget {
+            terminal_session_id: card.target_terminal_session_id.clone().unwrap(),
+            connection_id: None,
+            label: "Production SSH".into(),
+            host: Some("example.test".into()),
+            username: None,
+            session_type: "SSH".into(),
+        });
+        assert_eq!(ai_command_target_label(&card), "Production SSH");
+        card.target.as_mut().unwrap().label = " ".into();
+        assert_eq!(ai_command_target_label(&card), "af0280b6..0001");
+    }
 }

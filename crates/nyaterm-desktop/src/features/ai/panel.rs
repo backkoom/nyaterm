@@ -31,6 +31,7 @@ use crate::features::runtime_jobs::AiAgentStepView;
 
 mod command_syntax;
 mod components;
+mod execution;
 pub(super) mod harness;
 mod messages;
 mod transcript;
@@ -111,6 +112,9 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub response_phase: AiResponsePhase,
     pub expanded_message_thoughts: Arc<[String]>,
     pub expanded_command_details: Arc<[String]>,
+    pub expanded_command_scripts: Arc<[String]>,
+    pub agent_history_expanded: bool,
+    pub expanded_execution_groups: Arc<[String]>,
     pub command_cards: Arc<[AiCommandCard]>,
     pub agent_steps: Arc<[AiAgentStepPresentation]>,
     pub target_sessions: Arc<[AiTargetSession]>,
@@ -300,6 +304,12 @@ impl AiPanel {
         let palette = snapshot.chrome.palette;
         let prompt_input = NyaInputShell::new("ai.chat.prompt", &snapshot.prompt_input)
             .multi_line()
+            .gpui_context_menu([
+                t!("menu.cut").into(),
+                t!("menu.copy").into(),
+                t!("menu.paste").into(),
+                t!("menu.selectAll").into(),
+            ])
             .height(px(64.))
             .into_any_element();
         let model_search_input = snapshot
@@ -361,14 +371,6 @@ impl AiPanel {
             .when_some(snapshot.detected_error.clone(), |this, detected| {
                 this.child(self.ai_detected_error_banner(&snapshot, detected, cx))
             })
-            .when_some(
-                snapshot.native_run.clone().filter(|view| {
-                    !view.plan.tasks.is_empty()
-                        || !view.questions.is_empty()
-                        || view.verification.is_some()
-                }),
-                |this, view| this.child(self.native_run_card(&snapshot, view, cx)),
-            )
             .child(
                 div()
                     .flex_1()
@@ -1957,6 +1959,13 @@ impl gpui::Render for AiPanel {
         {
             let key = (view.run_id.clone(), call_id.clone());
             if self.focused_question.as_ref() != Some(&key) {
+                if let Some(index) = self.transcript_rows.iter().position(|row| {
+                    matches!(row, AiTranscriptRow::NativeRun { run_id, .. } if run_id == &view.run_id)
+                }) {
+                    self.transcript_scroll.update(cx, |scroll, cx| {
+                        scroll.scroll_to_item(index, cx);
+                    });
+                }
                 window.focus(&input.read(cx).focus_handle(), cx);
                 self.focused_question = Some(key);
             }
@@ -2444,6 +2453,21 @@ impl NyaTermApp {
             expanded_command_details: self
                 .ai
                 .expanded_command_details()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+            expanded_command_scripts: self
+                .ai
+                .expanded_command_scripts()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+            agent_history_expanded: self.ai.agent_history_expanded(),
+            expanded_execution_groups: self
+                .ai
+                .expanded_execution_groups()
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>()
@@ -3405,16 +3429,16 @@ mod tests {
             .collect::<Vec<_>>()
             .into();
         let old_rows = AiTranscriptRow::project(&previous);
-        assert_eq!(old_rows.len(), 27);
+        assert_eq!(old_rows.len(), 26);
         assert!(matches!(
-            old_rows[3],
+            old_rows[2],
             AiTranscriptRow::AgentStep {
                 index: 4,
                 step_index: 4
             }
         ));
         assert!(matches!(
-            old_rows[26],
+            old_rows[25],
             AiTranscriptRow::Command { index: 7, .. }
         ));
 
@@ -3432,7 +3456,7 @@ mod tests {
         );
         assert_eq!(
             update.remeasure,
-            vec![19..20],
+            vec![18..19],
             "expanded output changes only its own row height"
         );
         assert!(!update.reset);
@@ -3521,7 +3545,7 @@ mod tests {
         snapshot.agent_steps = vec![final_step].into();
         assert_eq!(
             AiTranscriptRow::project(&snapshot).len(),
-            4,
+            3,
             "unrelated steps must remain visible"
         );
     }
@@ -3551,6 +3575,65 @@ mod tests {
         );
         assert_eq!(update.remeasure, vec![0..1]);
         assert!(update.splice.is_none() && !update.remeasure_all && !update.reset);
+    }
+
+    #[test]
+    fn advancing_and_stopping_agent_refreshes_activity_in_retained_rows() {
+        let root = TestConfigDir::new("nyaterm-ai-step-activity");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let mut previous =
+            vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        let mut planning = linked_command_step(AiAgentStepStatus::Planning);
+        planning.step.kind = crate::features::ai::presentation::AiAgentStepKind::Planning;
+        planning.step.command_card_id = None;
+        planning.step.source_message_id = None;
+        previous.agent_steps = vec![planning.clone()].into();
+        previous.running = true;
+        assert!(previous.step_is_active(0));
+
+        let mut next = previous.clone();
+        planning.step.step_index = 1;
+        next.agent_steps = vec![next.agent_steps[0].clone(), planning].into();
+        assert!(!next.step_is_active(0));
+        assert!(next.step_is_active(1));
+        let update = AiTranscriptUpdate::between(
+            Some(&previous),
+            &next,
+            &AiTranscriptRow::project(&previous),
+            &AiTranscriptRow::project(&next),
+        );
+        assert!(update.splice.is_some());
+        assert!(
+            !AiTranscriptRow::project(&next)
+                .iter()
+                .any(|row| { matches!(row, AiTranscriptRow::AgentStep { step_index: 0, .. }) }),
+            "earlier auxiliary activity is collapsed"
+        );
+
+        previous = next.clone();
+        next.running = false;
+        assert!(!next.step_is_active(1));
+        let update = AiTranscriptUpdate::between(
+            Some(&previous),
+            &next,
+            &AiTranscriptRow::project(&previous),
+            &AiTranscriptRow::project(&next),
+        );
+        assert!(update.splice.is_some() && !update.reset);
+        assert!(
+            !AiTranscriptRow::project(&next)
+                .iter()
+                .any(|row| { matches!(row, AiTranscriptRow::AgentStep { .. }) })
+        );
+        next.agent_history_expanded = true;
+        assert_eq!(
+            AiTranscriptRow::project(&next)
+                .iter()
+                .filter(|row| { matches!(row, AiTranscriptRow::AgentStep { .. }) })
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -3675,6 +3758,464 @@ mod tests {
     }
 
     #[test]
+    fn native_plan_stays_in_request_history_but_questions_remain_visible_and_focused() {
+        use nyaterm_core::ai::harness::{
+            AgentPlan, AgentPlanTask, AgentQuestion, AgentTaskStatus, AgentToolRegistry,
+        };
+        let root = TestConfigDir::new("nyaterm-ai-native-disclosure");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let user_id = vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.ai
+                    .begin_chat_request("inspect".into(), AiMode::Agent, None);
+                let user_id = app.ai.chat_snapshot_messages()[0].id.clone();
+                app.ai.begin_native_run(
+                    serde_json::from_value(serde_json::json!({
+                        "mode": "agent", "action": "generate_command", "userInput": "inspect"
+                    }))
+                    .unwrap(),
+                );
+                app.ai
+                    .update_native_plan(AgentPlan {
+                        tasks: vec![AgentPlanTask {
+                            id: "inspect".into(),
+                            description: "Inspect resources".into(),
+                            status: AgentTaskStatus::InProgress,
+                            verification: None,
+                        }],
+                    })
+                    .unwrap();
+                app.flush_ai_panel_snapshot(cx);
+                user_id
+            })
+        });
+        compact_draw(&app, vcx);
+        assert!(vcx.debug_bounds("ai-native-run").is_none());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.ai.toggle_execution_group(user_id.clone());
+                app.flush_ai_panel_snapshot(cx);
+            })
+        });
+        compact_draw(&app, vcx);
+        assert!(vcx.debug_bounds("ai-native-run").is_some());
+        vcx.update(|_, cx| app.update(cx, |app, cx| {
+            app.ai.toggle_execution_group(user_id.clone());
+            let call = AgentToolRegistry::parse(&[], r#"{"action":"request_user_input","arguments":{"questions":[{"id":"service","question":"Which service?"}]}}"#).unwrap();
+            app.ai.begin_native_call(call).unwrap();
+            app.ai.wait_native_user(vec![AgentQuestion {
+                id: "service".into(), question: "Which service?".into(), options: None,
+            }]).unwrap();
+            app.flush_ai_panel_snapshot(cx);
+        }));
+        compact_draw(&app, vcx);
+        let question = vcx.debug_bounds("ai-native-run").unwrap();
+        let viewport = vcx.debug_bounds("ai-transcript-viewport").unwrap();
+        assert!(question.top() >= viewport.top());
+        assert!(question.bottom() <= viewport.bottom());
+        vcx.update(|window, cx| {
+            let panel = app.read(cx).ai_panel.read(cx);
+            let snapshot = panel.snapshot().unwrap();
+            assert!(snapshot.expanded_execution_groups.is_empty());
+            assert!(
+                snapshot.native_answer_inputs[0]
+                    .read(cx)
+                    .component_focus_handle(cx)
+                    .is_focused(window)
+            );
+            assert!(
+                AiTranscriptRow::project(snapshot).iter().any(|row| {
+                    matches!(row, AiTranscriptRow::NativeRun { history: false, .. })
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn execution_disclosures_accept_keyboard_and_mouse_without_following_a_long_script_to_the_end()
+    {
+        let root = TestConfigDir::new("nyaterm-ai-execution-interaction");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let user_id = vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let launch = app
+                    .ai
+                    .begin_chat_request("inspect".into(), AiMode::Agent, None);
+                let user_id = app.ai.chat_snapshot_messages()[0].id.clone();
+                let mut card = chat_card("agent-fixture");
+                card.command = "echo fixture\n".repeat(100);
+                app.ai
+                    .finish_chat_job(
+                        launch.job_id,
+                        launch.session_id,
+                        Ok(AiChatJobOutput {
+                            native_call: None,
+                            mode: AiMode::Agent,
+                            text: "Inspect resources".into(),
+                            reasoning: None,
+                            command_cards: vec![card],
+                            auto_execute_first: false,
+                            approval_note: None,
+                        }),
+                    )
+                    .unwrap();
+                app.ai.upsert_agent_step(
+                    0,
+                    AiAgentStepStatus::Completed,
+                    crate::features::ai::presentation::AiAgentStepKind::Observation,
+                    "Observed",
+                    "Resources are available",
+                );
+                app.flush_ai_panel_snapshot(cx);
+                user_id
+            })
+        });
+        compact_draw(&app, vcx);
+        let scroll = vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).transcript_scroll.clone());
+        assert!(vcx.update(|_, cx| app.read(cx).ai.expanded_execution_groups().is_empty()));
+        vcx.update(|window, cx| {
+            window.blur(cx);
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+        });
+        let enter = gpui::Keystroke::parse("enter").unwrap();
+        vcx.simulate_event(gpui::KeyDownEvent {
+            keystroke: enter.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        vcx.simulate_event(gpui::KeyUpEvent { keystroke: enter });
+        compact_draw(&app, vcx);
+        assert!(vcx.update(|_, cx| {
+            app.read(cx)
+                .ai
+                .expanded_execution_groups()
+                .contains(&user_id)
+        }));
+        assert!(vcx.debug_bounds("ai-command-body-agent-fixture").is_none());
+        let command_toggle = vcx
+            .debug_bounds("ai-command-toggle-agent-fixture-content")
+            .unwrap();
+        vcx.simulate_click(command_toggle.center(), gpui::Modifiers::default());
+        compact_draw(&app, vcx);
+        assert!(vcx.update(|_, cx| {
+            app.read(cx)
+                .ai
+                .expanded_command_scripts()
+                .contains("agent-fixture")
+        }));
+        assert!(!vcx.update(|_, cx| scroll.read(cx).is_following_tail()));
+        let viewport = vcx.debug_bounds("ai-transcript-viewport").unwrap();
+        let command_toggle = vcx
+            .debug_bounds("ai-command-toggle-agent-fixture-content")
+            .unwrap();
+        assert!(command_toggle.top() >= viewport.top());
+        assert!(command_toggle.bottom() <= viewport.bottom());
+        assert!(
+            vcx.debug_bounds("ai-command-body-agent-fixture")
+                .unwrap()
+                .size
+                .height
+                > viewport.size.height
+        );
+        vcx.simulate_click(command_toggle.center(), gpui::Modifiers::default());
+        compact_draw(&app, vcx);
+        assert!(!vcx.update(|_, cx| {
+            app.read(cx)
+                .ai
+                .expanded_command_scripts()
+                .contains("agent-fixture")
+        }));
+        assert!(vcx.debug_bounds("ai-command-body-agent-fixture").is_none());
+        let selector = Box::leak(format!("ai-execution-toggle-{user_id}-content").into_boxed_str());
+        let execution_toggle = vcx.debug_bounds(selector).unwrap();
+        vcx.simulate_click(execution_toggle.center(), gpui::Modifiers::default());
+        compact_draw(&app, vcx);
+        assert!(!vcx.update(|_, cx| {
+            app.read(cx)
+                .ai
+                .expanded_execution_groups()
+                .contains(&user_id)
+        }));
+        assert!(
+            vcx.debug_bounds("ai-command-toggle-agent-fixture")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn historic_steps_without_a_command_card_fold_their_script_inside_the_request() {
+        let root = TestConfigDir::new("nyaterm-ai-historic-command");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            let mut messages: Vec<_> = (0..3).map(transcript_message).collect();
+            for message in &mut messages[1..] {
+                Arc::make_mut(message).role = AiMessageRole::Assistant;
+            }
+            let mut step = linked_command_step(AiAgentStepStatus::Completed);
+            step.step.source_message_id = Some("message-1".into());
+            step.step.command_card_id = None;
+            snapshot.messages = messages.into();
+            snapshot.agent_steps = vec![step].into();
+            snapshot.expanded_execution_groups = vec!["message-0".into()].into();
+        });
+        assert!(vcx.debug_bounds("step-command-message-1-0").is_some());
+        assert!(vcx.debug_bounds("ai-step-command-body-0").is_none());
+        assert!(vcx.debug_bounds("ai-answer-message-2").is_some());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.expanded_command_scripts = vec!["step-command-message-1-0".into()].into();
+        });
+        assert!(vcx.debug_bounds("ai-step-command-body-0").is_some());
+        assert!(vcx.debug_bounds("ai-answer-message-2").is_some());
+    }
+
+    #[test]
+    fn request_disclosure_keeps_the_user_and_final_answer_visible_and_hides_commands() {
+        let root = TestConfigDir::new("nyaterm-ai-request-disclosure");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            let mut messages: Vec<_> = (0..4).map(transcript_message).collect();
+            for message in &mut messages[1..] {
+                Arc::make_mut(message).role = AiMessageRole::Assistant;
+            }
+            Arc::make_mut(&mut messages[1]).content =
+                "I will inspect current resource usage.".into();
+            let mut card = chat_card("agent-fixture");
+            card.command = "echo resource\n".repeat(12);
+            card.explanation = "Collect current resource metrics.".into();
+            Arc::make_mut(&mut messages[2]).content = card.explanation.clone();
+            Arc::make_mut(&mut messages[2]).command_cards = vec![card];
+            Arc::make_mut(&mut messages[3]).content =
+                "Resource usage is within normal limits.".into();
+            snapshot.messages = messages.into();
+            let mut step = linked_command_step(AiAgentStepStatus::Completed);
+            step.step.source_message_id = Some("message-2".into());
+            step.step.exit_code = Some(0);
+            step.step.observation = Some("CPU 2%\nMemory 40%".into());
+            snapshot.agent_steps = vec![step].into();
+        });
+        let collapsed =
+            vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        let rows = AiTranscriptRow::project(&collapsed);
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(
+            &rows[0],
+            AiTranscriptRow::Message { index: 0, .. }
+        ));
+        assert!(
+            matches!(&rows[1], AiTranscriptRow::Execution { group } if group.id == "message-0")
+        );
+        assert!(matches!(
+            &rows[2],
+            AiTranscriptRow::FinalMessage { index: 3, .. }
+        ));
+        assert!(vcx.debug_bounds("ai-message-message-0").is_some());
+        assert!(vcx.debug_bounds("ai-execution-toggle-message-0").is_some());
+        assert!(vcx.debug_bounds("ai-answer-message-3").is_some());
+        assert!(vcx.debug_bounds("ai-message-message-1").is_none());
+        assert!(vcx.debug_bounds("ai-command-body-agent-fixture").is_none());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.expanded_execution_groups = vec!["message-0".into()].into();
+        });
+        assert!(vcx.debug_bounds("ai-message-message-1").is_some());
+        assert!(
+            vcx.debug_bounds("ai-command-toggle-agent-fixture")
+                .is_some()
+        );
+        assert!(vcx.debug_bounds("ai-command-body-agent-fixture").is_none());
+        assert!(vcx.debug_bounds("ai-answer-message-3").is_some());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.expanded_command_scripts = vec!["agent-fixture".into()].into();
+        });
+        assert!(
+            vcx.debug_bounds("ai-command-body-agent-fixture")
+                .unwrap()
+                .size
+                .height
+                > px(62.)
+        );
+        assert!(
+            vcx.debug_bounds("ai-command-output-agent-fixture")
+                .is_some()
+        );
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.expanded_execution_groups = Vec::new().into();
+        });
+        assert!(vcx.debug_bounds("ai-command-body-agent-fixture").is_none());
+        assert!(vcx.debug_bounds("ai-answer-message-3").is_some());
+        assert_eq!(AiTranscriptRow::project(&collapsed).len(), 3);
+    }
+
+    #[test]
+    fn execution_groups_do_not_merge_requests_or_promote_tool_narration_to_final_answers() {
+        use crate::features::ai::panel::execution::AiExecutionGroup;
+        use crate::features::ai::presentation::{AiAgentStepKind, AiResponsePhase};
+        let root = TestConfigDir::new("nyaterm-ai-request-boundaries");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let mut snapshot =
+            vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        let mut messages: Vec<_> = (0..6).map(transcript_message).collect();
+        for index in [1, 2, 4, 5] {
+            Arc::make_mut(&mut messages[index]).role = AiMessageRole::Assistant;
+        }
+        Arc::make_mut(&mut messages[1]).command_cards = vec![chat_card("agent-first")];
+        Arc::make_mut(&mut messages[4]).command_cards = vec![chat_card("agent-second")];
+        snapshot.messages = messages.into();
+        let groups = AiExecutionGroup::project(&snapshot);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].id, "message-0");
+        assert_eq!(groups[0].final_message, Some(2));
+        assert_eq!(groups[1].id, "message-3");
+        assert_eq!(groups[1].final_message, Some(5));
+        snapshot.expanded_execution_groups = vec!["message-0".into()].into();
+        let rows = AiTranscriptRow::project(&snapshot);
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row, AiTranscriptRow::ActivityMessage { index: 1, .. }))
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, AiTranscriptRow::ActivityMessage { index: 4, .. }))
+        );
+        let mut step = linked_command_step(AiAgentStepStatus::Running);
+        step.step.kind = AiAgentStepKind::ToolProgress;
+        step.step.command_card_id = None;
+        step.step.source_message_id = Some("message-5".into());
+        snapshot.agent_steps = vec![step].into();
+        snapshot.running = true;
+        snapshot.streaming_assistant_id = Some("message-5".into());
+        snapshot.response_phase = AiResponsePhase::ToolArguments;
+        let groups = AiExecutionGroup::project(&snapshot);
+        assert!(!groups[0].is_live(&snapshot));
+        assert!(groups[1].is_live(&snapshot));
+        assert_eq!(
+            groups[1].final_message, None,
+            "tool narration stays in the process"
+        );
+    }
+
+    #[test]
+    fn tool_preparation_belongs_to_the_streaming_message_and_remeasures_it() {
+        use crate::features::ai::presentation::{AiAgentStepKind, AiResponsePhase};
+        let root = TestConfigDir::new("nyaterm-ai-inline-progress");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        let mut previous =
+            vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        let mut message = transcript_message(0);
+        Arc::make_mut(&mut message).role = AiMessageRole::Assistant;
+        Arc::make_mut(&mut message).content.clear();
+        previous.messages = vec![message].into();
+        previous.running = true;
+        previous.streaming_assistant_id = Some("message-0".into());
+        previous.response_phase = AiResponsePhase::ToolArguments;
+        let mut next = previous.clone();
+        let mut step = linked_command_step(AiAgentStepStatus::Tool);
+        step.step.kind = AiAgentStepKind::ToolProgress;
+        step.step.command_card_id = None;
+        step.step.source_message_id = None;
+        step.step.command = None;
+        step.step.title = "Tool tool".into();
+        step.step.detail = "Streaming arguments (+2 chars)".into();
+        next.agent_steps = vec![step].into();
+        let rows = AiTranscriptRow::project(&next);
+        assert_eq!(rows.len(), 1, "preparation becomes one execution header");
+        assert!(matches!(&rows[0], AiTranscriptRow::Execution { .. }));
+        let update = AiTranscriptUpdate::between(
+            Some(&previous),
+            &next,
+            &AiTranscriptRow::project(&previous),
+            &rows,
+        );
+        assert!(update.splice.is_some());
+        next.expanded_execution_groups = vec!["message-0".into()].into();
+        edit_panel_snapshot(&app, vcx, |snapshot| *snapshot = next.clone());
+        assert!(vcx.debug_bounds("ai-thinking-message-0").is_none());
+        assert!(vcx.debug_bounds("ai-agent-step-0").is_some());
+        assert!(vcx.debug_bounds("ai-step-running-0").is_some());
+    }
+
+    #[test]
+    fn command_expansion_preserves_results_and_approval_shows_the_complete_script() {
+        let root = TestConfigDir::new("nyaterm-ai-script-expansion");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = compact_host(&mut cx, root.path());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            let mut message = transcript_message(0);
+            Arc::make_mut(&mut message).role = AiMessageRole::Assistant;
+            let mut card = chat_card("agent-fixture");
+            card.title = "Agent Command".into();
+            card.explanation = "Inspect current resource usage".into();
+            card.command = "echo resource\n".repeat(12);
+            Arc::make_mut(&mut message).content = card.explanation.clone();
+            Arc::make_mut(&mut message).command_cards = vec![card];
+            snapshot.messages = vec![message].into();
+            let mut step = linked_command_step(AiAgentStepStatus::Completed);
+            step.step.exit_code = Some(0);
+            step.step.observation = Some("CPU 2%\nMemory 40%".into());
+            step.step.thought = Some("Inspect current resource usage".into());
+            snapshot.agent_steps = vec![step].into();
+            snapshot.expanded_execution_groups = vec!["message-0".into()].into();
+        });
+        assert!(vcx.debug_bounds("ai-answer-message-0").is_none());
+        assert!(
+            vcx.debug_bounds("ai-command-thought-agent-fixture")
+                .is_none()
+        );
+        assert!(vcx.debug_bounds("ai-command-body-agent-fixture").is_none());
+        assert!(
+            vcx.debug_bounds("ai-command-toggle-agent-fixture")
+                .is_some()
+        );
+        let previous =
+            vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.expanded_command_scripts = vec!["agent-fixture".into()].into();
+        });
+        assert!(
+            vcx.debug_bounds("ai-command-body-agent-fixture")
+                .unwrap()
+                .size
+                .height
+                > px(62.)
+        );
+        let next = vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+        let update = AiTranscriptUpdate::between(
+            Some(&previous),
+            &next,
+            &AiTranscriptRow::project(&previous),
+            &AiTranscriptRow::project(&next),
+        );
+        assert_eq!(update.remeasure, vec![1..2]);
+        edit_panel_snapshot(&app, vcx, |snapshot| {
+            snapshot.expanded_command_scripts = Vec::new().into();
+            snapshot.expanded_execution_groups = Vec::new().into();
+            let mut steps = snapshot.agent_steps.to_vec();
+            steps[0].step.status = AiAgentStepStatus::NeedsApproval;
+            steps[0].step.observation = None;
+            snapshot.agent_steps = steps.into();
+        });
+        assert!(
+            vcx.debug_bounds("ai-command-body-agent-fixture")
+                .unwrap()
+                .size
+                .height
+                > px(62.)
+        );
+        assert!(
+            vcx.debug_bounds("ai-command-script-agent-fixture")
+                .is_none()
+        );
+        assert!(vcx.debug_bounds("ai-command-run-agent-fixture").is_some());
+    }
+
+    #[test]
     fn long_commands_and_collapsed_output_fit_light_and_dark_panel_layouts() {
         let root = TestConfigDir::new("nyaterm-ai-command-themes");
         let mut cx = TestAppContext::single();
@@ -3700,7 +4241,16 @@ mod tests {
             let command = vcx.debug_bounds("ai-command-body-agent-fixture").unwrap();
             let viewport = vcx.debug_bounds("ai-transcript-viewport").unwrap();
             assert!(command.left() >= viewport.left() && command.right() <= viewport.right());
-            assert!(command.size.height > px(18.), "long command should wrap");
+            assert!(
+                command.size.height <= px(62.),
+                "long command preview must stay bounded"
+            );
+            assert!(
+                vcx.debug_bounds("ai-command-script-agent-fixture")
+                    .is_some()
+            );
+            let result = vcx.debug_bounds("ai-command-result-agent-fixture").unwrap();
+            assert!(result.top() < command.top(), "results precede the command");
             assert!(
                 vcx.debug_bounds("ai-command-output-agent-fixture")
                     .is_some()
@@ -3711,6 +4261,7 @@ mod tests {
             ] {
                 let content = vcx.debug_bounds(selector).unwrap();
                 let card = vcx.debug_bounds("ai-command-agent-fixture").unwrap();
+                assert_eq!(content.size.height, px(20.));
                 assert!(
                     content.left() - card.left() < px(16.),
                     "disclosures must align with the card's left padding"

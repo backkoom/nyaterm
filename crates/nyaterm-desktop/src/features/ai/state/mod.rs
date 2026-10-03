@@ -126,6 +126,9 @@ struct AiChatState {
     response_phase: AiResponsePhase,
     thought_expanded: HashSet<String>,
     command_details_expanded: HashSet<String>,
+    command_scripts_expanded: HashSet<String>,
+    agent_history_expanded: bool,
+    execution_groups_expanded: HashSet<String>,
     message_menu: Option<AiMessageMenuState>,
     quoted_text: Option<String>,
     command_cards: Vec<AiCommandCard>,
@@ -167,6 +170,9 @@ impl AiChatState {
             response_phase: AiResponsePhase::Ended,
             thought_expanded: HashSet::new(),
             command_details_expanded: HashSet::new(),
+            command_scripts_expanded: HashSet::new(),
+            agent_history_expanded: false,
+            execution_groups_expanded: HashSet::new(),
             message_menu: None,
             quoted_text: None,
             command_cards: Vec::new(),
@@ -340,6 +346,9 @@ impl AiFeatureState {
                 response_phase: AiResponsePhase::Ended,
                 thought_expanded: HashSet::new(),
                 command_details_expanded: HashSet::new(),
+                command_scripts_expanded: HashSet::new(),
+                agent_history_expanded: false,
+                execution_groups_expanded: HashSet::new(),
                 message_menu: None,
                 quoted_text: None,
                 command_cards: Vec::new(),
@@ -2337,6 +2346,9 @@ impl AiFeatureState {
         self.chat.messages.clear();
         self.chat.thought_expanded.clear();
         self.chat.command_details_expanded.clear();
+        self.chat.command_scripts_expanded.clear();
+        self.chat.agent_history_expanded = false;
+        self.chat.execution_groups_expanded.clear();
         self.chat.response_phase = AiResponsePhase::Ended;
         self.chat.streaming_assistant_id = None;
         self.chat.prepared_request = None;

@@ -1,16 +1,18 @@
 use gpui::{
     Action as _, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render,
-    RenderOnce, SharedString, Styled as _, Subscription, Window, div, prelude::FluentBuilder as _,
-    px,
+    Focusable, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _,
+    Render, RenderOnce, SharedString, Styled as _, Subscription, Window, div,
+    prelude::FluentBuilder as _, px,
 };
-use gpui_kit::component::input::SelectAll;
+use gpui_base::input::InputContextMenuCapabilities;
 use gpui_kit::component::input::{
-    Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState,
+    Copy, Cut, Editor, EditorState, Input, InputEvent, InputState, Paste, SelectAll, Textarea,
+    TextareaState,
 };
 use gpui_kit::component::{Icon, IconName, Sizable, Size};
 
 use crate::input_focus::{preserve_nya_input_focus_on_pointer_down, register_nya_input_focus};
+use crate::menu::{NyaContextMenu, NyaMenuItem};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NyaInputEvent {
@@ -29,6 +31,28 @@ enum ComponentState {
 }
 
 impl ComponentState {
+    fn set_context_menu_enabled(&self, enabled: bool, cx: &mut App) {
+        match self {
+            Self::Input(state) => {
+                state.update(cx, |state, _| state.set_context_menu_enabled(enabled))
+            }
+            Self::Textarea(state) => {
+                state.update(cx, |state, _| state.set_context_menu_enabled(enabled))
+            }
+            Self::Editor(state) => {
+                state.update(cx, |state, _| state.set_context_menu_enabled(enabled))
+            }
+        }
+    }
+
+    fn context_menu_capabilities(&self, cx: &App) -> InputContextMenuCapabilities {
+        match self {
+            Self::Input(state) => state.read(cx).context_menu_capabilities(),
+            Self::Textarea(state) => state.read(cx).context_menu_capabilities(),
+            Self::Editor(state) => state.read(cx).context_menu_capabilities(),
+        }
+    }
+
     fn value(&self, cx: &App) -> String {
         match self {
             Self::Input(state) => state.read(cx).value().to_string(),
@@ -588,6 +612,7 @@ pub struct NyaInputShell {
     height: Option<gpui::Pixels>,
     trailing: Vec<AnyElement>,
     on_key_down: Option<KeyDownHandler>,
+    context_menu_labels: Option<[SharedString; 4]>,
 }
 
 impl NyaInputShell {
@@ -602,6 +627,7 @@ impl NyaInputShell {
             height: None,
             trailing: Vec::new(),
             on_key_down: None,
+            context_menu_labels: None,
         }
     }
 
@@ -613,6 +639,13 @@ impl NyaInputShell {
 
     pub fn multi_line(mut self) -> Self {
         self.multi_line = true;
+        self
+    }
+
+    /// Opt into the NyaTerm popup menu. Labels are Cut, Copy, Paste, Select All,
+    /// localized by the caller. Other inputs keep the platform's default menu.
+    pub fn gpui_context_menu(mut self, labels: [SharedString; 4]) -> Self {
+        self.context_menu_labels = Some(labels);
         self
     }
 
@@ -658,9 +691,14 @@ impl RenderOnce for NyaInputShell {
             height,
             trailing,
             on_key_down,
+            context_menu_labels,
         } = self;
         let (state, disabled, readonly, state_multi_line) =
             prepare_input_component(&state, window, cx);
+        state.set_context_menu_enabled(context_menu_labels.is_none(), cx);
+        let menu_state = state.clone();
+        let capture_focus_state = state.clone();
+        let gpui_context_menu = context_menu_labels.is_some();
         let focus_state = state.clone();
         let debug_selector = id.to_string();
         let prefix_debug_selector = format!("{}-prefix", id);
@@ -710,8 +748,13 @@ impl RenderOnce for NyaInputShell {
             .debug_selector(move || debug_selector.clone())
             .w_full()
             .min_w_0()
-            .capture_any_mouse_down(|_, _, cx| {
+            .capture_any_mouse_down(move |event, window, cx| {
                 preserve_nya_input_focus_on_pointer_down(cx);
+                // ContextMenu captures the focus to restore before bubble handlers.
+                // Right-clicking an unfocused field must restore this input on Esc.
+                if gpui_context_menu && !disabled && event.button == MouseButton::Right {
+                    capture_focus_state.focus(window, cx);
+                }
             })
             .on_any_mouse_down(move |_, window, cx| {
                 if !disabled {
@@ -721,7 +764,53 @@ impl RenderOnce for NyaInputShell {
         if let Some(handler) = on_key_down {
             container = container.on_key_down(handler);
         }
-        container.child(input)
+        let container = container.child(input);
+        if let Some(labels) = context_menu_labels {
+            NyaContextMenu::new_dynamic(container, move |_, cx| {
+                let capabilities = menu_state.context_menu_capabilities(cx);
+                let focus = menu_state.focus_handle(cx);
+                let editable = capabilities.is_editable();
+                let copyable = capabilities.is_copyable();
+                let actions: [Box<dyn gpui::Action>; 4] = [
+                    Box::new(Cut),
+                    Box::new(Copy),
+                    Box::new(Paste),
+                    Box::new(SelectAll),
+                ];
+                let enabled = [
+                    editable && copyable,
+                    copyable,
+                    editable && cx.read_from_clipboard().is_some(),
+                    true,
+                ];
+                let mut items = Vec::with_capacity(5);
+                for (index, ((label, action), enabled)) in
+                    labels.iter().zip(actions).zip(enabled).enumerate()
+                {
+                    if index == 3 {
+                        items.push(NyaMenuItem::separator());
+                    }
+                    let focus = focus.clone();
+                    items.push(
+                        NyaMenuItem::action(label.clone())
+                            .disabled(!enabled)
+                            .on_click(move |_, window, cx| {
+                                // PopupMenu can initially select a disabled first row.
+                                // Keep keyboard confirmation under the same policy as clicks.
+                                if enabled {
+                                    focus.dispatch_action(action.as_ref(), window, cx);
+                                }
+                            }),
+                    );
+                }
+                items
+            })
+            .min_width(px(144.))
+            .enabled(!disabled)
+            .into_any_element()
+        } else {
+            container.into_any_element()
+        }
     }
 }
 
@@ -776,13 +865,160 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use gpui::{
-        AppContext as _, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-        TestAppContext, div,
+        AppContext as _, ClipboardItem, InteractiveElement as _, IntoElement, MouseButton,
+        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, div, point, px,
     };
 
     use gpui_kit::component::highlighter::LanguageRegistry;
 
-    use super::{NyaInputState, component_placeholder};
+    use super::{NyaInputShell, NyaInputState, component_placeholder};
+
+    struct InputContextMenuFixture {
+        field: gpui::Entity<NyaInputState>,
+    }
+
+    impl Render for InputContextMenuFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().w(px(320.)).child(
+                NyaInputShell::new("popup-input", &self.field).gpui_context_menu([
+                    "Cut".into(),
+                    "Copy".into(),
+                    "Paste".into(),
+                    "Select All".into(),
+                ]),
+            )
+        }
+    }
+
+    fn open_input_context_menu(cx: &mut VisualTestContext) {
+        cx.simulate_mouse_down(
+            point(px(12.), px(12.)),
+            MouseButton::Right,
+            Default::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(12.), px(12.)),
+            MouseButton::Right,
+            Default::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+    }
+
+    #[gpui::test]
+    fn popup_input_menu_reuses_edit_actions_and_restores_input_focus(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, cx| InputContextMenuFixture {
+            field: cx.new(|cx| NyaInputState::new(cx, "hello").multi_line(Some(3))),
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+
+        // A right click from outside the field must restore focus to the field.
+        open_input_context_menu(cx);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(field.read(cx).component_focus_handle(cx).is_focused(window));
+            field.update(cx, |field, cx| field.select_all(window, cx));
+        });
+        cx.run_until_parked();
+
+        open_input_context_menu(cx);
+        cx.simulate_keystrokes("down down enter");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("hello".into())
+            );
+            assert!(field.read(cx).component_focus_handle(cx).is_focused(window));
+        });
+        assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "hello");
+
+        open_input_context_menu(cx);
+        cx.simulate_keystrokes("down enter");
+        cx.run_until_parked();
+        assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "");
+        // Undo verifies Cut went through the editor's history.
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-z"
+        } else {
+            "ctrl-z"
+        });
+        cx.run_until_parked();
+        assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "hello");
+
+        cx.update(|window, cx| {
+            field.update(cx, |field, cx| field.select_all(window, cx));
+            cx.write_to_clipboard(ClipboardItem::new_string("world".into()));
+        });
+        cx.run_until_parked();
+        open_input_context_menu(cx);
+        cx.simulate_keystrokes("down down down enter");
+        cx.run_until_parked();
+        assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "world");
+
+        open_input_context_menu(cx);
+        cx.simulate_keystrokes("up enter");
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let state = field.read(cx).state.as_ref().expect("rendered input");
+            assert!(state.context_menu_capabilities(cx).has_selection());
+        });
+    }
+
+    #[gpui::test]
+    fn readonly_popup_input_menu_allows_copy_without_editing(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, cx| InputContextMenuFixture {
+            field: cx.new(|cx| NyaInputState::new(cx, "read only").readonly(true)),
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            field.update(cx, |field, cx| field.select_all(window, cx));
+            cx.write_to_clipboard(ClipboardItem::new_string("replacement".into()));
+        });
+        cx.run_until_parked();
+        open_input_context_menu(cx);
+        cx.simulate_keystrokes("down enter");
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("replacement".into())
+            );
+        });
+        open_input_context_menu(cx);
+        cx.simulate_keystrokes("down down enter");
+        cx.run_until_parked();
+        assert_eq!(
+            field.read_with(cx, |field, cx| field.value(cx)),
+            "read only"
+        );
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("read only".into())
+            );
+        });
+        open_input_context_menu(cx);
+        cx.simulate_keystrokes("up enter");
+        cx.run_until_parked();
+        assert_eq!(
+            field.read_with(cx, |field, cx| field.value(cx)),
+            "read only"
+        );
+    }
 
     struct AncestorKeyListenerFixture {
         plain: gpui::Entity<NyaInputState>,

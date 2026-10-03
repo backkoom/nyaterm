@@ -475,7 +475,10 @@ impl NyaTermApp {
             category: Some("AI Agent".into()),
             references: Vec::new(),
             target_terminal_session_id: Some(session_id.clone()),
-            target: None,
+            target: self
+                .ai_terminal_targets_for_sessions(std::slice::from_ref(&session_id))
+                .into_iter()
+                .next(),
         };
         self.ai.present_native_command(card.clone());
         self.ai.register_native_terminal_reply(request.reply);

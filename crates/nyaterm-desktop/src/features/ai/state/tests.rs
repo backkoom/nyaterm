@@ -1689,16 +1689,28 @@ fn message_disclosure_choices_follow_their_conversation_scope() {
     state.switch_scope("terminal:a");
     state.toggle_message_thought("assistant-a".into());
     state.toggle_command_details("agent-a".into());
+    state.toggle_command_script("agent-a".into());
+    state.toggle_agent_history();
+    state.toggle_execution_group("user-a".into());
     state.switch_scope("terminal:b");
     assert!(state.expanded_message_thoughts().is_empty());
     assert!(state.expanded_command_details().is_empty());
+    assert!(state.expanded_command_scripts().is_empty());
+    assert!(!state.agent_history_expanded());
+    assert!(state.expanded_execution_groups().is_empty());
     state.toggle_message_thought("assistant-b".into());
     state.switch_scope("terminal:a");
     assert!(state.expanded_message_thoughts().contains("assistant-a"));
     assert!(!state.expanded_message_thoughts().contains("assistant-b"));
+    assert!(state.expanded_command_scripts().contains("agent-a"));
+    assert!(state.agent_history_expanded());
+    assert!(state.expanded_execution_groups().contains("user-a"));
     state.start_new_chat();
     assert!(state.expanded_message_thoughts().is_empty());
     assert!(state.expanded_command_details().is_empty());
+    assert!(state.expanded_command_scripts().is_empty());
+    assert!(!state.agent_history_expanded());
+    assert!(state.expanded_execution_groups().is_empty());
 }
 
 #[test]

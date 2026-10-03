@@ -1,6 +1,6 @@
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, rgb};
 use nyaterm_core::ai::harness::{AgentRunStatus, AgentTaskStatus, AgentVerificationStatus};
-use nyaterm_ui::{NyaButton, NyaInputShell, NyaScrollable};
+use nyaterm_ui::{NyaButton, NyaInputShell};
 use rust_i18n::t;
 
 use super::{AiPanel, AiPanelSnapshot};
@@ -20,6 +20,7 @@ impl AiPanel {
         &self,
         snapshot: &AiPanelSnapshot,
         view: NativeRunView,
+        history: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
@@ -27,8 +28,6 @@ impl AiPanel {
             .id("ai-native-run")
             .debug_selector(|| "ai-native-run".into())
             .w_full()
-            .max_h(px(240.))
-            .flex_none()
             .p_2()
             .gap_2()
             .flex()
@@ -36,7 +35,7 @@ impl AiPanel {
             .border_b_1()
             .border_color(rgb(palette.border))
             .text_size(px(12.));
-        if !view.plan.tasks.is_empty() {
+        if history && !view.plan.tasks.is_empty() {
             card = card.child(
                 div()
                     .font_weight(gpui::FontWeight(600.))
@@ -62,7 +61,7 @@ impl AiPanel {
                 );
             }
         }
-        if let Some(verification) = &view.verification {
+        if history && let Some(verification) = &view.verification {
             let label = match verification.status {
                 AgentVerificationStatus::Verified => t!("ai.harness.verified"),
                 AgentVerificationStatus::Unverified => t!("ai.harness.unverified"),
@@ -172,6 +171,6 @@ impl AiPanel {
                     ),
             );
         }
-        card.overflow_y_scrollbar()
+        card
     }
 }
