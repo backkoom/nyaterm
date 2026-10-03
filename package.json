@@ -27,6 +27,7 @@
     "test": "vitest",
     "plugin:create": "node scripts/create-plugin.mjs",
     "plugin:pack": "node scripts/package-plugin.mjs",
+    "plugin:example:gpu": "node plugins/examples/gpu-monitor/build.mjs",
     "plugin:example:native": "node scripts/build-plugin-native-example.mjs",
     "tauri": "tauri",
     "lint": "node scripts/check-no-console.mjs && biome lint src/",

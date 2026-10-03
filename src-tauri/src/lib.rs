@@ -156,6 +156,10 @@ pub fn run() {
             },
         )
         .invoke_handler(tauri::generate_handler![
+            cmd::plugins::subscribe_plugin_monitor,
+            cmd::plugins::unsubscribe_plugin_monitor,
+            cmd::plugins::refresh_plugin_monitor,
+            cmd::plugins::get_plugin_probe_scripts,
             cmd::plugins::get_plugin_diagnostics,
             cmd::plugins::clear_plugin_logs,
             cmd::plugins::stop_plugin_backend,

@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { Puzzle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -49,6 +49,7 @@ export function PluginsPanel({ sessionId }: { sessionId: string | null }) {
     plugin: InstalledPlugin;
     permissions: string[];
   } | null>(null);
+  const [probeScripts, setProbeScripts] = useState<Record<string, string> | null>(null);
   const [remove, setRemove] = useState<InstalledPlugin | null>(null);
   const action = async (operation: () => Promise<unknown>) => {
     setBusy(true);
@@ -75,6 +76,24 @@ export function PluginsPanel({ sessionId }: { sessionId: string | null }) {
       ? t("plugins.permissions.network", { origin: permission.slice(8) })
       : t(`plugins.permissions.${permission.split(".").join("_")}`);
   const grantManifest = grant && activeManifest(grant.plugin);
+  const grantPluginId = grant?.plugin.id;
+  const grantVersion = grant?.plugin.activeVersion;
+  useEffect(() => {
+    setProbeScripts(null);
+    if (!grantPluginId || !grantVersion) return;
+    let disposed = false;
+    void pluginApi
+      .probeScripts(grantPluginId, grantVersion)
+      .then((scripts) => {
+        if (!disposed) setProbeScripts(scripts);
+      })
+      .catch((error) => {
+        if (!disposed) toast.error(getErrorMessage(error));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [grantPluginId, grantVersion]);
 
   return (
     <div className="h-full min-h-0 overflow-auto p-3 space-y-4">
@@ -280,7 +299,7 @@ export function PluginsPanel({ sessionId }: { sessionId: string | null }) {
         </DialogContent>
       </Dialog>
       <Dialog open={grant !== null} onOpenChange={(open) => !open && !busy && setGrant(null)}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t("plugins.permissionsTitle")}</DialogTitle>
             <DialogDescription>
@@ -311,6 +330,22 @@ export function PluginsPanel({ sessionId }: { sessionId: string | null }) {
                 <span>{permissionLabel(permission)}</span>
               </label>
             ))}
+            {Boolean(grantManifest?.contributions.probes?.length) && (
+              <div className="space-y-2">
+                <p className="text-sm">{t("plugins.probeTrust")}</p>
+                {!probeScripts && <p className="text-sm">{t("plugins.loading")}</p>}
+                {grantManifest?.contributions.probes?.map((probe) => (
+                  <details key={probe.id} className="rounded-md border p-2" open>
+                    <summary className="text-sm font-medium">
+                      {probe.title} · {probe.entry}
+                    </summary>
+                    <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">
+                      {probeScripts?.[probe.id] ?? ""}
+                    </pre>
+                  </details>
+                ))}
+              </div>
+            )}
             {grantManifest?.backend && (
               <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
                 {t("plugins.nativeTrust")}
@@ -325,7 +360,8 @@ export function PluginsPanel({ sessionId }: { sessionId: string | null }) {
               disabled={
                 busy ||
                 locked ||
-                Boolean(grantManifest?.backend && !grant?.permissions.includes("native"))
+                Boolean(grantManifest?.backend && !grant?.permissions.includes("native")) ||
+                Boolean(grant?.permissions.includes("remote.probe") && !probeScripts)
               }
               onClick={() =>
                 grant &&

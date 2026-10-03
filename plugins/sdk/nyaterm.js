@@ -3,6 +3,8 @@
   "use strict";
   const pending = new Map();
   const contextListeners = new Set();
+  const monitors = new Map();
+  const earlyMonitors = new Map();
   let context = null;
   let nextId = 0;
   let resolveReady;
@@ -36,6 +38,18 @@
       }
       resolveReady(context);
       for (const listener of contextListeners) listener(context);
+    } else if (message.type === "nyaterm-plugin-monitor") {
+      const monitor = monitors.get(message.subscriptionId);
+      if (monitor) {
+        if (message.snapshot.revision > monitor.revision) {
+          monitor.revision = message.snapshot.revision;
+          monitor.listener(message.snapshot);
+        }
+      } else if (earlyMonitors.size < 32) {
+        const old = earlyMonitors.get(message.subscriptionId);
+        if (!old || message.snapshot.revision > old.revision)
+          earlyMonitors.set(message.subscriptionId, message.snapshot);
+      }
     } else if (message.type === "nyaterm-plugin-response") {
       const request = pending.get(message.id);
       if (!request) return;
@@ -51,6 +65,8 @@
       request.reject(new Error("Plugin view closed"));
     }
     pending.clear();
+    monitors.clear();
+    earlyMonitors.clear();
   });
   window.NyaTerm = Object.freeze({
     ready,
@@ -78,6 +94,35 @@
     network: Object.freeze({
       request: (url, options = {}) =>
         call("host/network/request", { ...options, url }),
+    }),
+    monitoring: Object.freeze({
+      async subscribe(monitorId, listener) {
+        const result = await call("host/monitoring/subscribe", { monitorId });
+        const state = { listener, revision: result.snapshot.revision };
+        monitors.set(result.subscriptionId, state);
+        listener(result.snapshot);
+        const early = earlyMonitors.get(result.subscriptionId);
+        earlyMonitors.delete(result.subscriptionId);
+        if (early && early.revision > state.revision) {
+          state.revision = early.revision;
+          listener(early);
+        }
+        let disposed = false;
+        return Object.freeze({
+          refresh: () =>
+            call("host/monitoring/refresh", {
+              subscriptionId: result.subscriptionId,
+            }),
+          unsubscribe: () => {
+            if (disposed) return Promise.resolve(null);
+            disposed = true;
+            monitors.delete(result.subscriptionId);
+            return call("host/monitoring/unsubscribe", {
+              subscriptionId: result.subscriptionId,
+            });
+          },
+        });
+      },
     }),
     backend: (method, input = null) => call(method, input),
   });

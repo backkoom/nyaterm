@@ -1684,28 +1684,37 @@ export default function Header({
       );
       const hiddenCount = cards.length - visibleCards.length;
       const compact = getHardwareStatusCompact(visibleCards.length, hiddenCount, hardwareCardLimit);
-      const title = buildHardwareTitle("GPU", cards, "GPU");
+      const notice = gpuOverviewState?.paused
+        ? t("gpuMonitor.paused")
+        : gpuOverviewState?.error
+          ? t("gpuMonitor.error")
+          : null;
+      const hardwareTitle = buildHardwareTitle("GPU", cards, "GPU");
+      const title = notice ? `${hardwareTitle}\n${notice}` : hardwareTitle;
 
       return {
         icon: null,
         interactive: true,
         text: (
-          <HeaderHardwareStatus
-            cards={visibleCards}
-            compact={compact}
-            hiddenCount={hiddenCount}
-            icon={<SiNvidia />}
-            label="GPU"
-            onNextPage={() =>
-              setHardwarePage((current) => ({ ...current, gpu: (currentPage + 1) % pageCount }))
-            }
-            onPreviousPage={() =>
-              setHardwarePage((current) => ({
-                ...current,
-                gpu: (currentPage - 1 + pageCount) % pageCount,
-              }))
-            }
-          />
+          <>
+            {notice && <span className="text-xs text-muted-foreground">{notice}</span>}
+            <HeaderHardwareStatus
+              cards={visibleCards}
+              compact={compact}
+              hiddenCount={hiddenCount}
+              icon={<SiNvidia />}
+              label="GPU"
+              onNextPage={() =>
+                setHardwarePage((current) => ({ ...current, gpu: (currentPage + 1) % pageCount }))
+              }
+              onPreviousPage={() =>
+                setHardwarePage((current) => ({
+                  ...current,
+                  gpu: (currentPage - 1 + pageCount) % pageCount,
+                }))
+              }
+            />
+          </>
         ),
         title,
       };
@@ -1842,6 +1851,7 @@ export default function Header({
   }, [
     currentMinute,
     gpuOverviewState?.error,
+    gpuOverviewState?.paused,
     gpuOverviewState?.overview,
     hardwarePage.gpu,
     hardwarePage.npu,

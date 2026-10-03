@@ -39,6 +39,8 @@ export interface PluginManifest {
   contributions: {
     panels: PluginPanelContribution[];
     commands: PluginCommandContribution[];
+    probes?: { id: string; title: string; entry: string; timeoutMs: number }[];
+    monitors?: { id: string; title: string; schema: "gpu.v1"; method: string; panel: string }[];
   };
   backend?: {
     transport: "stdio-jsonl" | "stdio-framed";
@@ -58,6 +60,21 @@ export interface PluginPackagePreview {
   manifest: PluginManifest;
   digest: string;
   expandedBytes: number;
+  probeScripts?: Record<string, string>;
+}
+
+export interface PluginMonitorSnapshot {
+  revision: number;
+  sessionId: string;
+  overview: import("@/types/global").RemoteGpuOverview | null;
+  error: boolean;
+  refreshing: boolean;
+  paused: boolean;
+}
+
+export interface PluginMonitorSubscription {
+  subscriptionId: string;
+  snapshot: PluginMonitorSnapshot;
 }
 
 export interface PluginScope {

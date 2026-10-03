@@ -1285,6 +1285,7 @@
     "uploadStarted": "파일 \"{{name}}\" 업로드 중..."
   },
   "gpuMonitor": {
+    "paused": "모니터링이 일시 중지되었습니다. 새로 고쳐 재개하세요.",
     "cuda": "CUDA",
     "details": "세부 정보",
     "disabled": "설정에서 GPU 모니터링을 활성화하세요",
@@ -1642,6 +1643,7 @@
     "usernamePlaceholder": "예: root"
   },
   "plugins": {
+    "probeTrust": "승인 후 선택한 SSH 세션에서 스크립트가 자동 실행됩니다. 내용을 검토하세요. 타사 스크립트는 읽기 전용을 보장하지 않습니다. 버전 업데이트 후 다시 승인해야 합니다.",
     "allowOnce": "이번만 허용",
     "approvalDescription": "{{name}}에서 선택한 세션에 대한 접근을 요청합니다.",
     "approvalTitle": "플러그인 작업 승인",
@@ -1680,6 +1682,7 @@
     "nativeTrust": "네이티브 백엔드는 운영체제 사용자 권한으로 실행됩니다. 호스트 권한과 별개로 파일, 네트워크 및 프로그램에 접근할 수 있습니다. 신뢰할 수 있는 게시자의 네이티브 코드만 활성화하세요.",
     "noInstalled": "설치된 플러그인이 없습니다.",
     "permissions": {
+      "remote_probe": "플러그인이 선언한 원격 스크립트 자동 실행",
       "filesystem_read": "선택한 세션의 텍스트 파일 읽기 요청",
       "native": "이 플러그인의 네이티브 실행 파일 실행",
       "network": "{{origin}}에 HTTPS 요청 보내기",

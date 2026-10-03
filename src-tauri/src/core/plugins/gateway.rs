@@ -67,6 +67,7 @@ impl PluginManager {
             "host/filesystem/read" => "filesystem.read",
             "host/storage/get" | "host/storage/set" => "storage",
             "host/network/request" => "",
+            "host/remote/probe" => "remote.probe",
             _ => return Err(AppError::Config("Unknown plugin host capability".into())),
         };
         if !permission.is_empty() {
@@ -75,6 +76,33 @@ impl PluginManager {
         let operation = async {
             let manager = app.state::<Arc<SessionManager>>().inner().clone();
             match method {
+                "host/remote/probe" => {
+                    let request: nyaterm_plugin_runtime::probe::ProbeRequest =
+                        serde_json::from_value(params.clone())?;
+                    let root = self
+                        .registry
+                        .read()
+                        .await
+                        .as_ref()
+                        .ok_or_else(|| self.registry_error())?
+                        .active_path(&scope.plugin_id)
+                        .map_err(plugin_error)?;
+                    self.scope(app, token, caller_window).await?;
+                    let executor = super::probe::SshProbeExecutor {
+                        sessions: manager,
+                        session_id: session_id(&scope)?.into(),
+                    };
+                    let result = nyaterm_plugin_runtime::probe::execute_declared(
+                        &executor,
+                        &root,
+                        &plugin.active().map_err(plugin_error)?.manifest,
+                        request,
+                        scope.cancellation.child_token(),
+                    )
+                    .await
+                    .map_err(plugin_error)?;
+                    serde_json::to_value(result).map_err(Into::into)
+                }
                 "host/session" => match &scope.session_id {
                     Some(id) => {
                         let info = require_session(app, &scope.window_label, id).await?;

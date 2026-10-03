@@ -1286,6 +1286,7 @@
     "uploadStarted": "Uploading file \"{{name}}\"..."
   },
   "gpuMonitor": {
+    "paused": "Monitoring paused. Refresh to resume.",
     "cuda": "CUDA",
     "details": "Details",
     "disabled": "Enable GPU monitoring in Settings",
@@ -1644,6 +1645,7 @@
     "usernamePlaceholder": "e.g. root"
   },
   "plugins": {
+    "probeTrust": "These scripts run automatically on the selected SSH session after authorization. Review their contents; third-party scripts are not guaranteed to be read-only. Updates require renewed authorization.",
     "allowOnce": "Allow once",
     "approvalDescription": "{{name}} requests access to the selected session.",
     "approvalTitle": "Approve plugin operation",
@@ -1682,6 +1684,7 @@
     "nativeTrust": "A native backend runs with your operating system user permissions. It can access files, networks and programs independently of these host permissions. Enable native code only from a publisher you trust.",
     "noInstalled": "No plugins installed.",
     "permissions": {
+      "remote_probe": "Automatically execute this plugin’s declared remote scripts",
       "filesystem_read": "Request text file reads in the selected session",
       "native": "Run this plugin’s native executable",
       "network": "Make HTTPS requests to {{origin}}",

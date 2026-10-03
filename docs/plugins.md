@@ -70,6 +70,18 @@ Uninstall removes plugin code and registration; preferences are retained for a
 later reinstall. Plugin packages, grants and preferences are excluded from the
 existing portable snapshot/backup/cloud-sync payloads.
 
+## GPU monitor
+
+The [GPU monitor example](../plugins/examples/gpu-monitor/README.md) validates
+fixed remote probes, shared collection and GPU status contributions. Build it with
+`pnpm plugin:example:gpu`, then package it with
+`pnpm plugin:pack plugins/examples/gpu-monitor temp/plugins/gpu-monitor.nyap`.
+Enable it after reviewing its fixed scripts and approving `native` and `remote.probe`.
+Automatic probe grants are removed on updates and version switches.
+An authorized `gpu.v1` provider replaces built-in GPU collection and the existing
+GPU workspace; disabling it restores the built-in source. Collection failures remain
+visible on the plugin source. See the [validation record](gpu-plugin-validation.md).
+
 ## Build the UI example
 
 For project generation, Rust SDK APIs, status and logs, see the

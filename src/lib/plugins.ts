@@ -2,11 +2,24 @@ import { invoke } from "@/lib/invoke";
 import type {
   InstalledPlugin,
   PluginDiagnosticsSnapshot,
+  PluginMonitorSubscription,
   PluginPackagePreview,
   PluginScope,
 } from "@/types/plugins";
 
 export const pluginApi = {
+  probeScripts: (pluginId: string, expectedVersion: string) =>
+    invoke<Record<string, string>>("get_plugin_probe_scripts", { pluginId, expectedVersion }),
+  subscribeMonitor: (token: string, monitorId: string, intervalSeconds: number) =>
+    invoke<PluginMonitorSubscription>("subscribe_plugin_monitor", {
+      token,
+      monitorId,
+      intervalSeconds,
+    }),
+  unsubscribeMonitor: (token: string, subscriptionId: string) =>
+    invoke<void>("unsubscribe_plugin_monitor", { token, subscriptionId }),
+  refreshMonitor: (token: string, subscriptionId: string) =>
+    invoke<void>("refresh_plugin_monitor", { token, subscriptionId }),
   diagnostics: (pluginId: string) =>
     invoke<PluginDiagnosticsSnapshot>("get_plugin_diagnostics", { pluginId }),
   clearLogs: (pluginId: string) => invoke<void>("clear_plugin_logs", { pluginId }),
@@ -93,4 +106,20 @@ export type PluginOpenIntent = {
 
 export function openPlugin(intent: PluginOpenIntent) {
   window.dispatchEvent(new CustomEvent<PluginOpenIntent>(PLUGIN_OPEN_EVENT, { detail: intent }));
+}
+
+export function getGpuMonitor(plugins: InstalledPlugin[]) {
+  for (const plugin of plugins) {
+    if (
+      !plugin.enabled ||
+      !plugin.grantedPermissions.includes("native") ||
+      !plugin.grantedPermissions.includes("remote.probe")
+    )
+      continue;
+    const monitor = activeManifest(plugin)?.contributions.monitors?.find(
+      (m) => m.schema === "gpu.v1",
+    );
+    if (monitor) return { pluginId: plugin.id, version: plugin.activeVersion, monitor };
+  }
+  return null;
 }

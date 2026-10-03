@@ -18,6 +18,7 @@ pub struct PackagePreview {
     pub manifest: Manifest,
     pub digest: String,
     pub expanded_bytes: u64,
+    pub probe_scripts: BTreeMap<String, String>,
 }
 
 pub struct PreparedPackage {
@@ -120,6 +121,18 @@ pub fn prepare(path: &Path, staging_parent: &Path, app_version: &str) -> Result<
     for panel in &manifest.contributions.panels {
         checked_file(directory.path(), &panel.entry)?;
     }
+    let mut probe_scripts = BTreeMap::new();
+    for probe in &manifest.contributions.probes {
+        let path = checked_file(directory.path(), &probe.entry)?;
+        if std::fs::metadata(&path)?.len() > 64 * 1024 {
+            return Err(invalid("Probe script exceeds 64 KiB"));
+        }
+        let script = std::fs::read_to_string(path)?;
+        if script.is_empty() || script.contains('\0') {
+            return Err(invalid("Probe script must be nonempty UTF-8 without NUL"));
+        }
+        probe_scripts.insert(probe.id.clone(), script);
+    }
     if let Some(backend) = &manifest.backend {
         for executable in backend.executables.values() {
             let path = checked_file(directory.path(), executable)?;
@@ -137,6 +150,7 @@ pub fn prepare(path: &Path, staging_parent: &Path, app_version: &str) -> Result<
             manifest,
             digest: package_digest,
             expanded_bytes,
+            probe_scripts,
         },
         directory,
     })

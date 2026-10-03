@@ -29,6 +29,29 @@ pub struct Contributions {
     pub panels: Vec<Panel>,
     #[serde(default)]
     pub commands: Vec<Command>,
+    #[serde(default)]
+    pub probes: Vec<Probe>,
+    #[serde(default)]
+    pub monitors: Vec<Monitor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Probe {
+    pub id: String,
+    pub title: String,
+    pub entry: String,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Monitor {
+    pub id: String,
+    pub title: String,
+    pub schema: String,
+    pub method: String,
+    pub panel: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +149,7 @@ pub fn validate_permission(permission: &str) -> Result<()> {
         "filesystem.read",
         "storage",
         "native",
+        "remote.probe",
     ]
     .contains(&permission)
     {
@@ -188,6 +212,8 @@ impl Manifest {
         if self.permissions.len() > 24
             || self.contributions.panels.len() > 16
             || self.contributions.commands.len() > 64
+            || self.contributions.probes.len() > 16
+            || self.contributions.monitors.len() > 16
         {
             return Err(invalid("Too many plugin permissions or contributions"));
         }
@@ -208,6 +234,22 @@ impl Manifest {
             return Err(invalid("Too many network origins"));
         }
         let mut ids = HashSet::new();
+        for probe in &self.contributions.probes {
+            validate_path(&probe.entry)?;
+            if !valid_id(&probe.id)
+                || !ids.insert(&probe.id)
+                || probe.title.trim().is_empty()
+                || probe.title.len() > 120
+                || !probe.entry.starts_with("assets/probes/")
+                || !probe.entry.ends_with(".sh")
+                || !(1000..=30_000).contains(&probe.timeout_ms)
+                || !permissions.contains(&"remote.probe".to_string())
+            {
+                return Err(invalid(
+                    "Invalid probe declaration or missing remote.probe permission",
+                ));
+            }
+        }
         for panel in &self.contributions.panels {
             if !valid_id(&panel.id)
                 || panel.title.trim().is_empty()
@@ -240,6 +282,28 @@ impl Manifest {
             }
             if command.menus.len() > 2 {
                 return Err(invalid("Too many command menu locations"));
+            }
+        }
+        let mut schemas = HashSet::new();
+        for monitor in &self.contributions.monitors {
+            if !valid_id(&monitor.id)
+                || !ids.insert(&monitor.id)
+                || monitor.title.trim().is_empty()
+                || monitor.title.len() > 120
+                || monitor.schema != "gpu.v1"
+                || !schemas.insert(&monitor.schema)
+                || !monitor.method.starts_with("monitor/")
+                || monitor.method.len() > 128
+                || monitor.method.len() <= 8
+                || self.backend.is_none()
+                || self.contributions.probes.is_empty()
+                || !self
+                    .contributions
+                    .panels
+                    .iter()
+                    .any(|p| p.id == monitor.panel)
+            {
+                return Err(invalid("Invalid monitor declaration"));
             }
         }
         if let Some(backend) = &self.backend {

@@ -1,5 +1,8 @@
 mod gateway;
 mod lifecycle;
+mod monitoring;
+pub use monitoring::MonitorSubscription;
+mod probe;
 mod protocol;
 
 use crate::cmd::app::AppLockState;
@@ -97,6 +100,7 @@ pub struct PluginManager {
     backends: Mutex<HashMap<String, BackendSlot>>,
     storage_lock: Mutex<()>,
     diagnostics: Diagnostics,
+    monitors: std::sync::Mutex<monitoring::Monitors>,
 }
 
 impl PluginManager {
@@ -116,6 +120,7 @@ impl PluginManager {
             backends: Mutex::new(HashMap::new()),
             storage_lock: Mutex::new(()),
             diagnostics: Diagnostics::default(),
+            monitors: std::sync::Mutex::new(monitoring::Monitors::default()),
         })
     }
 
@@ -192,7 +197,6 @@ impl PluginManager {
                 "Plugin version changed; review its permissions again".into(),
             ));
         }
-        self.revoke_plugin(id).await;
         self.registry
             .write()
             .await
@@ -200,6 +204,7 @@ impl PluginManager {
             .ok_or_else(|| self.registry_error())?
             .configure(id, enabled, permissions)
             .map_err(plugin_error)?;
+        self.revoke_plugin(id).await;
         let _ = app.emit("plugins-changed", ());
         Ok(())
     }
@@ -310,10 +315,12 @@ impl PluginManager {
         if let Some(scope) = scopes.remove(token) {
             scope.cancellation.cancel();
         }
+        self.monitors.lock().unwrap().remove_scope(token);
         Ok(())
     }
 
     pub async fn revoke_window(&self, label: &str) {
+        self.monitors.lock().unwrap().revoke(|k| k.window == label);
         self.scopes.lock().await.retain(|_, scope| {
             if scope.window_label == label {
                 scope.cancellation.cancel();
@@ -329,6 +336,10 @@ impl PluginManager {
     }
 
     pub async fn revoke_session(&self, session_id: &str) {
+        self.monitors
+            .lock()
+            .unwrap()
+            .revoke(|k| k.session == session_id);
         self.scopes.lock().await.retain(|_, scope| {
             if scope.session_id.as_deref() == Some(session_id) {
                 scope.cancellation.cancel();
@@ -340,6 +351,7 @@ impl PluginManager {
     }
 
     pub async fn revoke_all(&self) {
+        self.monitors.lock().unwrap().revoke(|_| true);
         for (_, scope) in self.scopes.lock().await.drain() {
             scope.cancellation.cancel();
         }
@@ -353,6 +365,7 @@ impl PluginManager {
     }
 
     async fn revoke_plugin(&self, id: &str) {
+        self.monitors.lock().unwrap().reset_plugin(id);
         self.diagnostics.stop(id);
         self.scopes.lock().await.retain(|_, scope| {
             if scope.plugin_id == id {
@@ -445,11 +458,33 @@ impl PluginManager {
         method: &str,
         params: Value,
     ) -> AppResult<Value> {
+        self.backend_request(app, window_label, token, method, params, false)
+            .await
+    }
+
+    async fn backend_request(
+        self: &Arc<Self>,
+        app: &tauri::AppHandle,
+        window_label: &str,
+        token: &str,
+        method: &str,
+        params: Value,
+        monitor_request: bool,
+    ) -> AppResult<Value> {
         let scope = self.scope(app, token, Some(window_label)).await?;
         let _lease = self.lifecycle.acquire(&scope.plugin_id, false)?;
         let plugin = self.plugin(&scope.plugin_id).await?;
         plugin.require("native").map_err(plugin_error)?;
-        if !(method.starts_with("ui/")
+        if !((monitor_request
+            && plugin
+                .active()
+                .map_err(plugin_error)?
+                .manifest
+                .contributions
+                .monitors
+                .iter()
+                .any(|m| m.method == method))
+            || method.starts_with("ui/")
             || plugin
                 .active()
                 .map_err(plugin_error)?
@@ -622,6 +657,16 @@ impl PluginManager {
         ensure_unlocked(app)?;
         let _lease = self.lifecycle.acquire(id, true)?;
         self.plugin(id).await?;
+        self.monitors.lock().unwrap().pause_plugin(id);
+        if let Some(ticket) = self.diagnostics.ticket(id) {
+            self.diagnostics.update(
+                &ticket,
+                None,
+                "info",
+                "monitor",
+                "Monitor collection paused",
+            );
+        }
         self.diagnostics.stop(id);
         if let Some(backend) = self.backends.lock().await.remove(id)
             && let Some(sidecar) = backend.lock().await.take()

@@ -1285,6 +1285,7 @@
     "uploadStarted": "正在上傳檔案「{{name}}」…"
   },
   "gpuMonitor": {
+    "paused": "監控已暫停，重新整理可恢復。",
     "cuda": "CUDA",
     "details": "詳情",
     "disabled": "請在設定中啟用 GPU 監控",
@@ -1642,6 +1643,7 @@
     "usernamePlaceholder": "例如：root"
   },
   "plugins": {
+    "probeTrust": "授權後，這些指令碼會在選取的 SSH 工作階段中自動執行。請審核內容；第三方指令碼不保證唯讀。更新版本後需要重新授權。",
     "allowOnce": "僅允許本次",
     "approvalDescription": "{{name}} 要求存取所選工作階段。",
     "approvalTitle": "核准外掛操作",
@@ -1680,6 +1682,7 @@
     "nativeTrust": "原生後端以目前系統使用者權限執行，可獨立存取檔案、網路及程式，宿主權限無法限制這些操作。請僅啟用可信作者提供的原生程式碼。",
     "noInstalled": "尚未安裝外掛。",
     "permissions": {
+      "remote_probe": "自動執行外掛宣告的遠端指令碼",
       "filesystem_read": "要求讀取所選工作階段中的文字檔案",
       "native": "執行此外掛的原生程式",
       "network": "向 {{origin}} 發出 HTTPS 要求",

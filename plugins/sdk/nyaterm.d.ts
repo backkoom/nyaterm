@@ -10,6 +10,8 @@ interface NyaTermPluginContext {
   pluginId: string;
   version: string;
   theme: Record<string, string>;
+  language?: string;
+  monitorIntervalSeconds?: number;
 }
 interface NyaTermPluginSdk {
   readonly ready: Promise<NyaTermPluginContext>;
@@ -42,6 +44,19 @@ interface NyaTermPluginSdk {
         contentType?: string;
       },
     ): Promise<{ status: number; contentType: string; body: string }>;
+  };
+  monitoring: {
+    subscribe(
+      monitorId: string,
+      listener: (snapshot: {
+        revision: number;
+        sessionId: string;
+        overview: NyaTermJson;
+        error: boolean;
+        refreshing: boolean;
+        paused: boolean;
+      }) => void,
+    ): Promise<{ refresh(): Promise<null>; unsubscribe(): Promise<null> }>;
   };
   backend<T = NyaTermJson>(method: string, input?: NyaTermJson): Promise<T>;
 }

@@ -202,10 +202,11 @@ impl Registry {
         // New versions are always reviewed before reactivation, including permission changes.
         plugin.enabled = false;
         plugin.granted_permissions.retain(|p| {
-            plugin.versions[&plugin.active_version]
-                .manifest
-                .permissions
-                .contains(p)
+            p != "remote.probe"
+                && plugin.versions[&plugin.active_version]
+                    .manifest
+                    .permissions
+                    .contains(p)
         });
         let installed = plugin.clone();
         if let Err(error) = self.save(next) {
@@ -241,6 +242,39 @@ impl Registry {
         }
         plugin.enabled = enabled;
         plugin.granted_permissions = permissions;
+        if enabled
+            && plugin
+                .granted_permissions
+                .iter()
+                .any(|p| p == "remote.probe")
+        {
+            let schemas = plugin
+                .active()?
+                .manifest
+                .contributions
+                .monitors
+                .iter()
+                .map(|m| m.schema.clone())
+                .collect::<Vec<_>>();
+            for other in next.values().filter(|p| p.id != id && p.enabled) {
+                if other
+                    .granted_permissions
+                    .iter()
+                    .any(|p| p == "remote.probe")
+                    && other
+                        .active()?
+                        .manifest
+                        .contributions
+                        .monitors
+                        .iter()
+                        .any(|m| schemas.contains(&m.schema))
+                {
+                    return Err(invalid(
+                        "Another enabled plugin already supplies this monitor schema; disable it first",
+                    ));
+                }
+            }
+        }
         self.save(next)
     }
 
@@ -258,7 +292,7 @@ impl Registry {
         plugin.enabled = false;
         plugin
             .granted_permissions
-            .retain(|p| record.manifest.permissions.contains(p));
+            .retain(|p| p != "remote.probe" && record.manifest.permissions.contains(p));
         self.save(next)
     }
 

@@ -160,3 +160,53 @@ pub async fn stop_plugin_backend(
 ) -> AppResult<()> {
     manager.stop_backend(&app, &plugin_id).await
 }
+
+#[tauri::command]
+pub async fn subscribe_plugin_monitor(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    manager: tauri::State<'_, Arc<PluginManager>>,
+    token: String,
+    monitor_id: String,
+    interval_seconds: u64,
+) -> AppResult<crate::core::plugins::MonitorSubscription> {
+    manager
+        .inner()
+        .subscribe_monitor(&app, window.label(), &token, &monitor_id, interval_seconds)
+        .await
+}
+
+#[tauri::command]
+pub fn unsubscribe_plugin_monitor(
+    window: tauri::WebviewWindow,
+    manager: tauri::State<'_, Arc<PluginManager>>,
+    token: String,
+    subscription_id: String,
+) -> AppResult<()> {
+    manager.unsubscribe_monitor(window.label(), &token, &subscription_id)
+}
+
+#[tauri::command]
+pub async fn refresh_plugin_monitor(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    manager: tauri::State<'_, Arc<PluginManager>>,
+    token: String,
+    subscription_id: String,
+) -> AppResult<()> {
+    manager
+        .refresh_monitor(&app, window.label(), &token, &subscription_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn get_plugin_probe_scripts(
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, Arc<PluginManager>>,
+    plugin_id: String,
+    expected_version: String,
+) -> AppResult<std::collections::HashMap<String, String>> {
+    manager
+        .probe_scripts(&app, &plugin_id, &expected_version)
+        .await
+}

@@ -1285,6 +1285,7 @@
     "uploadStarted": "正在上传文件「{{name}}」…"
   },
   "gpuMonitor": {
+    "paused": "监控已暂停，刷新可恢复。",
     "cuda": "CUDA",
     "details": "详情",
     "disabled": "请在设置中启用 GPU 监控",
@@ -1642,6 +1643,7 @@
     "usernamePlaceholder": "例如：root"
   },
   "plugins": {
+    "probeTrust": "授权后，这些脚本会在选中的 SSH 会话中自动执行。请审核脚本内容；第三方脚本不保证只读。更新版本后需要重新授权。",
     "allowOnce": "仅允许本次",
     "approvalDescription": "{{name}} 请求访问所选会话。",
     "approvalTitle": "批准插件操作",
@@ -1680,6 +1682,7 @@
     "nativeTrust": "原生后端以当前系统用户权限运行，可独立访问文件、网络和程序，宿主权限无法限制这些操作。请仅启用可信作者提供的原生代码。",
     "noInstalled": "尚未安装插件。",
     "permissions": {
+      "remote_probe": "自动执行插件声明的远程脚本",
       "filesystem_read": "请求读取所选会话中的文本文件",
       "native": "运行此插件的原生程序",
       "network": "向 {{origin}} 发起 HTTPS 请求",

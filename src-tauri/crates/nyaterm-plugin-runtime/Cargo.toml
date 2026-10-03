@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.94"
 
 [dependencies]
+nyaterm-gpu = { path = "../nyaterm-gpu" }
 async-trait = "0.1"
 hex = "0.4"
 regex = "1"
@@ -21,7 +22,7 @@ uuid = { version = "1", features = ["v4"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "test-util"] }
 
 [features]
 sdk-fixture = ["dep:nyaterm-plugin-sdk"]
@@ -33,4 +34,9 @@ optional = true
 [[bin]]
 name = "sdk-fixture"
 path = "src/bin/sdk-fixture.rs"
+required-features = ["sdk-fixture"]
+
+[[bin]]
+name = "gpu-fixture"
+path = "../../../plugins/examples/gpu-monitor/backend/src/main.rs"
 required-features = ["sdk-fixture"]

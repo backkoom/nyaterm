@@ -1,10 +1,14 @@
 import { getErrorMessage } from "@/lib/errors";
+import { subscribePluginMonitor } from "@/lib/pluginMonitoring";
 import { pluginApi } from "@/lib/plugins";
+import type { PluginMonitorSnapshot } from "@/types/plugins";
 
 export type PluginBridgeContext = {
   pluginId: string;
   version: string;
   theme: Record<string, string>;
+  language?: string;
+  monitorIntervalSeconds?: number;
 };
 
 /** Bind each bridge to exactly one frame and one backend-issued resource scope. */
@@ -15,7 +19,9 @@ export function createPluginBridge(
 ) {
   let disposed = false;
   let pending = 0;
+  let pendingSubscriptions = 0;
   const inflight = new Set<string>();
+  const subscriptions = new Map<string, Awaited<ReturnType<typeof subscribePluginMonitor>>>();
   const post = (message: unknown) => {
     if (!disposed) frame.contentWindow?.postMessage(message, "*");
   };
@@ -66,12 +72,58 @@ export function createPluginBridge(
       });
       return;
     }
-    const call = message.method.startsWith("host/")
-      ? pluginApi.hostCall
-      : message.method.startsWith("ui/") ||
-          message.method.startsWith("command/")
-        ? pluginApi.backendCall
-        : null;
+    const monitorCall = async (_token: string, method: string, params: unknown) => {
+      const input = params as Record<string, unknown> | null;
+      if (method === "host/monitoring/subscribe") {
+        if (subscriptions.size + pendingSubscriptions >= 16 || typeof input?.monitorId !== "string")
+          throw new Error("Invalid monitor subscription");
+        pendingSubscriptions += 1;
+        try {
+          let ownedId: string | null = null;
+          let latest: PluginMonitorSnapshot | null = null;
+          const subscription = await subscribePluginMonitor(
+            token,
+            input.monitorId,
+            context().monitorIntervalSeconds ?? 3,
+            (snapshot) => {
+              latest = snapshot;
+              if (ownedId && subscriptions.has(ownedId))
+                post({ type: "nyaterm-plugin-monitor", subscriptionId: ownedId, snapshot });
+            },
+          );
+          ownedId = subscription.subscriptionId;
+          if (disposed) {
+            await subscription.dispose();
+            throw new Error("Plugin view closed");
+          }
+          subscriptions.set(ownedId, subscription);
+          return { subscriptionId: ownedId, snapshot: latest ?? subscription.snapshot };
+        } finally {
+          pendingSubscriptions -= 1;
+        }
+      }
+      if (typeof input?.subscriptionId !== "string")
+        throw new Error("Invalid monitor subscription");
+      const subscription = subscriptions.get(input.subscriptionId);
+      if (!subscription) throw new Error("Monitor subscription belongs to another view");
+      if (method === "host/monitoring/refresh") {
+        await subscription.refresh();
+        return null;
+      }
+      if (method === "host/monitoring/unsubscribe") {
+        subscriptions.delete(input.subscriptionId);
+        await subscription.dispose();
+        return null;
+      }
+      throw new Error("Unknown monitoring method");
+    };
+    const call = message.method.startsWith("host/monitoring/")
+      ? monitorCall
+      : message.method.startsWith("host/")
+        ? pluginApi.hostCall
+        : message.method.startsWith("ui/") || message.method.startsWith("command/")
+          ? pluginApi.backendCall
+          : null;
     if (!call) {
       post({
         type: "nyaterm-plugin-response",
@@ -98,11 +150,13 @@ export function createPluginBridge(
   };
   window.addEventListener("message", receive);
   return {
-    updateContext: () =>
-      post({ type: "nyaterm-plugin-context", context: context() }),
+    updateContext: () => post({ type: "nyaterm-plugin-context", context: context() }),
     dispose: () => {
       disposed = true;
       window.removeEventListener("message", receive);
+      for (const subscription of subscriptions.values())
+        void subscription.dispose().catch(() => {});
+      subscriptions.clear();
     },
   };
 }

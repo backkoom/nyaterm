@@ -392,11 +392,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-gpu"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "nyaterm-plugin-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "hex",
+ "nyaterm-gpu",
  "nyaterm-plugin-sdk",
  "regex",
  "semver",

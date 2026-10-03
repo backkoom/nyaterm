@@ -184,6 +184,10 @@ impl HostClient {
             result=tokio::time::timeout(timeout,operation)=>result.unwrap_or_else(|_|Err(RpcError::new(-32000,"Host call timed out"))),
         }
     }
+    pub async fn remote_probe(&self, probe_id: &str) -> Result<Value> {
+        self.call("host/remote/probe", json!({"probeId": probe_id}))
+            .await
+    }
     pub async fn session(&self) -> Result<Value> {
         self.call("host/session", Value::Null).await
     }

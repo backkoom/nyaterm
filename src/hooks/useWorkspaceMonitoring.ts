@@ -1,10 +1,12 @@
 import { useEffect } from "react";
+import { usePlugins } from "@/context/PluginContext";
 import {
   buildAssetPatchFromGpuOverview,
   buildAssetPatchFromNpuOverview,
   buildAssetPatchFromRemoteStats,
 } from "@/lib/assetMonitoring";
 import { normalizeHeaderStatusMode } from "@/lib/headerStatus";
+import { getGpuMonitor } from "@/lib/plugins";
 import type {
   AssetMetadata,
   SavedConnection,
@@ -13,6 +15,7 @@ import type {
   UiConfig,
 } from "@/types/global";
 import { useNetworkHistory } from "./useNetworkHistory";
+import { usePluginGpuOverview } from "./usePluginGpuOverview";
 import { useRemoteGpuOverview } from "./useRemoteGpuOverview";
 import { useRemoteNpuOverview } from "./useRemoteNpuOverview";
 import { useRemoteStats } from "./useRemoteStats";
@@ -38,6 +41,8 @@ export function useWorkspaceMonitoring({
   uiConfig,
   handleAssetMonitoringPatch,
 }: WorkspaceMonitoringOptions) {
+  const { plugins, generation, locked } = usePlugins();
+  const pluginGpu = getGpuMonitor(plugins);
   const remoteStatsEnabled = uiConfig.show_remote_stats ?? true;
   const activeSshSessionId =
     activePane &&
@@ -80,11 +85,20 @@ export function useWorkspaceMonitoring({
   const npuOverviewEnabled =
     (uiConfig.show_ascend_npu_monitor ?? false) ||
     (headerStatusVisible && headerStatusMode === "npu");
-  const gpuOverviewState = useRemoteGpuOverview(
+  const builtinGpuOverview = useRemoteGpuOverview(
     activeStatsSessionId,
-    gpuOverviewEnabled && Boolean(activeStatsSessionId),
+    gpuOverviewEnabled && Boolean(activeStatsSessionId) && !pluginGpu && !locked,
     uiConfig.gpu_monitor_interval ?? 3,
   );
+  const pluginGpuOverview = usePluginGpuOverview(
+    pluginGpu?.pluginId ?? null,
+    pluginGpu?.monitor.id ?? null,
+    activeStatsSessionId,
+    gpuOverviewEnabled && !locked,
+    uiConfig.gpu_monitor_interval ?? 3,
+    generation,
+  );
+  const gpuOverviewState = pluginGpu ? pluginGpuOverview : builtinGpuOverview;
   const npuOverviewState = useRemoteNpuOverview(
     activeStatsSessionId,
     npuOverviewEnabled && Boolean(activeStatsSessionId),
