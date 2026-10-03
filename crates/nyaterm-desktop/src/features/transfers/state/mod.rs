@@ -7,8 +7,10 @@
 
 mod browser;
 mod clipboard;
+mod delete;
 pub(in crate::features) use browser::TransferSessionTransferBundle;
 pub(in crate::features) use clipboard::TransferFileClipboard;
+pub(super) use delete::TransferDeleteOutcome;
 mod browser_logic;
 mod tree;
 pub(in crate::features) use tree::TransferTreePresentation;
@@ -200,6 +202,8 @@ pub(super) struct TransferBrowserState {
 
 /// Rename/move/delete/create/properties dialogs over browser entries.
 struct TransferFileOpsState {
+    delete_batches: HashMap<String, delete::TransferDeleteBatch>,
+    delete_refresh_pending: HashSet<String>,
     rename: Option<TransferRenameState>,
     rename_focus_pending: bool,
     move_to: Option<TransferMoveState>,
@@ -1172,6 +1176,12 @@ impl TransferFeatureState {
 
         let mut changed = false;
         self.tree.replace_session(old_id, new_id);
+        if self.file_ops.delete_refresh_pending.remove(old_id) {
+            self.file_ops
+                .delete_refresh_pending
+                .insert(new_id.to_owned());
+            changed = true;
+        }
         if let Some(cache) = self.browser.session_cache.remove(old_id) {
             self.browser.session_cache.insert(new_id.to_string(), cache);
             changed = true;
@@ -1191,7 +1201,11 @@ impl TransferFeatureState {
 
         for job in &mut self.queue.jobs {
             if (job.is_user_transfer()
-                || matches!(job.kind, crate::models::TransferJobKind::ListTree { .. }))
+                || matches!(
+                    job.kind,
+                    crate::models::TransferJobKind::ListTree { .. }
+                        | crate::models::TransferJobKind::Delete { .. }
+                ))
                 && job.session_id.as_deref() == Some(old_id)
             {
                 job.session_id = Some(new_id.to_string());
@@ -1218,6 +1232,8 @@ impl TransferFeatureState {
 impl TransferFileOpsState {
     fn new() -> Self {
         Self {
+            delete_batches: HashMap::new(),
+            delete_refresh_pending: HashSet::new(),
             rename: None,
             rename_focus_pending: false,
             move_to: None,

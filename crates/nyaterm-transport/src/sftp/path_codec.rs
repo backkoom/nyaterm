@@ -11,6 +11,10 @@ pub struct SftpPathCodec {
 }
 
 impl SftpPathCodec {
+    pub(super) fn is_utf8(&self) -> bool {
+        self.encoding == UTF_8
+    }
+
     pub fn from_ssh_config(config: &SshSessionConfig) -> anyhow::Result<Self> {
         let requested = config.sftp.filename_encoding.trim();
         let effective = if requested.is_empty() || requested.eq_ignore_ascii_case("terminal") {

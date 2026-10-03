@@ -236,6 +236,19 @@ impl NyaTermApp {
         let mut dirty = false;
         let event_id = event.id.clone();
         let job_session_id = job.session_id.clone();
+        if let (TransferJobKind::Delete { batch_id, .. }, TransferJobEvent::Finished(result)) =
+            (&job.kind, &event.event)
+        {
+            if let Some(outcome) = self.transfer.settle_delete_job(
+                batch_id,
+                &event.id,
+                result.as_ref().map(|_| ()).map_err(Clone::clone),
+            ) {
+                self.finish_transfer_delete_batch(job_session_id.as_deref(), outcome, window, cx);
+                return true;
+            }
+            return false;
+        }
         let reveal_tree_after_navigation = matches!(
             &job.kind,
             TransferJobKind::InitialDirectory
@@ -594,33 +607,7 @@ impl NyaTermApp {
                     "remote move completed from {parent_path}: {new_path}"
                 ));
             }
-            TransferJobEvent::Finished(Ok(TransferJobOutput::Deleted {
-                remote_path,
-                parent_path,
-                entries,
-            })) => {
-                job.status = TransferJobStatus::Completed;
-                job.detail = format!("Deleted {remote_path}");
-                self.transfer.browser.path = parent_path.clone();
-                self.transfer.browser.entries = Arc::new(entries.clone());
-                self.transfer.browser.status = format!("{} item(s)", entries.len());
-                job.entries = entries;
-                job.summary = None;
-                job.progress = None;
-                job.control = None;
-                if self.transfer.browser.selected_remote_path.as_deref()
-                    == Some(remote_path.as_str())
-                {
-                    self.transfer.browser.selected_remote_path = None;
-                }
-                self.transfer
-                    .browser
-                    .selected_remote_paths
-                    .remove(&remote_path);
-                self.shell.set_status(format!(
-                    "remote delete completed in {parent_path}: {remote_path}"
-                ));
-            }
+            TransferJobEvent::Finished(Ok(TransferJobOutput::Deleted)) => {}
             TransferJobEvent::Finished(Ok(TransferJobOutput::Sent {
                 source_path,
                 source_parent_path,

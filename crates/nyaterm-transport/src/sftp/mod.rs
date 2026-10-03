@@ -31,6 +31,7 @@ use crate::remote_file::{
     metadata_is_stable,
 };
 
+mod delete;
 mod path_codec;
 pub use path_codec::SftpPathCodec;
 mod contracts;
@@ -979,11 +980,9 @@ impl SftpService {
         let multiplex = self.multiplex.clone();
         self.run_operation("delete", async move {
             let codec = SftpPathCodec::from_ssh_config(&config)?;
-            let session = open_sftp_session(&config, multiplex.as_ref()).await?;
             let raw_path = remote_file_path_bytes(&codec, &remote_path)?;
-            let result = delete_remote_path_recursive_bytes(&session.sftp, raw_path).await;
-            close_sftp_session(session).await;
-            result
+            delete::delete_remote_path(&config, multiplex.as_ref(), &codec, &remote_path, raw_path)
+                .await
         })
     }
 
@@ -2454,40 +2453,6 @@ async fn collect_sftp_recursive_paths_bytes(
         }
     }
     Ok(paths)
-}
-
-async fn delete_remote_path_recursive_bytes(
-    sftp: &SftpSession,
-    remote_path: Vec<u8>,
-) -> anyhow::Result<()> {
-    let metadata = match sftp.symlink_metadata_bytes(remote_path.clone()).await {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            let message = error.to_string().to_ascii_lowercase();
-            if message.contains("no such")
-                || message.contains("not found")
-                || message.contains("does not exist")
-            {
-                return Ok(());
-            }
-            return Err(error.into());
-        }
-    };
-    if metadata.file_type() == russh_sftp::protocol::FileType::Dir {
-        let children = sftp
-            .read_dir_bytes(remote_path.clone())
-            .await?
-            .filter(|entry| !matches!(entry.file_name_bytes(), b"." | b".."))
-            .map(|entry| entry.path_bytes())
-            .collect::<Vec<_>>();
-        for child in children {
-            Box::pin(delete_remote_path_recursive_bytes(sftp, child)).await?;
-        }
-        sftp.remove_dir_bytes(remote_path).await?;
-    } else {
-        sftp.remove_file_bytes(remote_path).await?;
-    }
-    Ok(())
 }
 
 async fn copy_remote_path_between_sftp(

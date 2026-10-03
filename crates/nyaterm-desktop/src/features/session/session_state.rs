@@ -191,7 +191,7 @@ impl NyaTermApp {
             || !self.transfer.browser_entries_are_empty()
         {
             self.sync_transfer_browser_favorites_for_active_session();
-            if !self.restore_transfer_browser_session_cache(session_id) {
+            if !self.restore_transfer_browser_session_cache(session_id, cx) {
                 self.reset_transfer_browser_for_active_session();
             }
         } else {

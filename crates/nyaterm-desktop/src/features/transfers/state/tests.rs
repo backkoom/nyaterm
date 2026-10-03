@@ -45,6 +45,51 @@ fn transfer_state(cx: &TestAppContext) -> TransferFeatureState {
     )
 }
 
+#[test]
+fn inactive_delete_invalidates_cached_directory_until_its_session_is_restored() {
+    use nyaterm_transport::{FileBrowserBackendKind, RemoteFilePath};
+
+    let cx = TestAppContext::single();
+    let mut transfer = transfer_state(&cx);
+    transfer.store_browser_session_cache(
+        "inactive".into(),
+        TransferBrowserSessionCacheState {
+            entries: Arc::new(vec![file_entry("/dir/sub/file")]),
+            current_path: "/dir/sub".into(),
+            current_raw_path_token: None,
+            home_dir: "/home/user".into(),
+            history: VecDeque::from(["/dir/sub".into()]),
+            history_index: 0,
+            visited_history: VecDeque::new(),
+        },
+    );
+    transfer.begin_delete_batch(
+        "batch".into(),
+        FileBrowserBackendKind::Remote,
+        vec![("delete".into(), RemoteFilePath::new("/dir/sub"))],
+    );
+    let outcome = transfer
+        .settle_delete_job("batch", "delete", Ok(()))
+        .unwrap();
+    transfer.invalidate_delete_batch("inactive", &outcome);
+    assert_eq!(transfer.browser.path, ".");
+    assert_eq!(
+        transfer
+            .browser_session_cache("inactive")
+            .unwrap()
+            .current_path,
+        "/dir"
+    );
+    assert!(transfer.replace_session_id("inactive", "reconnected"));
+    assert!(transfer.take_delete_refresh_pending("reconnected"));
+    assert!(!transfer.take_delete_refresh_pending("reconnected"));
+    assert!(
+        transfer
+            .settle_delete_job("batch", "delete", Ok(()))
+            .is_none()
+    );
+}
+
 /// Every real input to the derived listing must invalidate the memo, and nothing
 /// else may.
 ///

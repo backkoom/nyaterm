@@ -47,7 +47,7 @@ pub(crate) enum TransferJobKind {
     },
     Delete {
         remote_path: String,
-        parent_path: String,
+        batch_id: String,
     },
     /// Copy a remote entry from the active (source) session to another connected
     /// SSH session's directory. Reuses `FileCopyRequest` under the hood; the copy
@@ -534,11 +534,7 @@ pub(crate) enum TransferJobOutput {
         parent_path: String,
         entries: Vec<SftpFileEntry>,
     },
-    Deleted {
-        remote_path: String,
-        parent_path: String,
-        entries: Vec<SftpFileEntry>,
-    },
+    Deleted,
     /// A cross-session "Send to" copy finished. `entries` is the refreshed listing
     /// of the target session's destination directory, used to update that
     /// session's browser cache without switching the active session.

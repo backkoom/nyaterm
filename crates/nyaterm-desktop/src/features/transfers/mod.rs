@@ -1,6 +1,7 @@
 //! Transfer jobs, transfer options, path prompts and transfer widgets.
 
 mod cwd_sync_clock;
+mod delete_runtime;
 mod editor_window;
 mod external_sync_runtime;
 mod external_sync_window;

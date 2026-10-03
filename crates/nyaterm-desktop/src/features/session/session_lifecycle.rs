@@ -484,7 +484,7 @@ impl NyaTermApp {
         if self.session.active_id() == Some(new_id)
             && self.transfer.has_browser_session_cache(new_id)
         {
-            self.restore_transfer_browser_session_cache(new_id);
+            self.restore_transfer_browser_session_cache(new_id, cx);
         }
         self.sync_workspace_split_from_active_tab();
     }
