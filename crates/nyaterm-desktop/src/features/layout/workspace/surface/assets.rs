@@ -3,8 +3,7 @@ use std::{ops::Range, sync::Arc};
 use gpui::{
     AnyElement, App, Bounds, Context, FontWeight, InteractiveElement, IntoElement, MouseButton,
     MouseDownEvent, Pixels, Point, Rgba, ScrollHandle, SharedString, StatefulInteractiveElement,
-    UniformListDecoration, WeakEntity, Window, canvas, div, prelude::*, px, rgb, rgba,
-    uniform_list,
+    UniformListDecoration, WeakEntity, Window, canvas, div, prelude::*, px, rgb, uniform_list,
 };
 use nyaterm_core::{
     AssetDisplayLabels, AssetFilterKey, AssetRecord, AssetSortDirection, AssetViewMode,
@@ -190,6 +189,11 @@ impl NyaTermApp {
             StartWorkspaceMode::Assets => self.asset_workspace_state(cx),
         };
         let palette = self.theme_palette();
+        // Asset controls and text use the application palette, including their background.
+        let background = match mode {
+            StartWorkspaceMode::Workbench => self.terminal_theme_palette().terminal_bg,
+            StartWorkspaceMode::Assets => palette.bg,
+        };
         div()
             .relative()
             .flex_1()
@@ -198,7 +202,7 @@ impl NyaTermApp {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(self.shell_surface_color(self.terminal_theme_palette().terminal_bg))
+            .bg(self.shell_surface_color(background))
             .child(content)
             .child(
                 div()
@@ -325,6 +329,7 @@ impl NyaTermApp {
             .flex()
             .flex_col()
             .overflow_hidden()
+            .text_color(rgb(palette.text))
             .child(
                 div()
                     .flex_none()
@@ -537,7 +542,7 @@ impl NyaTermApp {
         let min_table_width = self.start_workspace.table_width();
         let horizontal_scroll = self.start_workspace.table_horizontal_scroll().clone();
         let scroll = self.start_workspace.list_scroll().clone();
-        let action_background = rgba((self.terminal_theme_palette().terminal_bg << 8) | 0xff);
+        let action_background = rgb(palette.bg);
         let mut header = div()
             .h(px(34.))
             .w_full()
