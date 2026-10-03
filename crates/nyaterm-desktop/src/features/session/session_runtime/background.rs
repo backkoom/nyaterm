@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
@@ -7,6 +8,8 @@ use nyaterm_transport::{
     LocalSessionConfig, SerialSessionConfig, SessionInfo, SessionKind, SessionManager,
     SshSessionConfig, TelnetSessionConfig, open_ssh_multiplex_handle,
 };
+
+use crate::app_shell::session_hub::ssh_connections::SshConnectionPool;
 
 use super::super::state::{
     PendingReconnectCompletion, failed_session_start_display_name,
@@ -237,7 +240,7 @@ impl NyaTermApp {
                 insert_index,
                 seed_output,
                 startup_command,
-                multiplex_key,
+                multiplex_key: multiplex_key.clone(),
                 source_connection_id,
                 reconnect_session_id,
                 workspace_split,
@@ -253,6 +256,7 @@ impl NyaTermApp {
             config.bind_attempt(attempt.clone());
         }
         let session_manager = self.session.manager_handle();
+        let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
         let request_id_for_worker = request_id.clone();
         submit_session_start_job(
@@ -270,11 +274,17 @@ impl NyaTermApp {
                         .map(|session_info| SessionStartSuccess {
                             session_info,
                             multiplex_handle: None,
+                            cleanup: None,
                             launch_config: None,
                         })
                         .map_err(|error| error.to_string())
                 } else {
-                    create_session_from_launch_config(&session_manager, launch_config.clone())
+                    create_session_from_launch_config(
+                        &session_manager,
+                        &ssh_connections,
+                        multiplex_key,
+                        launch_config.clone(),
+                    )
                 };
                 result
                     .map(|success| SessionStartSuccess {
@@ -334,7 +344,7 @@ impl NyaTermApp {
                 insert_index,
                 seed_output,
                 startup_command,
-                multiplex_key: Some(multiplex_key),
+                multiplex_key: Some(multiplex_key.clone()),
                 source_connection_id,
                 reconnect_session_id,
                 workspace_split,
@@ -347,6 +357,7 @@ impl NyaTermApp {
 
         config.bind_attempt(self.session.start.attempt(&request_id));
         let session_manager = self.session.manager_handle();
+        let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
         let request_id_for_worker = request_id.clone();
         submit_session_start_job(
@@ -359,24 +370,16 @@ impl NyaTermApp {
             move || {
                 let multiplex =
                     open_ssh_multiplex_handle(config.clone()).map_err(|error| error.to_string())?;
-                match session_manager
-                    .create_ssh_session_with_multiplex(config.clone(), multiplex.clone())
-                {
-                    Ok(info) => Ok(SessionStartSuccess {
-                        session_info: info,
-                        multiplex_handle: Some(multiplex),
-                        launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config))),
-                    }),
-                    Err(error) => {
-                        if let Err(disconnect_error) = multiplex.disconnect() {
-                            tracing::warn!(
-                                error = %disconnect_error,
-                                "failed to disconnect unused SSH multiplex handle after session start failure"
-                            );
-                        }
-                        Err(error.to_string())
-                    }
-                }
+                let connection = ssh_connections.register(multiplex_key, multiplex);
+                let session_info = session_manager
+                    .create_ssh_session_with_multiplex(config.clone(), connection.handle())
+                    .map_err(|error| error.to_string())?;
+                Ok(SessionStartSuccess::ssh(
+                    Arc::clone(&session_manager),
+                    session_info,
+                    connection,
+                    Some(SessionLaunchConfig::Ssh(Box::new(config))),
+                ))
             },
         );
     }
@@ -447,7 +450,9 @@ impl NyaTermApp {
             cx,
         );
 
+        config.bind_attempt(self.session.start.attempt(&request_id));
         let session_manager = self.session.manager_handle();
+        let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
         let request_id_for_worker = request_id.clone();
         submit_session_start_job(
@@ -458,32 +463,23 @@ impl NyaTermApp {
             SessionKind::Ssh,
             session_start_tx,
             move || {
-                let (multiplex, reused_multiplex) = match existing_multiplex {
-                    Some(handle) if !handle.is_closed() => (handle, true),
-                    _ => (
-                        open_ssh_multiplex_handle(config.clone())
-                            .map_err(|error| error.to_string())?,
-                        false,
-                    ),
-                };
-                match session_manager
-                    .create_ssh_session_with_multiplex(config.clone(), multiplex.clone())
-                {
-                    Ok(info) => Ok(SessionStartSuccess {
-                        session_info: info,
-                        multiplex_handle: Some(multiplex),
-                        launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config))),
-                    }),
-                    Err(error) => {
-                        if !reused_multiplex && let Err(disconnect_error) = multiplex.disconnect() {
-                            tracing::warn!(
-                                error = %disconnect_error,
-                                "failed to disconnect unused SSH multiplex handle after session start failure"
-                            );
-                        }
-                        Err(error.to_string())
+                let connection = match existing_multiplex {
+                    Some(connection) if !connection.is_closed() => connection,
+                    _ => {
+                        let handle = open_ssh_multiplex_handle(config.clone())
+                            .map_err(|error| error.to_string())?;
+                        ssh_connections.register(multiplex_key, handle)
                     }
-                }
+                };
+                let session_info = session_manager
+                    .create_ssh_session_with_multiplex(config.clone(), connection.handle())
+                    .map_err(|error| error.to_string())?;
+                Ok(SessionStartSuccess::ssh(
+                    Arc::clone(&session_manager),
+                    session_info,
+                    connection,
+                    Some(SessionLaunchConfig::Ssh(Box::new(config))),
+                ))
             },
         );
     }
@@ -593,11 +589,10 @@ impl NyaTermApp {
         let worker_to_ui_duration =
             Instant::now().saturating_duration_since(event.worker_finished_at);
         match event.result {
-            Ok(success) => {
+            Ok(mut success) => {
                 let ui_register_started_at = Instant::now();
                 self.shell.clear_last_connect_failure();
-                let session_info = success.session_info;
-                let session_id = session_info.id.clone();
+                let session_id = success.session_info.id.clone();
                 let reconnect_session_id = pending
                     .as_ref()
                     .and_then(|pending| pending.reconnect_session_id.clone());
@@ -608,9 +603,6 @@ impl NyaTermApp {
                     .as_deref()
                     .is_some_and(|stale_id| !self.session.has_session(stale_id))
                 {
-                    if let Some(handle) = success.multiplex_handle {
-                        self.session.disconnect_multiplex_handle(handle);
-                    }
                     if let Err(error) = self.session.manager().close(&session_id) {
                         tracing::warn!(
                             request_id = %request_id,
@@ -621,6 +613,8 @@ impl NyaTermApp {
                     }
                     return;
                 }
+                success.accept();
+                let session_info = success.session_info;
                 let launch_config = success
                     .launch_config
                     .or_else(|| {
@@ -636,10 +630,9 @@ impl NyaTermApp {
                 let ssh_multiplex_key = pending
                     .as_ref()
                     .and_then(|pending| pending.multiplex_key.clone());
-                if let (Some(key), Some(handle)) =
-                    (ssh_multiplex_key.clone(), success.multiplex_handle)
-                {
-                    self.session.register_multiplex_handle(key, handle);
+                if let Some(connection) = success.multiplex_handle {
+                    self.session
+                        .register_ssh_connection(session_id.clone(), connection);
                 }
                 let source_connection_id = pending
                     .as_ref()
@@ -962,7 +955,9 @@ fn session_kind_for_launch_config(config: &SessionLaunchConfig) -> SessionKind {
 const SESSION_START_SLOW_THRESHOLD: Duration = Duration::from_millis(500);
 
 fn create_session_from_launch_config(
-    session_manager: &SessionManager,
+    session_manager: &Arc<SessionManager>,
+    ssh_connections: &SshConnectionPool,
+    multiplex_key: Option<String>,
     launch_config: SessionLaunchConfig,
 ) -> Result<SessionStartSuccess, String> {
     match launch_config {
@@ -971,6 +966,7 @@ fn create_session_from_launch_config(
             .map(|session_info| SessionStartSuccess {
                 session_info,
                 multiplex_handle: None,
+                cleanup: None,
                 launch_config: None,
             })
             .map_err(|error| error.to_string()),
@@ -978,28 +974,24 @@ fn create_session_from_launch_config(
             let config = *config;
             let multiplex =
                 open_ssh_multiplex_handle(config.clone()).map_err(|error| error.to_string())?;
-            match session_manager.create_ssh_session_with_multiplex(config, multiplex.clone()) {
-                Ok(session_info) => Ok(SessionStartSuccess {
-                    session_info,
-                    multiplex_handle: Some(multiplex),
-                    launch_config: None,
-                }),
-                Err(error) => {
-                    if let Err(disconnect_error) = multiplex.disconnect() {
-                        tracing::warn!(
-                            error = %disconnect_error,
-                            "failed to disconnect unused SSH multiplex handle after session start failure"
-                        );
-                    }
-                    Err(error.to_string())
-                }
-            }
+            let connection =
+                ssh_connections.register(multiplex_key.expect("SSH connection key"), multiplex);
+            let session_info = session_manager
+                .create_ssh_session_with_multiplex(config, connection.handle())
+                .map_err(|error| error.to_string())?;
+            Ok(SessionStartSuccess::ssh(
+                Arc::clone(session_manager),
+                session_info,
+                connection,
+                None,
+            ))
         }
         SessionLaunchConfig::Telnet(config) => session_manager
             .create_telnet_session(config)
             .map(|session_info| SessionStartSuccess {
                 session_info,
                 multiplex_handle: None,
+                cleanup: None,
                 launch_config: None,
             })
             .map_err(|error| error.to_string()),
@@ -1008,6 +1000,7 @@ fn create_session_from_launch_config(
             .map(|session_info| SessionStartSuccess {
                 session_info,
                 multiplex_handle: None,
+                cleanup: None,
                 launch_config: None,
             })
             .map_err(|error| error.to_string()),

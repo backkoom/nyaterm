@@ -20,6 +20,8 @@ use crate::models::{
 };
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
 
+use crate::app_shell::session_hub::ssh_connections::{SshConnectionLease, SshConnectionPool};
+
 use super::SessionProtocolRuntimeState;
 use super::auth_runtime::{
     AgentPromptBroker, AgentPromptRequest, CredentialPromptBroker, CredentialPromptRequest,
@@ -39,6 +41,7 @@ const ACTIVE_HISTORY_LIMIT: usize = 64;
 
 pub(in crate::features) struct SessionFeatureState {
     manager: Arc<SessionManager>,
+    ssh_connections: SshConnectionPool,
     event_bridge: SessionEventBridge,
     pub(super) start: SessionStartFeatureState,
     restore: SessionRestoreState,
@@ -92,6 +95,7 @@ struct SessionCatalogTransferEntry {
     command_history: Option<Vec<String>>,
     busy_action: Option<String>,
     remote_file: Option<RemoteFileService>,
+    ssh_connection: Option<SshConnectionLease>,
     xymodem: Option<super::xymodem_runtime::XymodemSessionState>,
     zmodem: Option<ZmodemSessionState>,
     trzsz: Option<TrzszSessionState>,
@@ -191,7 +195,6 @@ pub(in crate::features) enum RenameSessionSubmission {
 
 pub(in crate::features) struct SessionDisconnectUpdate {
     pub already_disconnected: bool,
-    pub multiplex_key: Option<String>,
 }
 
 impl SessionFeatureState {
@@ -265,6 +268,7 @@ impl SessionFeatureState {
                 command_history: self.command_history.remove(session_id),
                 busy_action: self.busy_actions.remove(session_id),
                 remote_file: self.protocols.remote_files.remove(session_id),
+                ssh_connection: self.protocols.ssh_connections.remove(session_id),
                 xymodem: self.protocols.xymodem.remove(session_id),
                 zmodem: self.protocols.zmodem.remove(session_id),
                 trzsz: self.protocols.trzsz.remove(session_id),
@@ -356,6 +360,11 @@ impl SessionFeatureState {
             if let Some(value) = entry.trzsz {
                 self.protocols.trzsz.insert(session_id.clone(), value);
             }
+            if let Some(connection) = entry.ssh_connection {
+                self.protocols
+                    .ssh_connections
+                    .insert(session_id.clone(), connection);
+            }
             self.event_bridge.claim_session(&session_id);
         }
         ordered_ids.retain(|id| self.metadata.contains_key(id));
@@ -367,13 +376,17 @@ impl SessionFeatureState {
         }
     }
 
-    pub(in crate::features) fn disconnect_multiplex_handle(&mut self, handle: SshMultiplexHandle) {
-        self.protocols.spawn_multiplex_disconnect(handle);
+    pub(in crate::features) fn ssh_connection_pool(&self) -> SshConnectionPool {
+        self.ssh_connections.clone()
     }
 
     pub(in crate::features) fn shutdown_workers(&mut self) {
-        for pending in self.start.pending.values() {
-            pending.attempt.cancel();
+        // Reject late worker results so their pending-session guards clean up
+        // before the background shutdown barrier, even if the window is gone.
+        self.start.tx.close_channel();
+        let pending_ids = self.start.pending.keys().cloned().collect::<Vec<_>>();
+        for id in pending_ids {
+            self.start.close_pending(&id);
         }
         self.protocols.shutdown_workers();
         self.event_bridge.shutdown();
@@ -381,12 +394,14 @@ impl SessionFeatureState {
 
     pub(in crate::features) fn new(
         manager: Arc<SessionManager>,
+        ssh_connections: SshConnectionPool,
         event_bridge: SessionEventBridge,
         otp_provider: Arc<NativeOtpProvider>,
         focus: SessionFeatureFocus,
     ) -> Self {
         Self {
             manager,
+            ssh_connections,
             event_bridge,
             start: SessionStartFeatureState::new(),
             restore: SessionRestoreState::default(),
@@ -1048,8 +1063,20 @@ impl SessionFeatureState {
         &mut self,
         session_id: &str,
     ) -> Option<SshMultiplexHandle> {
-        let multiplex_key = self.metadata(session_id)?.ssh_multiplex_key.clone()?;
-        self.reusable_multiplex_handle(&multiplex_key)
+        self.ssh_connection_for_session(session_id)
+            .map(|connection| connection.handle())
+    }
+
+    pub(in crate::features) fn ssh_connection_for_session(
+        &self,
+        session_id: &str,
+    ) -> Option<SshConnectionLease> {
+        let connection = self.protocols.ssh_connections.get(session_id)?;
+        if connection.is_closed() {
+            return None;
+        }
+        let key = self.metadata(session_id)?.ssh_multiplex_key.as_deref()?;
+        self.ssh_connections.get(key)
     }
 
     pub(in crate::features) fn active_ai_execution_profile(&self) -> AiExecutionProfile {
@@ -1106,7 +1133,7 @@ impl SessionFeatureState {
         (
             self.protocols.zmodem.len(),
             self.protocols.trzsz.len(),
-            self.protocols.multiplex_handles.len(),
+            self.protocols.ssh_connections.len(),
         )
     }
 
@@ -1174,50 +1201,14 @@ impl SessionFeatureState {
         true
     }
 
-    pub(in crate::features) fn register_multiplex_handle(
+    pub(in crate::features) fn register_ssh_connection(
         &mut self,
-        multiplex_key: String,
-        handle: SshMultiplexHandle,
+        session_id: String,
+        connection: SshConnectionLease,
     ) {
         self.protocols
-            .multiplex_handles
-            .insert(multiplex_key, handle);
-    }
-
-    pub(in crate::features) fn reusable_multiplex_handle(
-        &mut self,
-        multiplex_key: &str,
-    ) -> Option<SshMultiplexHandle> {
-        if self
-            .protocols
-            .multiplex_handles
-            .get(multiplex_key)
-            .is_some_and(SshMultiplexHandle::is_closed)
-        {
-            self.protocols.multiplex_handles.remove(multiplex_key);
-        }
-        self.protocols.multiplex_handles.get(multiplex_key).cloned()
-    }
-
-    pub(in crate::features) fn take_multiplex_handle_if_unreferenced(
-        &mut self,
-        multiplex_key: &str,
-    ) -> Option<SshMultiplexHandle> {
-        if self.multiplex_key_is_referenced(multiplex_key) {
-            return None;
-        }
-        self.protocols.multiplex_handles.remove(multiplex_key)
-    }
-
-    pub(in crate::features) fn take_multiplex_handle_if_no_other_live_reference(
-        &mut self,
-        session_id: &str,
-        multiplex_key: &str,
-    ) -> Option<SshMultiplexHandle> {
-        if self.other_live_session_uses_multiplex_key(session_id, multiplex_key) {
-            return None;
-        }
-        self.protocols.multiplex_handles.remove(multiplex_key)
+            .ssh_connections
+            .insert(session_id, connection);
     }
 
     pub(in crate::features) fn select_active_session(
@@ -1655,24 +1646,10 @@ impl SessionFeatureState {
         let metadata = self.metadata.get_mut(session_id)?;
         let already_disconnected = metadata.disconnected;
         metadata.disconnected = true;
+        self.protocols.ssh_connections.remove(session_id);
         Some(SessionDisconnectUpdate {
             already_disconnected,
-            multiplex_key: metadata.ssh_multiplex_key.clone(),
         })
-    }
-
-    fn other_live_session_uses_multiplex_key(&self, session_id: &str, multiplex_key: &str) -> bool {
-        self.metadata.iter().any(|(id, metadata)| {
-            id != session_id
-                && !metadata.disconnected
-                && metadata.ssh_multiplex_key.as_deref() == Some(multiplex_key)
-        })
-    }
-
-    fn multiplex_key_is_referenced(&self, multiplex_key: &str) -> bool {
-        self.metadata
-            .values()
-            .any(|metadata| metadata.ssh_multiplex_key.as_deref() == Some(multiplex_key))
     }
 
     pub(in crate::features) fn custom_name(&self, session_id: &str) -> Option<&str> {
@@ -1804,6 +1781,7 @@ impl SessionFeatureState {
         self.remove_zmodem_session_runtime(session_id);
         self.remove_trzsz_session_runtime(session_id);
         self.remove_remote_file_service(session_id);
+        self.protocols.ssh_connections.remove(session_id);
         self.order.retain(|id| id != session_id);
         self.active.history.retain(|id| id != session_id);
         self.start_tab_placements.remove(session_id);

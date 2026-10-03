@@ -190,9 +190,7 @@ impl NyaTermApp {
             return;
         };
         let existing_multiplex_key = metadata.ssh_multiplex_key.clone();
-        let existing_multiplex = self
-            .session
-            .ssh_multiplex_handle_for_session(&source_session_id);
+        let existing_multiplex = self.session.ssh_connection_for_session(&source_session_id);
         let custom_name = self
             .session
             .custom_name(&source_session_id)
@@ -288,15 +286,6 @@ impl NyaTermApp {
         if update.already_disconnected {
             return;
         }
-        // Drop multiplex handle association for this session key if unused.
-        if let Some(multiplex_key) = update.multiplex_key
-            && let Some(handle) = self
-                .session
-                .take_multiplex_handle_if_no_other_live_reference(session_id, &multiplex_key)
-        {
-            self.session.disconnect_multiplex_handle(handle);
-        }
-
         let banner = "\r\n\x1b[31m[Session disconnected]\x1b[0m\r\n\x1b[33m[Press Enter to reconnect]\x1b[0m\r\n";
         let encoding = self
             .session

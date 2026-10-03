@@ -872,7 +872,7 @@ impl NyaTermApp {
                 insert_index,
                 seed_output,
                 startup_command,
-                multiplex_key: Some(multiplex_key),
+                multiplex_key: Some(multiplex_key.clone()),
                 source_connection_id,
                 reconnect_session_id,
                 workspace_split,
@@ -884,6 +884,7 @@ impl NyaTermApp {
         );
 
         let session_manager = self.session.manager_handle();
+        let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
         build_context.attempt = self.session.start.attempt(&request_id);
         build_context.host_key_prompts = Arc::new(
@@ -919,25 +920,16 @@ impl NyaTermApp {
                 }
                 let multiplex =
                     open_ssh_multiplex_handle(config.clone()).map_err(|error| error.to_string())?;
-                let session_info = match session_manager
-                    .create_ssh_session_with_multiplex(config.clone(), multiplex.clone())
-                {
-                    Ok(info) => info,
-                    Err(error) => {
-                        if let Err(disconnect_error) = multiplex.disconnect() {
-                            tracing::warn!(
-                                error = %disconnect_error,
-                                "failed to disconnect unused SSH multiplex handle after session start failure"
-                            );
-                        }
-                        return Err(error.to_string());
-                    }
-                };
-                Ok(SessionStartSuccess {
+                let connection = ssh_connections.register(multiplex_key, multiplex);
+                let session_info = session_manager
+                    .create_ssh_session_with_multiplex(config.clone(), connection.handle())
+                    .map_err(|error| error.to_string())?;
+                Ok(SessionStartSuccess::ssh(
+                    Arc::clone(&session_manager),
                     session_info,
-                    multiplex_handle: Some(multiplex),
-                    launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config))),
-                })
+                    connection,
+                    Some(SessionLaunchConfig::Ssh(Box::new(config))),
+                ))
             },
         );
     }

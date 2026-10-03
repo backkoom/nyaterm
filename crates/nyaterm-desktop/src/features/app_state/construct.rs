@@ -11,9 +11,11 @@ use nyaterm_store::BootstrapSnapshot;
 #[cfg(test)]
 use nyaterm_store::{LoadBootstrap, StoreConfig, StoreRuntime};
 use nyaterm_terminal::TerminalOutputDecoder;
-use nyaterm_transport::{SessionManager, SftpDuplicatePolicy};
+use nyaterm_transport::SftpDuplicatePolicy;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::app_shell::session_hub::SessionHub;
 
 use super::{NyaTermApp, NyaTermProcessEntities, NyaTermStoreClients};
 use crate::features::ai::{
@@ -57,13 +59,15 @@ impl NyaTermApp {
         process_entities: NyaTermProcessEntities,
         workspace_init: crate::app_shell::WorkspaceInitSnapshot,
         store_clients: NyaTermStoreClients,
-        session_manager: Arc<SessionManager>,
+        session_hub: SessionHub,
         cx: &mut Context<Self>,
     ) -> Self {
         let NyaTermProcessEntities {
             process_state,
             update,
         } = process_entities;
+        let session_manager = session_hub.manager();
+        let ssh_connections = session_hub.ssh_connections();
         nyaterm_core::warm_terminal_input_tracker();
         let NyaTermStoreClients {
             ui: store_ui,
@@ -356,6 +360,7 @@ impl NyaTermApp {
             ),
             session: SessionFeatureState::new(
                 session_manager,
+                ssh_connections,
                 session_event_bridge,
                 otp_provider,
                 SessionFeatureFocus {
@@ -473,7 +478,7 @@ impl NyaTermApp {
             NyaTermProcessEntities::new(process_state, update),
             workspace_init,
             NyaTermStoreClients::new(store_ui, store_blocking),
-            Arc::new(SessionManager::new()),
+            SessionHub::new(),
             cx,
         );
         app._test_config_dir = Some(test_config_dir);

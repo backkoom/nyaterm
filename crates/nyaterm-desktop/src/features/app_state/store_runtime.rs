@@ -151,6 +151,7 @@ impl NyaTermApp {
         self.ai.cancel_chat_and_agent();
         let agent_worker = self.ai.shutdown_agent_management_worker();
         let stop_jobs = self.blocking_jobs.begin_shutdown();
+        let ssh_connections = self.session.ssh_connection_pool();
         self.remote_desktop.routes.clear();
         self.remote_desktop.prepared_routes.clear();
         self.shutdown_remote_desktop_workers();
@@ -163,6 +164,7 @@ impl NyaTermApp {
                 let _ = worker.join();
             }
             stop_jobs();
+            ssh_connections.finish_disconnects();
         })
     }
 

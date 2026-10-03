@@ -266,7 +266,7 @@ impl NyaTermApp {
         self.session.start.clear_reconnect_failure(session_id);
         // If this leaf was a tab root, drop its pane tree (prune will rekey survivors).
         self.shell.remove_workspace_session(session_id);
-        let multiplex_key = self.session.remove_session_catalog(session_id);
+        self.session.remove_session_catalog(session_id);
         self.session.clear_event_bridge_session(session_id);
         self.terminal.remove_frame_session(session_id);
         self.terminal.remove_search_session_state(session_id);
@@ -283,13 +283,6 @@ impl NyaTermApp {
         self.reconcile_terminal_windows();
         if self.session.restore_is_complete() {
             self.persist_open_tabs();
-        }
-        if let Some(multiplex_key) = multiplex_key
-            && let Some(handle) = self
-                .session
-                .take_multiplex_handle_if_unreferenced(&multiplex_key)
-        {
-            self.session.disconnect_multiplex_handle(handle);
         }
     }
 }

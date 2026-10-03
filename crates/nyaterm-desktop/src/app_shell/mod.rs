@@ -2,7 +2,7 @@
 
 mod controller;
 mod process_state;
-mod session_hub;
+pub(crate) mod session_hub;
 mod window_state;
 
 use self::window_state::{
@@ -334,7 +334,7 @@ impl AppShell {
         };
         let update_store = self.controller.read(cx).update_store();
         let app = cx.new(|cx| {
-            let session_manager = self.session_hub.read(cx).manager();
+            let session_hub = self.session_hub.read(cx).clone();
             NyaTermApp::from_bootstrap(
                 self.runtime.clone(),
                 stores,
@@ -344,7 +344,7 @@ impl AppShell {
                     store_runtime.ui_client(),
                     store_runtime.blocking_client(),
                 ),
-                session_manager,
+                session_hub,
                 cx,
             )
         });

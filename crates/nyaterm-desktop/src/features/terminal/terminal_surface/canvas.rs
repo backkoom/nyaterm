@@ -807,33 +807,6 @@ impl NyaTermApp {
                             this.mark_user_activity();
                         }
                     }))
-                    .when(is_disconnected, |this| {
-                        this.child(
-                            div()
-                                .h(px(26.))
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .px_3()
-                                .border_b_1()
-                                .border_color(rgb(palette.border))
-                                .bg(self.shell_surface_color(palette.input))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight(700.))
-                                        .text_color(rgb(palette.danger))
-                                        .child(rust_i18n::t!("terminal.disconnectedStatus")),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(palette.warning))
-                                        .child(rust_i18n::t!("terminal.reconnectHint")),
-                                ),
-                        )
-                    })
                     // Empty-workspace bootstrap actions stay available when no session is selected.
                     .when(session_id.is_empty(), |this| {
                         this.child(
