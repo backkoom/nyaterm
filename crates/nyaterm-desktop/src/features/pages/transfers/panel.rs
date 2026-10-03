@@ -269,7 +269,7 @@ impl Render for TransferPanel {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use gpui::{
         AppContext as _, ClickEvent, Entity, IntoElement, Modifiers, MouseButton, MouseClickEvent,
@@ -349,6 +349,79 @@ mod tests {
             vcx.run_until_parked();
         }
         (app, vcx)
+    }
+
+    #[test]
+    fn wallpaper_load_and_clear_refresh_panel_colours_without_interaction() {
+        let test_dir = TestConfigDir::new("nyaterm-wallpaper-panel-colours");
+        std::fs::create_dir_all(test_dir.path()).expect("create test wallpaper directory");
+        let image_path = test_dir.path().join("wallpaper.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([80, 100, 120, 255]))
+            .save(&image_path)
+            .expect("write test wallpaper");
+        let mut cx = TestAppContext::single();
+        let app = app(&mut cx, test_dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.settings
+                .select_background_image(image_path.display().to_string());
+            app.settings.set_background_content_opacity(45);
+            app.flush_connection_panel_snapshot(cx);
+            app.flush_transfer_panel_snapshot(cx);
+            assert_eq!(
+                app.transfer_panel
+                    .read(cx)
+                    .snapshot()
+                    .unwrap()
+                    .chrome
+                    .surface
+                    .a,
+                1.0,
+            );
+            app.queue_wallpaper_refresh(cx);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if cx.read_entity(&app, |app, _| app.wallpaper_enabled()) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "wallpaper load timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        cx.read_entity(&app, |app, cx| {
+            let connection = app
+                .connection_panel
+                .read(cx)
+                .snapshot_key()
+                .unwrap()
+                .chrome();
+            let transfer = app.transfer_panel.read(cx).snapshot().unwrap().chrome;
+            assert_eq!(connection.transparent_surface.a, 0.0);
+            assert_eq!(connection.transparent_section_header.a, 0.0);
+            assert_eq!(transfer.transparent_surface.a, 0.0);
+            assert_eq!(transfer.transparent_section_header.a, 0.0);
+            assert_eq!(
+                transfer.surface,
+                app.shell_surface_color(transfer.palette.surface)
+            );
+        });
+        cx.update_entity(&app, |app, cx| {
+            app.settings.clear_background_image();
+            app.queue_wallpaper_refresh(cx);
+            let connection = app
+                .connection_panel
+                .read(cx)
+                .snapshot_key()
+                .unwrap()
+                .chrome();
+            let transfer = app.transfer_panel.read(cx).snapshot().unwrap().chrome;
+            assert_eq!(connection.transparent_surface.a, 1.0);
+            assert_eq!(connection.transparent_section_header.a, 1.0);
+            assert_eq!(transfer.transparent_surface.a, 1.0);
+            assert_eq!(transfer.transparent_section_header.a, 1.0);
+            assert_eq!(transfer.surface.a, 1.0);
+        });
     }
 
     fn paints(app: &Entity<NyaTermApp>, cx: &mut gpui::App) -> usize {

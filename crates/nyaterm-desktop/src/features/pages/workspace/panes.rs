@@ -26,7 +26,7 @@ impl NyaTermApp {
             .items_center()
             .justify_center()
             .gap_3()
-            .bg(self.shell_transparent_color(self.terminal_theme_palette().terminal_bg))
+            .bg(self.shell_terminal_surface_color(self.terminal_theme_palette().terminal_bg))
             .child(connection_spinner(
                 SharedString::from(format!("reconnect-spinner-{session_id}")),
                 rgb(palette.primary).into(),
@@ -72,7 +72,7 @@ impl NyaTermApp {
             .items_center()
             .justify_center()
             .gap_3()
-            .bg(self.shell_transparent_color(self.terminal_theme_palette().terminal_bg))
+            .bg(self.shell_terminal_surface_color(self.terminal_theme_palette().terminal_bg))
             .child(
                 svg()
                     .size(px(32.))
@@ -235,6 +235,118 @@ impl NyaTermApp {
                         .into_any_element(),
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gpui::{
+        AppContext as _, Context, Entity, Hsla, IntoElement, ParentElement as _, Render,
+        RenderImage, Styled as _, TestAppContext, VisualTestContext, Window, div, rgb,
+    };
+    use nyaterm_core::test_support::TestTempDir;
+
+    use crate::features::{NyaTermApp, test_support::app_with_visible_local_session};
+
+    #[derive(Clone, Copy, Debug)]
+    enum Stage {
+        Empty,
+        Pending,
+        Failed,
+        Terminal,
+        ReconnectPending,
+        ReconnectFailed,
+    }
+
+    struct WorkspaceBackgroundFixture {
+        app: Entity<NyaTermApp>,
+        stage: Stage,
+    }
+
+    impl Render for WorkspaceBackgroundFixture {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let stage = self.stage;
+            let content = self.app.update(cx, |app, cx| match stage {
+                Stage::Empty => app.empty_workspace_state(cx),
+                Stage::Pending => app.pending_workspace_state().into_any_element(),
+                Stage::Failed => app.failed_workspace_state().into_any_element(),
+                Stage::Terminal => app
+                    .terminal_canvas_for("s0".to_string(), cx)
+                    .into_any_element(),
+                Stage::ReconnectPending => app
+                    .workspace_reconnect_pending_state("s0")
+                    .into_any_element(),
+                Stage::ReconnectFailed => app
+                    .workspace_reconnect_failed_state("s0".to_string(), String::new(), cx)
+                    .into_any_element(),
+            });
+            div().size_full().flex().child(content)
+        }
+    }
+
+    #[test]
+    fn connecting_and_reconnecting_preserve_the_painted_workbench_background() {
+        let root = TestTempDir::new("nyaterm-workspace-background");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "s0");
+        let (terminal_color, expected_alpha) = cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.settings.set_background_content_opacity(35);
+            let path = "wallpaper.png".to_string();
+            app.shell.request_wallpaper(Some(path.clone()));
+            app.shell.cache_wallpaper(
+                path,
+                Arc::new(RenderImage::new(vec![image::Frame::new(
+                    image::RgbaImage::new(1, 1),
+                )])),
+                1,
+                1,
+            );
+            let color = app.terminal_theme_palette().terminal_bg;
+            let alpha = app.shell_surface_color(color).a;
+            // The existing workbench paints this tint twice. Keep its appearance.
+            (Hsla::from(rgb(color)), 1.0 - (1.0 - alpha).powi(2))
+        });
+        let fixture_app = app.clone();
+        let (fixture, vcx) = cx.add_window_view(move |_, _| WorkspaceBackgroundFixture {
+            app: fixture_app,
+            stage: Stage::Empty,
+        });
+        let vcx: &mut VisualTestContext = vcx;
+        for stage in [
+            Stage::Empty,
+            Stage::Pending,
+            Stage::Failed,
+            Stage::Terminal,
+            Stage::ReconnectPending,
+            Stage::ReconnectFailed,
+        ] {
+            vcx.update(|window, cx| {
+                fixture.update(cx, |fixture, cx| {
+                    fixture.stage = stage;
+                    cx.notify();
+                });
+                _ = window.draw(cx);
+                let mut transparency = 1.0;
+                for quad in window.painted_quads() {
+                    if quad.bounds.size.width.0 > 400.0
+                        && quad.bounds.size.height.0 > 300.0
+                        && let Some(color) = quad.background.as_solid()
+                        && color.h == terminal_color.h
+                        && color.s == terminal_color.s
+                        && color.l == terminal_color.l
+                    {
+                        transparency *= 1.0 - color.a;
+                    }
+                }
+                assert!(
+                    (1.0 - transparency - expected_alpha).abs() < 0.0001,
+                    "{stage:?} must preserve the workbench shading"
+                );
+            });
         }
     }
 }

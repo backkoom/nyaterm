@@ -202,7 +202,10 @@ impl NyaTermApp {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(self.shell_surface_color(background))
+            .bg(match mode {
+                StartWorkspaceMode::Workbench => self.shell_terminal_surface_color(background),
+                StartWorkspaceMode::Assets => self.shell_surface_color(background),
+            })
             .child(content)
             .child(
                 div()
