@@ -2,6 +2,7 @@ mod agent;
 mod codex;
 pub(crate) mod external;
 mod history;
+mod http;
 mod model;
 mod parser;
 mod prompt;

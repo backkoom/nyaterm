@@ -1548,6 +1548,16 @@ export interface AICustomActionConfig {
   enabled: boolean;
 }
 
+export interface AIProxySettings {
+  mode: "system" | "direct" | "custom";
+  protocol: "http" | "socks5";
+  host: string;
+  port: number;
+  username: string | null;
+  password: string | null;
+  no_proxy: string;
+}
+
 export interface AISettings {
   schema_version: number;
   enabled: boolean;
@@ -1557,6 +1567,7 @@ export interface AISettings {
   record_history: boolean;
   timeout_ms: number;
   request_user_agent: string;
+  proxy: AIProxySettings;
   active_profile_id: string;
   provider_profiles: AIProviderProfile[];
   default_mode: AIMode;

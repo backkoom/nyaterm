@@ -4,7 +4,7 @@ use std::time::Duration;
 use genai::adapter::AdapterKind;
 use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ReasoningEffort};
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
-use genai::{Client, ModelIden, WebConfig};
+use genai::{Client, ModelIden};
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::Value;
 
@@ -16,6 +16,7 @@ use crate::config::{
 use crate::error::{AppError, AppResult};
 use crate::utils::url::{join_api_base_url, normalize_api_base_url};
 
+use super::http::build_http_client;
 use super::types::{AiChatRequest, AiModelDiscovery};
 
 const MODEL_TEST_SYSTEM_PROMPT: &str = "You are NyaTerm's terminal AI connectivity check. Reply with OK only; do not suggest or run commands.";
@@ -324,12 +325,10 @@ pub(super) fn build_client(model: &ResolvedAiModel, settings: &AiSettings) -> Ap
             ))
         });
 
-    let web_config = WebConfig::default().with_default_headers(ai_request_headers(settings)?);
-
     Ok(Client::builder()
         .with_model_mapper_fn(move |_model| Ok(ModelIden::new(adapter_kind, mapped_model.clone())))
         .with_service_target_resolver(resolver)
-        .with_web_config(web_config)
+        .with_reqwest(build_http_client(settings)?)
         .build())
 }
 
@@ -581,10 +580,7 @@ async fn fetch_provider_model_names(
     if let Some((name, value)) = query {
         url.query_pairs_mut().append_pair(name, value);
     }
-    let client = reqwest::Client::builder()
-        .default_headers(ai_request_headers(settings)?)
-        .build()
-        .map_err(|error| AppError::Config(format!("Failed to build AI HTTP client: {error}")))?;
+    let client = build_http_client(settings)?;
     let mut names = Vec::new();
     let mut cursor: Option<(&str, String)> = None;
     let mut seen_cursors = std::collections::HashSet::new();
@@ -713,10 +709,7 @@ async fn fetch_openai_compatible_models(
     settings: &AiSettings,
 ) -> AppResult<Vec<String>> {
     let url = openai_compatible_models_url(base_url)?;
-    let client = reqwest::Client::builder()
-        .default_headers(ai_request_headers(settings)?)
-        .build()
-        .map_err(|e| AppError::Config(format!("Failed to build AI HTTP client: {e}")))?;
+    let client = build_http_client(settings)?;
     let mut req = client.get(&url);
     if let Some(key) = api_key {
         req = req.bearer_auth(key);

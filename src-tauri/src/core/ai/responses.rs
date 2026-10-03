@@ -12,7 +12,8 @@ use crate::config::{
 use crate::error::{AppError, AppResult};
 use crate::utils::url::{join_api_base_url, normalize_api_base_url};
 
-use super::model::{ResolvedAiModel, ai_request_headers};
+use super::http::build_http_client;
+use super::model::ResolvedAiModel;
 use super::parser::{trim_string_to_option, truncate_preview};
 use super::stream::{AiStreamResult, emit_stream_event};
 use super::types::{AiChatRequest, AiStreamEventPayload};
@@ -63,11 +64,6 @@ pub(super) async fn test_responses_model(
     user_prompt: &str,
     max_output_tokens: u32,
 ) -> AppResult<()> {
-    let url = responses_url(model)?;
-    let client = reqwest::Client::builder()
-        .default_headers(ai_request_headers(settings)?)
-        .build()
-        .map_err(|error| AppError::Config(format!("Failed to build AI HTTP client: {error}")))?;
     let mut body = json!({
         "model": model.model_name,
         "input": [
@@ -82,17 +78,7 @@ pub(super) async fn test_responses_model(
         body["reasoning"] = json!({ "effort": effort });
     }
 
-    let mut request = client.post(&url).json(&body);
-    if let Some(key) = model
-        .credential
-        .as_ref()
-        .and_then(|credential| credential.api_key.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        request = request.bearer_auth(key);
-    }
-    let response = request
+    let response = responses_request(settings, model, &body)?
         .send()
         .await
         .map_err(|error| AppError::Config(format!("AI model test failed: {error}")))?;
@@ -210,10 +196,6 @@ async fn run_responses_input_stream(
     cancel_rx: &mut oneshot::Receiver<()>,
 ) -> AppResult<AiStreamResult> {
     let url = responses_url(resolved_model)?;
-    let client = reqwest::Client::builder()
-        .default_headers(ai_request_headers(settings)?)
-        .build()
-        .map_err(|error| AppError::Config(format!("Failed to build AI HTTP client: {error}")))?;
 
     let mut body = json!({
         "model": resolved_model.model_name,
@@ -225,16 +207,7 @@ async fn run_responses_input_stream(
         body["reasoning"] = json!({ "effort": effort });
     }
 
-    let mut req = client.post(&url).json(&body);
-    if let Some(key) = resolved_model
-        .credential
-        .as_ref()
-        .and_then(|credential| credential.api_key.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        req = req.bearer_auth(key);
-    }
+    let req = responses_request(settings, resolved_model, &body)?;
 
     tracing::debug!(
         stream_id = %stream_id,
@@ -574,6 +547,26 @@ fn responses_reasoning_effort(value: &AiReasoningEffort) -> Option<&'static str>
         AiReasoningEffort::Max => Some("max"),
         AiReasoningEffort::Ultra => Some("ultra"),
     }
+}
+
+pub(super) fn responses_request(
+    settings: &AiSettings,
+    model: &ResolvedAiModel,
+    body: &Value,
+) -> AppResult<reqwest::RequestBuilder> {
+    let mut request = build_http_client(settings)?
+        .post(responses_url(model)?)
+        .json(body);
+    if let Some(key) = model
+        .credential
+        .as_ref()
+        .and_then(|credential| credential.api_key.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        request = request.bearer_auth(key);
+    }
+    Ok(request)
 }
 
 fn responses_url(model: &ResolvedAiModel) -> AppResult<String> {

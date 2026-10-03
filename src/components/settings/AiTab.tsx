@@ -46,6 +46,7 @@ import {
   aiModelIdForCredential,
   aiModelIdForProvider,
   BUILTIN_PROVIDERS,
+  DEFAULT_AI_SETTINGS,
   DEFAULT_MODEL_REASONING_EFFORTS,
   getCustomProviderBaseUrlPlaceholder,
   getProviderLabel,
@@ -65,6 +66,7 @@ import type {
   AIProviderApiProtocol,
   AIProviderCredential,
   AIProviderKind,
+  AIProxySettings,
   AISettings,
   ClaudeCodeIntegrationSettings,
   CodexIntegrationSettings,
@@ -280,6 +282,9 @@ export function AiGeneralTab() {
   const { appSettings, updateAppSettings } = useApp();
   const ai = appSettings.ai;
   const update = (patch: Partial<AISettings>) => updateAppSettings({ ai: { ...ai, ...patch } });
+  const proxy = { ...DEFAULT_AI_SETTINGS.proxy, ...ai.proxy };
+  const updateProxy = (patch: Partial<AIProxySettings>) =>
+    update({ proxy: { ...proxy, ...patch } });
 
   return (
     <div className="space-y-5">
@@ -330,6 +335,81 @@ export function AiGeneralTab() {
             onChange={(timeout_ms) => update({ timeout_ms })}
           />
         </SettingFieldGrid>
+      </SettingSection>
+
+      <SettingSection title={t("ai.proxyTitle")} desc={t("ai.proxyDescription")}>
+        <SettingSelect
+          label={t("ai.proxyMode")}
+          value={proxy.mode}
+          onValueChange={(mode) => updateProxy({ mode: mode as AIProxySettings["mode"] })}
+        >
+          <SelectItem value="system">{t("ai.proxySystem")}</SelectItem>
+          <SelectItem value="direct">{t("ai.proxyDirect")}</SelectItem>
+          <SelectItem value="custom">{t("ai.proxyCustom")}</SelectItem>
+        </SettingSelect>
+        {proxy.mode === "custom" && (
+          <>
+            <SettingSelect
+              label={t("settings.proxyProtocol")}
+              value={proxy.protocol}
+              onValueChange={(protocol) =>
+                updateProxy({ protocol: protocol as AIProxySettings["protocol"] })
+              }
+            >
+              <SelectItem value="http">HTTP</SelectItem>
+              <SelectItem value="socks5">SOCKS5</SelectItem>
+            </SettingSelect>
+            <SettingFieldGrid>
+              <SettingInput
+                label={t("settings.proxyHost")}
+                aria-label={t("settings.proxyHost")}
+                placeholder="127.0.0.1"
+                value={proxy.host}
+                onChange={(event) => updateProxy({ host: event.target.value })}
+              />
+              <SettingNumberInput
+                label={t("settings.proxyPort")}
+                min={1}
+                max={65535}
+                value={proxy.port}
+                onChange={(port) => updateProxy({ port })}
+              />
+              <SettingInput
+                label={t("ai.proxyUsername")}
+                aria-label={t("ai.proxyUsername")}
+                autoComplete="off"
+                value={proxy.username ?? ""}
+                onChange={(event) => updateProxy({ username: event.target.value })}
+              />
+            </SettingFieldGrid>
+            <SettingRow label={t("ai.proxyPassword")} desc={t("ai.proxyPasswordDescription")}>
+              <Input
+                type="password"
+                aria-label={t("ai.proxyPassword")}
+                autoComplete="new-password"
+                value={secretInputValue(proxy.password)}
+                placeholder={secretPlaceholder(proxy.password, t("ai.proxyPassword"))}
+                onChange={(event) => updateProxy({ password: event.target.value })}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!proxy.password}
+                onClick={() => updateProxy({ password: "" })}
+              >
+                {t("ai.proxyClearPassword")}
+              </Button>
+            </SettingRow>
+            <SettingInput
+              label={t("ai.proxyBypass")}
+              aria-label={t("ai.proxyBypass")}
+              desc={t("ai.proxyBypassDescription")}
+              value={proxy.no_proxy}
+              onChange={(event) => updateProxy({ no_proxy: event.target.value })}
+            />
+          </>
+        )}
+        <p className="text-xs text-muted-foreground">{t("ai.proxyTestHint")}</p>
       </SettingSection>
 
       <SettingSection title={t("ai.agentSettings")}>
@@ -1083,6 +1163,7 @@ export function AiModelsTab() {
   const [testingModelId, setTestingModelId] = useState<string | null>(null);
   const [modelTestResults, setModelTestResults] = useState<Record<string, "success" | "error">>({});
   const modelTestGeneration = useRef(0);
+  const proxySignature = JSON.stringify(ai.proxy);
   const cancelProviderConnectionTest = () => {
     providerConnectionTestGeneration.current += 1;
     setTestingProviderId(null);
@@ -1117,7 +1198,20 @@ export function AiModelsTab() {
     ai.default_reasoning_effort,
     ai.request_user_agent,
     ai.timeout_ms,
+    proxySignature,
   ]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Proxy changes invalidate all pending provider requests and results.
+  useEffect(() => {
+    providerConnectionTestGeneration.current += 1;
+    providerListRefreshGeneration.current += 1;
+    setTestingProviderId(null);
+    setRefreshingCurrentModels(false);
+    setRefreshing(false);
+    setProviderStatuses({});
+    setProviderConnectionStatus("idle");
+    setProviderModelCount(null);
+    setTestedDraftModels(null);
+  }, [proxySignature]);
   const update = (patch: Partial<AISettings>) => updateAppSettings({ ai: { ...ai, ...patch } });
 
   const enabledCredentials = useMemo(
@@ -1390,9 +1484,7 @@ export function AiModelsTab() {
   };
 
   const toggleModelReasoningEffort = (model: AIModelConfigItem, effort: AIModelReasoningEffort) => {
-    const selected = new Set(
-      model.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS,
-    );
+    const selected = new Set(model.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS);
     if (selected.has(effort)) selected.delete(effort);
     else selected.add(effort);
     updateModel(model.id, {

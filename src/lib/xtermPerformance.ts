@@ -2,8 +2,8 @@ import { isMacOS } from "./platform";
 
 export const XTERM_PERFORMANCE_CONFIG = {
   highlighting: {
-    /** Debounce delay in ms before re-scanning after new output is written. */
-    debounceMs: 80,
+    /** Delay before refreshing highlights; subsequent writes do not restart the timer. */
+    writeRefreshIntervalMs: 80,
     /** Idle delay before refreshing highlights after viewport scrolling stops. */
     scrollIdleDebounceMs: 120,
     /** Idle delay before rebuilding highlights after a suspended terminal resumes. */

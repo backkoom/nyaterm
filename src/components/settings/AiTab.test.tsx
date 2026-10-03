@@ -3,7 +3,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
 import type { AISettings } from "@/types/global";
-import { AiModelsTab } from "./AiTab";
+import { AiGeneralTab, AiModelsTab } from "./AiTab";
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 let currentSettings: AISettings;
@@ -16,7 +16,7 @@ vi.mock("react-i18next", async (importOriginal) => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-function Harness({ initial }: { initial: AISettings }) {
+function Harness({ initial, general = false }: { initial: AISettings; general?: boolean }) {
   const [ai, setAi] = useState(initial);
   currentSettings = ai;
   appState = {
@@ -27,7 +27,23 @@ function Harness({ initial }: { initial: AISettings }) {
       setAi((current) => (typeof patch === "function" ? patch({ ai: current }).ai : patch.ai));
     },
   };
-  return <AiModelsTab />;
+  return (
+    <>
+      {general && <AiGeneralTab />}
+      <AiModelsTab />
+    </>
+  );
+}
+
+function proxySection() {
+  return within(screen.getByText("ai.proxyTitle").closest("section") as HTMLElement);
+}
+
+function selectProxyMode(mode: "system" | "direct" | "custom") {
+  fireEvent.keyDown(proxySection().getAllByRole("combobox")[0], { key: "ArrowDown" });
+  fireEvent.click(
+    screen.getByRole("option", { name: `ai.proxy${mode[0].toUpperCase()}${mode.slice(1)}` }),
+  );
 }
 
 function settingsWithProviders(): AISettings {
@@ -73,6 +89,101 @@ function settingsWithNoKeyProvider(kind: "ollama" | "openai_compatible"): AISett
 describe("AI provider settings", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+  });
+
+  it("edits global proxy modes and preserves custom fields while hidden", () => {
+    render(<Harness initial={settingsWithProviders()} general />);
+    expect(currentSettings.proxy.mode).toBe("system");
+    expect(screen.queryByLabelText("settings.proxyHost")).toBeNull();
+    selectProxyMode("custom");
+    expect(currentSettings.proxy.no_proxy).toBe("localhost,127.0.0.1,::1");
+    fireEvent.change(screen.getByLabelText("settings.proxyHost"), {
+      target: { value: "proxy.example.com" },
+    });
+    fireEvent.change(proxySection().getByRole("spinbutton"), { target: { value: "1080" } });
+    fireEvent.change(screen.getByLabelText("ai.proxyUsername"), { target: { value: "user" } });
+    fireEvent.change(screen.getByLabelText("ai.proxyPassword"), { target: { value: "pass" } });
+    fireEvent.change(screen.getByLabelText("ai.proxyBypass"), {
+      target: { value: "localhost,internal.example.com" },
+    });
+    fireEvent.keyDown(proxySection().getAllByRole("combobox")[1], { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("option", { name: "SOCKS5" }));
+    expect(currentSettings.proxy).toMatchObject({
+      protocol: "socks5",
+      port: 1080,
+      host: "proxy.example.com",
+      username: "user",
+      password: "pass",
+    });
+    selectProxyMode("direct");
+    expect(screen.queryByLabelText("settings.proxyHost")).toBeNull();
+    selectProxyMode("custom");
+    expect((screen.getByLabelText("settings.proxyHost") as HTMLInputElement).value).toBe(
+      "proxy.example.com",
+    );
+    selectProxyMode("system");
+    expect(currentSettings.proxy.password).toBe("pass");
+  });
+
+  it("retains a masked proxy password while editing other fields and can explicitly clear it", () => {
+    const initial = settingsWithProviders();
+    initial.proxy.mode = "custom";
+    initial.proxy.password = "__SET__";
+    render(<Harness initial={initial} general />);
+    const input = screen.getByLabelText("ai.proxyPassword") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("");
+    fireEvent.change(screen.getByLabelText("settings.proxyHost"), {
+      target: { value: "proxy.local" },
+    });
+    expect(currentSettings.proxy.password).toBe("__SET__");
+    fireEvent.click(screen.getByRole("button", { name: "ai.proxyClearPassword" }));
+    expect(currentSettings.proxy.password).toBe("");
+    fireEvent.change(input, { target: { value: "replacement" } });
+    expect(currentSettings.proxy.password).toBe("replacement");
+  });
+
+  it("ignores a pending provider result after the global proxy changes", async () => {
+    let resolve!: (models: string[]) => void;
+    invokeMock.mockReturnValue(
+      new Promise<string[]>((done) => {
+        resolve = done;
+      }),
+    );
+    render(<Harness initial={settingsWithProviders()} general />);
+    fireEvent.click(screen.getByRole("button", { name: "ai.refreshModels" }));
+    selectProxyMode("direct");
+    await act(async () => resolve(["late-proxy-model"]));
+    expect(currentSettings.models.some((model) => model.name === "late-proxy-model")).toBe(false);
+    const provider = screen.getByRole("button", { name: /^OpenAI/ });
+    expect(within(provider).getByLabelText("ai.connectionStatus.idle")).toBeTruthy();
+  });
+
+  it("clears successful model tests when the proxy changes", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    render(<Harness initial={settingsWithProviders()} general />);
+    const button = screen.getByRole("button", { name: "ai.testModel" });
+    await act(async () => fireEvent.click(button));
+    expect(button.getAttribute("title")).toBe("ai.modelTestSucceededShort");
+    selectProxyMode("direct");
+    expect(button.getAttribute("title")).toBe("ai.testModel");
+  });
+
+  it("ignores a pending model test after changing the proxy", async () => {
+    let resolve!: () => void;
+    invokeMock.mockReturnValue(
+      new Promise<void>((done) => {
+        resolve = done;
+      }),
+    );
+    render(<Harness initial={settingsWithProviders()} general />);
+    const button = screen.getByRole("button", { name: "ai.testModel" }) as HTMLButtonElement;
+    fireEvent.click(button);
+    expect(button.disabled).toBe(true);
+    selectProxyMode("direct");
+    expect(button.disabled).toBe(false);
+    await act(async () => resolve());
+    expect(button.getAttribute("title")).toBe("ai.testModel");
   });
 
   it("keeps an empty account collapsed until the user adds a provider", () => {

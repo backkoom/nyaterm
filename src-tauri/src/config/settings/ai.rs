@@ -344,6 +344,63 @@ pub struct AiCustomActionConfig {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProxyMode {
+    #[default]
+    System,
+    Direct,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProxyProtocol {
+    #[default]
+    Http,
+    Socks5,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AiProxySettings {
+    pub mode: AiProxyMode,
+    pub protocol: AiProxyProtocol,
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub no_proxy: String,
+}
+
+impl std::fmt::Debug for AiProxySettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AiProxySettings")
+            .field("mode", &self.mode)
+            .field("protocol", &self.protocol)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("has_credentials", &self.username.is_some())
+            .field("has_password", &self.password.is_some())
+            .field("no_proxy", &self.no_proxy)
+            .finish()
+    }
+}
+
+impl Default for AiProxySettings {
+    fn default() -> Self {
+        Self {
+            mode: AiProxyMode::System,
+            protocol: AiProxyProtocol::Http,
+            host: "127.0.0.1".to_string(),
+            port: 7890,
+            username: None,
+            password: None,
+            no_proxy: "localhost,127.0.0.1,::1".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiSettings {
     #[serde(default = "default_schema_version")]
@@ -362,6 +419,8 @@ pub struct AiSettings {
     pub timeout_ms: u64,
     #[serde(default = "default_request_user_agent")]
     pub request_user_agent: String,
+    #[serde(default)]
+    pub proxy: AiProxySettings,
     #[serde(default = "default_active_profile_id")]
     pub active_profile_id: String,
     #[serde(default = "default_provider_profiles")]
@@ -670,6 +729,7 @@ impl Default for AiSettings {
             record_history: true,
             timeout_ms: default_timeout_ms(),
             request_user_agent: default_request_user_agent(),
+            proxy: AiProxySettings::default(),
             active_profile_id: default_active_profile_id(),
             provider_profiles: default_provider_profiles(),
             default_mode: default_mode(),
@@ -696,6 +756,7 @@ impl Default for AiSettings {
 }
 
 pub fn decrypt_ai_settings(mut settings: AiSettings) -> AppResult<AiSettings> {
+    settings.proxy.password = decrypt_secret(settings.proxy.password.take())?;
     for profile in &mut settings.provider_profiles {
         profile.api_key = decrypt_secret(profile.api_key.take())?;
     }
@@ -706,6 +767,7 @@ pub fn decrypt_ai_settings(mut settings: AiSettings) -> AppResult<AiSettings> {
 }
 
 pub fn encrypt_ai_settings(mut settings: AiSettings) -> AppResult<AiSettings> {
+    settings.proxy.password = encrypt_secret(settings.proxy.password.take())?;
     for profile in &mut settings.provider_profiles {
         profile.api_key = encrypt_secret(profile.api_key.take())?;
     }
@@ -716,6 +778,7 @@ pub fn encrypt_ai_settings(mut settings: AiSettings) -> AppResult<AiSettings> {
 }
 
 pub fn mask_ai_settings(mut settings: AiSettings) -> AiSettings {
+    settings.proxy.password = mask_secret(settings.proxy.password.take());
     for profile in &mut settings.provider_profiles {
         profile.api_key = mask_secret(profile.api_key.take());
     }
@@ -726,6 +789,10 @@ pub fn mask_ai_settings(mut settings: AiSettings) -> AiSettings {
 }
 
 pub fn merge_masked_ai_settings(current: &AiSettings, mut next: AiSettings) -> AiSettings {
+    next.proxy.password = merge_secret(
+        current.proxy.password.as_ref(),
+        next.proxy.password.as_ref(),
+    );
     for profile in &mut next.provider_profiles {
         let current_secret = current
             .provider_profiles
@@ -905,6 +972,52 @@ fn migrate_legacy_ollama_base_url(base_url: &mut Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_defaults_preserve_legacy_system_routing() {
+        let settings: AiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.proxy, AiProxySettings::default());
+        let partial: AiProxySettings = serde_json::from_str(r#"{"mode":"custom"}"#).unwrap();
+        assert_eq!(partial.mode, AiProxyMode::Custom);
+        assert_eq!(partial.host, "127.0.0.1");
+        assert_eq!(partial.no_proxy, "localhost,127.0.0.1,::1");
+    }
+
+    #[test]
+    fn proxy_password_is_encrypted_masked_merged_and_cleared() {
+        let mut settings = AiSettings::default();
+        settings.proxy.mode = AiProxyMode::Custom;
+        settings.proxy.protocol = AiProxyProtocol::Socks5;
+        settings.proxy.username = Some("proxy-user".to_string());
+        settings.proxy.password = Some("proxy-secret".to_string());
+        let encrypted = encrypt_ai_settings(settings.clone()).unwrap();
+        assert_ne!(encrypted.proxy.password, settings.proxy.password);
+        let stored = serde_json::to_string(&encrypted).unwrap();
+        assert!(!stored.contains("proxy-secret"));
+        let decoded = decrypt_ai_settings(serde_json::from_str(&stored).unwrap()).unwrap();
+        assert_eq!(decoded.proxy, settings.proxy);
+        assert!(!format!("{:?}", decoded.proxy).contains("proxy-secret"));
+
+        let masked = mask_ai_settings(settings.clone());
+        assert_eq!(masked.proxy.password.as_deref(), Some(MASKED_SECRET_VALUE));
+        let merged = merge_masked_ai_settings(&settings, masked);
+        assert_eq!(merged.proxy, settings.proxy);
+        let mut next = mask_ai_settings(settings.clone());
+        next.proxy.password = Some(String::new());
+        assert_eq!(
+            merge_masked_ai_settings(&settings, next).proxy.password,
+            None
+        );
+        let mut next = mask_ai_settings(settings.clone());
+        next.proxy.password = Some("replacement".to_string());
+        assert_eq!(
+            merge_masked_ai_settings(&settings, next)
+                .proxy
+                .password
+                .as_deref(),
+            Some("replacement")
+        );
+    }
 
     #[test]
     fn legacy_external_mcp_mode_fields_are_read_but_not_written() {

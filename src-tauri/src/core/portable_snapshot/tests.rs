@@ -886,6 +886,27 @@ mod tests {
     }
 
     #[test]
+    fn portable_snapshot_preserves_ai_proxy_settings() {
+        let mut snapshot = sample_snapshot();
+        snapshot.settings.ai.proxy.mode = config::AiProxyMode::Custom;
+        snapshot.settings.ai.proxy.protocol = config::AiProxyProtocol::Socks5;
+        snapshot.settings.ai.proxy.host = "proxy.example.com".to_string();
+        snapshot.settings.ai.proxy.username = Some("proxy-user".to_string());
+        snapshot.settings.ai.proxy.password = Some("proxy-password".to_string());
+        for kind in [PortableSnapshotKind::Backup, PortableSnapshotKind::Sync] {
+            snapshot.snapshot_kind = kind;
+            snapshot.payload_hash = calculate_payload_hash(&snapshot).unwrap();
+            let encoded = encode_portable_snapshot(&snapshot).unwrap();
+            let decoded = super::decode_portable_snapshot(&encoded).unwrap();
+            assert_eq!(decoded.settings.ai.proxy, snapshot.settings.ai.proxy);
+            let applied = decoded
+                .settings
+                .apply_to(config::AppSettings::default(), &decoded.snapshot_kind);
+            assert_eq!(applied.ai.proxy, snapshot.settings.ai.proxy);
+        }
+    }
+
+    #[test]
     fn corrupt_portable_snapshot_redb_returns_error() {
         let error = super::decode_portable_snapshot(b"not a redb file")
             .expect_err("corrupt snapshot should fail");
