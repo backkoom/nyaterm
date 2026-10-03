@@ -17,7 +17,7 @@
     {"path": "crates/nyaterm-desktop/src/features/root.rs", "max_count": 1, "reason": "The ignored root-render benchmark joins its large-stack test thread."},
     {"path": "crates/nyaterm-desktop/src/features/pages/workspace/group_tests.rs", "max_count": 1, "reason": "The workspace stack-regression test uses a named one-MiB-stack thread and joins it before returning."},
     {"path": "crates/nyaterm-desktop/src/features/session/auth_runtime.rs", "max_count": 1, "reason": "The prompt broker test joins its named request thread."},
-    {"path": "crates/nyaterm-desktop/src/features/session/mod.rs", "max_count": 1, "reason": "SessionProtocolRuntimeState owns and joins multiplex disconnect workers."},
+    {"path": "crates/nyaterm-desktop/src/app_shell/session_hub/ssh_connections.rs", "max_count": 1, "reason": "SshConnectionPool owns its process-wide disconnect worker and DisconnectWorker joins it during shutdown."},
     {"path": "crates/nyaterm-desktop/src/features/session/trzsz_runtime.rs", "max_count": 3, "reason": "Per-session trzsz state owns, stops, and joins prepare, upload, and download workers."},
     {"path": "crates/nyaterm-desktop/src/features/session/xymodem_runtime.rs", "max_count": 1, "reason": "Per-session X/YMODEM state owns, stops, and joins its upload worker."},
     {"path": "crates/nyaterm-desktop/src/features/session/zmodem_runtime.rs", "max_count": 1, "reason": "Per-session ZMODEM state owns, stops, and joins its transfer worker."},
