@@ -31,10 +31,10 @@ pub fn decide_native_policy(
     access: CapabilityAccess,
     assessment: Option<&RiskAssessment>,
 ) -> PolicyDecision {
-    let permission = if *mode == AgentCommandExecutionMode::ConfirmEach {
-        AiPermissionMode::Confirm
-    } else {
-        AiPermissionMode::Auto
+    let permission = match mode {
+        AgentCommandExecutionMode::ConfirmEach => AiPermissionMode::Confirm,
+        AgentCommandExecutionMode::Smart => AiPermissionMode::Auto,
+        AgentCommandExecutionMode::Auto => AiPermissionMode::FullAccess,
     };
     let decision = decide_policy(&permission, access, assessment);
     if decision == PolicyDecision::Allow
@@ -56,7 +56,47 @@ mod native_tests {
     use crate::ai::{AgentCommandExecutionMode, AiPermissionMode, RiskLevel};
 
     #[test]
-    fn native_auto_and_smart_only_allow_explicitly_safe_commands_below_high() {
+    fn native_auto_allows_every_access_and_risk_without_approval() {
+        for access in [
+            CapabilityAccess::Read,
+            CapabilityAccess::SensitiveRead,
+            CapabilityAccess::Write,
+            CapabilityAccess::DestructiveWrite,
+        ] {
+            assert_eq!(
+                decide_native_policy(
+                    &AgentCommandExecutionMode::Auto,
+                    &RiskLevel::Low,
+                    access,
+                    None
+                ),
+                PolicyDecision::Allow
+            );
+            for command in [
+                "pwd",
+                "mkdir /tmp/test",
+                "unknown-tool",
+                "sudo rm -rf /tmp/test",
+                "rm -rf /",
+                "reboot",
+            ] {
+                let risk = assess_command_risk(command);
+                assert_eq!(
+                    decide_native_policy(
+                        &AgentCommandExecutionMode::Auto,
+                        &RiskLevel::Low,
+                        access,
+                        Some(&risk)
+                    ),
+                    PolicyDecision::Allow,
+                    "{access:?}: {command}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_smart_only_allows_explicitly_safe_commands_below_high() {
         for command in [
             "unknown-tool",
             "sudo rm -rf /tmp/test",
@@ -64,27 +104,22 @@ mod native_tests {
             "reboot",
         ] {
             let risk = assess_command_risk(command);
-            for mode in [
-                AgentCommandExecutionMode::Auto,
-                AgentCommandExecutionMode::Smart,
-            ] {
-                assert_eq!(
-                    decide_native_policy(
-                        &mode,
-                        &RiskLevel::Critical,
-                        CapabilityAccess::Write,
-                        Some(&risk)
-                    ),
-                    PolicyDecision::RequireApproval,
-                    "{command}"
-                );
-            }
+            assert_eq!(
+                decide_native_policy(
+                    &AgentCommandExecutionMode::Smart,
+                    &RiskLevel::Critical,
+                    CapabilityAccess::Write,
+                    Some(&risk)
+                ),
+                PolicyDecision::RequireApproval,
+                "{command}"
+            );
         }
         let ordinary = assess_command_risk("mkdir /tmp/test");
         assert_eq!(
             decide_native_policy(
-                &AgentCommandExecutionMode::Auto,
-                &RiskLevel::Low,
+                &AgentCommandExecutionMode::Smart,
+                &RiskLevel::Medium,
                 CapabilityAccess::Write,
                 Some(&ordinary)
             ),

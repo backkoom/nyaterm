@@ -473,6 +473,33 @@ mod tests {
     }
 
     #[test]
+    fn auto_execution_ignores_model_and_local_risk_without_approval() {
+        let settings = AiSettings {
+            agent_command_execution_mode: AgentCommandExecutionMode::Auto,
+            agent_smart_auto_execute_max_risk: RiskLevel::Low,
+            ..AiSettings::default()
+        };
+        for command in ["pwd", "unknown-tool", "sudo rm -rf /tmp/test", "rm -rf /"] {
+            let response = super::AgentLlmResponse {
+                target_terminal_session_id: None,
+                thought: String::new(),
+                action: "execute_command".into(),
+                command: Some(command.into()),
+                risk_level: Some(RiskLevel::Critical),
+                risk_reason: None,
+                answer: None,
+            };
+            let assessment = assess_agent_command_risk(&response, command);
+            assert_eq!(assessment.effective_risk, RiskLevel::Critical);
+            assert_eq!(
+                decide_agent_command_execution(&settings, &assessment),
+                (AgentApprovalDecision::Auto, None),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
     fn agent_mode_chat_body_uses_agent_protocol_prompts() {
         let settings = AiSettings::default();
         let mut request = sample_ai_request("en");
