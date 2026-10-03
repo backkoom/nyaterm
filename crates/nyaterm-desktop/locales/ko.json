@@ -470,7 +470,20 @@
     "connected": "연결됨",
     "disconnected": "연결되지 않음",
     "providerNameRequired": "공급자 이름을 입력하세요",
-    "providerEndpointInvalid": "유효한 HTTP 또는 HTTPS 주소를 입력하세요"
+    "providerEndpointInvalid": "유효한 HTTP 또는 HTTPS 주소를 입력하세요",
+    "deleteHistoryTitle": "대화를 삭제할까요?",
+    "deleteHistoryDesc": "이 대화와 저장된 메시지를 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
+    "historyCurrentTerminal": "현재 터미널",
+    "historySameConnection": "동일한 연결",
+    "historyOtherSessions": "다른 세션",
+    "historyLoading": "기록을 불러오는 중…",
+    "historyLoadFailed": "기록을 불러오지 못했습니다",
+    "historyInUse": " · 사용 중",
+    "historyResume": " · 재개 가능",
+    "historyToday": "오늘",
+    "historyYesterday": "어제",
+    "historyLast7Days": "최근 7일",
+    "historyEarlier": "이전"
   },
   "app": {
     "newConnection": "새 연결",

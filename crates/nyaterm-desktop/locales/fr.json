@@ -470,7 +470,20 @@
     "connected": "Connecté",
     "disconnected": "Déconnecté",
     "providerNameRequired": "Un nom de fournisseur est requis",
-    "providerEndpointInvalid": "Saisissez une adresse HTTP ou HTTPS valide"
+    "providerEndpointInvalid": "Saisissez une adresse HTTP ou HTTPS valide",
+    "deleteHistoryTitle": "Supprimer la conversation ?",
+    "deleteHistoryDesc": "Supprimer cette conversation et ses messages enregistrés ? Cette action est irréversible.",
+    "historyCurrentTerminal": "Terminal actuel",
+    "historySameConnection": "Même connexion",
+    "historyOtherSessions": "Autres sessions",
+    "historyLoading": "Chargement de l’historique…",
+    "historyLoadFailed": "Échec du chargement de l’historique",
+    "historyInUse": " · en cours",
+    "historyResume": " · reprendre",
+    "historyToday": "Aujourd’hui",
+    "historyYesterday": "Hier",
+    "historyLast7Days": "7 derniers jours",
+    "historyEarlier": "Plus ancien"
   },
   "app": {
     "newConnection": "Nouv. conn.",

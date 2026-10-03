@@ -470,7 +470,20 @@
       "verified": "已验证",
       "unverified": "未验证",
       "blocked": "受阻"
-    }
+    },
+    "deleteHistoryTitle": "删除会话？",
+    "deleteHistoryDesc": "删除此会话及其已保存的消息？此操作无法撤销。",
+    "historyCurrentTerminal": "当前终端",
+    "historySameConnection": "同一连接",
+    "historyOtherSessions": "其他会话",
+    "historyLoading": "正在加载历史记录…",
+    "historyLoadFailed": "历史记录加载失败",
+    "historyInUse": " · 使用中",
+    "historyResume": " · 可继续",
+    "historyToday": "今天",
+    "historyYesterday": "昨天",
+    "historyLast7Days": "最近 7 天",
+    "historyEarlier": "更早"
   },
   "app": {
     "newConnection": "新建连接",

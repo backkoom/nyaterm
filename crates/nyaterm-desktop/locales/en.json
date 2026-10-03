@@ -470,7 +470,20 @@
       "verified": "Verified",
       "unverified": "Unverified",
       "blocked": "Blocked"
-    }
+    },
+    "deleteHistoryTitle": "Delete conversation?",
+    "deleteHistoryDesc": "Delete this conversation and its saved messages? This cannot be undone.",
+    "historyCurrentTerminal": "Current terminal",
+    "historySameConnection": "Same connection",
+    "historyOtherSessions": "Other sessions",
+    "historyLoading": "Loading history…",
+    "historyLoadFailed": "Failed to load history",
+    "historyInUse": " · in use",
+    "historyResume": " · resume",
+    "historyToday": "Today",
+    "historyYesterday": "Yesterday",
+    "historyLast7Days": "Last 7 days",
+    "historyEarlier": "Earlier"
   },
   "app": {
     "newConnection": "New Conn.",

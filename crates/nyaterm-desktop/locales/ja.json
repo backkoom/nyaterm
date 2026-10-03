@@ -470,7 +470,20 @@
     "connected": "接続済み",
     "disconnected": "未接続",
     "providerNameRequired": "供給元名を入力してください",
-    "providerEndpointInvalid": "有効な HTTP または HTTPS アドレスを入力してください"
+    "providerEndpointInvalid": "有効な HTTP または HTTPS アドレスを入力してください",
+    "deleteHistoryTitle": "会話を削除しますか？",
+    "deleteHistoryDesc": "この会話と保存済みメッセージを削除しますか？この操作は取り消せません。",
+    "historyCurrentTerminal": "現在のターミナル",
+    "historySameConnection": "同じ接続",
+    "historyOtherSessions": "その他のセッション",
+    "historyLoading": "履歴を読み込み中…",
+    "historyLoadFailed": "履歴の読み込みに失敗",
+    "historyInUse": " · 使用中",
+    "historyResume": " · 再開可能",
+    "historyToday": "今日",
+    "historyYesterday": "昨日",
+    "historyLast7Days": "過去7日間",
+    "historyEarlier": "それ以前"
   },
   "app": {
     "newConnection": "新規接続",

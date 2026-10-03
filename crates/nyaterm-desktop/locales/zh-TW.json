@@ -470,7 +470,20 @@
     "connected": "已連線",
     "disconnected": "未連線",
     "providerNameRequired": "請輸入供應商名稱",
-    "providerEndpointInvalid": "請輸入有效的 HTTP 或 HTTPS 介面位址"
+    "providerEndpointInvalid": "請輸入有效的 HTTP 或 HTTPS 介面位址",
+    "deleteHistoryTitle": "刪除對話？",
+    "deleteHistoryDesc": "刪除此對話及其已儲存的訊息？此操作無法復原。",
+    "historyCurrentTerminal": "目前終端",
+    "historySameConnection": "相同連線",
+    "historyOtherSessions": "其他工作階段",
+    "historyLoading": "正在載入歷史記錄…",
+    "historyLoadFailed": "歷史記錄載入失敗",
+    "historyInUse": " · 使用中",
+    "historyResume": " · 可繼續",
+    "historyToday": "今天",
+    "historyYesterday": "昨天",
+    "historyLast7Days": "最近 7 天",
+    "historyEarlier": "更早"
   },
   "app": {
     "newConnection": "新增連線",
