@@ -11,6 +11,7 @@ mod agent;
 mod claude_code;
 mod codex;
 mod diagnostics;
+pub mod harness;
 pub mod ollama;
 pub mod provider_settings;
 mod providers;
@@ -752,6 +753,9 @@ pub enum AiAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiRequestOptions {
+    /// Ephemeral tool transcript; never part of settings or saved chat history.
+    #[serde(skip)]
+    pub agent_context: Option<harness::AgentRequestContext>,
     #[serde(skip)]
     pub connectivity_test: bool,
     #[serde(default = "default_max_output_commands")]
@@ -769,6 +773,7 @@ pub struct AiRequestOptions {
 impl Default for AiRequestOptions {
     fn default() -> Self {
         Self {
+            agent_context: None,
             connectivity_test: false,
             max_output_commands: default_max_output_commands(),
             language: default_language(),
@@ -858,6 +863,8 @@ pub struct AiChatCompletion {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiToolCall {
+    #[serde(skip)]
+    pub thought_signature: Option<String>,
     #[serde(default)]
     pub id: Option<String>,
     pub name: String,
@@ -875,6 +882,7 @@ pub struct AiChatStreamDelta {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AiToolCallDelta {
+    pub thought_signature: Option<String>,
     pub index: usize,
     pub id_delta: Option<String>,
     pub name_delta: Option<String>,
@@ -901,6 +909,7 @@ pub struct AgentLlmResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentCommandRiskAssessment {
+    pub auto_executable: bool,
     pub model_risk: RiskLevel,
     pub local_risk: RiskLevel,
     pub effective_risk: RiskLevel,

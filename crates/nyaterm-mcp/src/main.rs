@@ -3,19 +3,13 @@ mod bridge;
 use std::sync::Arc;
 
 use bridge::{BridgeClient, BridgeEndpoint, endpoint_from_environment_or_discovery};
-use nyaterm_mcp_protocol::{
-    EmptyArgs, MCP_TOOL_REGISTRY, McpToolDefinition, OutputReadArgs, PathArgs, SessionArgs,
-    SessionOpenArgs, SftpChmodArgs, SftpMkdirArgs, SftpReadTextArgs, SftpRenameArgs,
-    SftpWriteTextArgs, TerminalExecuteArgs, TerminalRecentOutputArgs, tool,
-    validate_tool_arguments, validate_tool_result,
-};
+use nyaterm_mcp_protocol::{MCP_TOOL_REGISTRY, validate_tool_arguments, validate_tool_result};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt};
-use schemars::JsonSchema;
 use serde_json::{Map, Value, json};
 
 #[derive(Clone)]
@@ -100,39 +94,20 @@ impl ServerHandler for NyaTermMcp {
 fn build_tools() -> Vec<Tool> {
     MCP_TOOL_REGISTRY
         .iter()
-        .map(|definition| match definition.tool {
-            tool::GET_ENVIRONMENT => tool_def::<EmptyArgs>(definition),
-            tool::CONNECTION_LIST => tool_def::<EmptyArgs>(definition),
-            tool::SESSION_OPEN => tool_def::<SessionOpenArgs>(definition),
-            tool::SESSION_GET | tool::SFTP_HOME => tool_def::<SessionArgs>(definition),
-            tool::TERMINAL_EXECUTE => tool_def::<TerminalExecuteArgs>(definition),
-            tool::TERMINAL_RECENT_OUTPUT => tool_def::<TerminalRecentOutputArgs>(definition),
-            tool::SFTP_LIST | tool::SFTP_STAT | tool::SFTP_DELETE => {
-                tool_def::<PathArgs>(definition)
-            }
-            tool::SFTP_READ_TEXT => tool_def::<SftpReadTextArgs>(definition),
-            tool::SFTP_WRITE_TEXT => tool_def::<SftpWriteTextArgs>(definition),
-            tool::SFTP_MKDIR => tool_def::<SftpMkdirArgs>(definition),
-            tool::SFTP_RENAME => tool_def::<SftpRenameArgs>(definition),
-            tool::SFTP_CHMOD => tool_def::<SftpChmodArgs>(definition),
-            tool::OUTPUT_READ => tool_def::<OutputReadArgs>(definition),
-            _ => unreachable!("registry contains an unknown MCP tool"),
+        .map(|definition| {
+            let schema = nyaterm_mcp_protocol::tool_input_schema(definition.tool)
+                .expect("registered tool schema");
+            let object = schema.as_object().cloned().unwrap_or_else(Map::new);
+            let mut item = Tool::new(definition.tool, definition.description, object);
+            item.annotations = Some(
+                ToolAnnotations::new()
+                    .read_only(definition.read_only_hint)
+                    .destructive(definition.destructive_hint)
+                    .open_world(definition.open_world_hint),
+            );
+            item
         })
         .collect()
-}
-
-fn tool_def<T: JsonSchema>(definition: &McpToolDefinition) -> Tool {
-    let schema = serde_json::to_value(schemars::schema_for!(T))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
-    let object = schema.as_object().cloned().unwrap_or_else(Map::new);
-    let mut item = Tool::new(definition.tool, definition.description, object);
-    item.annotations = Some(
-        ToolAnnotations::new()
-            .read_only(definition.read_only_hint)
-            .destructive(definition.destructive_hint)
-            .open_world(definition.open_world_hint),
-    );
-    item
 }
 
 #[tokio::main]

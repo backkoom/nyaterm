@@ -111,6 +111,16 @@
     "showLabel": "레이블 표시"
   },
   "ai": {
+    "harness": {
+      "plan": "작업 계획",
+      "waitingForUser": "사용자 응답 대기 중",
+      "answerPlaceholder": "자유 응답…",
+      "submitAnswers": "답변 제출",
+      "cancelRun": "작업 취소",
+      "verified": "검증됨",
+      "unverified": "미검증",
+      "blocked": "차단됨"
+    },
     "modeNyatermAgent": "NyaAgent",
     "modeCodexAgent": "Codex Agent",
     "modeClaudeCodeAgent": "Claude Code",

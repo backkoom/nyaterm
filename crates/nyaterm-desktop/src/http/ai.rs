@@ -613,6 +613,7 @@ fn apply_ai_stream_deltas(
 
 #[derive(Debug, Default)]
 struct StreamToolCallBuffer {
+    thought_signature: Option<String>,
     id: Option<String>,
     name: String,
     arguments: String,
@@ -620,6 +621,9 @@ struct StreamToolCallBuffer {
 
 impl StreamToolCallBuffer {
     fn apply_delta(&mut self, delta: &nyaterm_core::AiToolCallDelta) {
+        if let Some(signature) = &delta.thought_signature {
+            self.thought_signature = Some(signature.clone());
+        }
         if let Some(id_delta) = delta.id_delta.as_deref() {
             if self.id.is_none() {
                 self.id = Some(id_delta.to_string());
@@ -654,6 +658,7 @@ fn finalize_stream_tool_calls(
                 })?
             };
             Ok(AiToolCall {
+                thought_signature: buffer.thought_signature,
                 id: buffer.id,
                 name: buffer.name.trim().to_string(),
                 arguments,

@@ -5,6 +5,7 @@
 //! agent loop. They were seventy `ai_*` fields on `NyaTermApp`, which made it
 //! impossible to see which ones move together.
 
+pub(in crate::features) mod harness;
 mod presentation;
 mod providers;
 mod settings;
@@ -204,6 +205,7 @@ struct AiDiscoveryState {
 
 /// Agent loop: the running task, its steps and their disclosure state.
 struct AiAgentState {
+    native: Option<harness::NativeRunState>,
     task_prompt: Option<String>,
     conversation: Vec<AiMessage>,
     json_protocol: bool,
@@ -220,6 +222,7 @@ struct AiAgentState {
 impl AiAgentState {
     fn fresh() -> Self {
         Self {
+            native: None,
             task_prompt: None,
             conversation: Vec::new(),
             json_protocol: false,
@@ -827,6 +830,9 @@ impl AiFeatureState {
         mode: AiMode,
         source_label: Option<&str>,
     ) -> AiChatLaunch {
+        if let Some(previous) = self.agent.native.take() {
+            previous.cancellation.cancel();
+        }
         let launch = self.begin_chat_job();
         if mode == AiMode::Agent {
             self.agent.task_prompt = Some(request_prompt.clone());
@@ -905,6 +911,11 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn cancel_chat_and_agent(&mut self) {
+        if let Some(native) = &mut self.agent.native {
+            native.cancellation.cancel();
+            native.run.cancel();
+            native.terminal_reply = None;
+        }
         if let Some(cancel) = self.chat.cancel.as_ref() {
             cancel.store(true, Ordering::Relaxed);
         }
@@ -1129,7 +1140,8 @@ impl AiFeatureState {
         self.chat.cancel = None;
         match result {
             Ok(output) => {
-                if output.mode == AiMode::Agent {
+                let has_native_call = output.native_call.is_some();
+                if output.mode == AiMode::Agent && !has_native_call {
                     self.agent.conversation.push(AiMessage {
                         id: format!("agent-assistant-{}", uuid()),
                         session_id: self.chat.session_id.clone(),
@@ -1160,12 +1172,16 @@ impl AiFeatureState {
                     status.push_str("; ");
                     status.push_str(note);
                 }
-                if output.mode == AiMode::Agent && command_count > 0 && !output.auto_execute_first {
+                if output.mode == AiMode::Agent
+                    && !has_native_call
+                    && command_count > 0
+                    && !output.auto_execute_first
+                {
                     status.push_str("; awaiting command approval");
                 }
                 self.panel.status = status;
-                if output.mode == AiMode::Agent {
-                    let (step_status, step_title) = if command_count == 0 {
+                if output.mode == AiMode::Agent && !has_native_call {
+                    let (step_status, step_title) = if command_count == 0 && !has_native_call {
                         (AiAgentStepStatus::Completed, "Final Answer")
                     } else if output.auto_execute_first {
                         (AiAgentStepStatus::Running, "Auto Execute")
@@ -1175,20 +1191,20 @@ impl AiFeatureState {
                     self.upsert_agent_step(
                         self.last_agent_step_index(),
                         step_status,
-                        if command_count == 0 {
+                        if command_count == 0 && !has_native_call {
                             AiAgentStepKind::FinalAnswer
                         } else {
                             AiAgentStepKind::ToolProgress
                         },
                         step_title,
-                        if command_count == 0 {
+                        if command_count == 0 && !has_native_call {
                             output.text.clone()
                         } else {
                             truncate_preview(&output.text, 140)
                         },
                     );
                 }
-                if output.mode == AiMode::Agent {
+                if output.mode == AiMode::Agent && !has_native_call {
                     let source_message_id = self.chat.streaming_assistant_id.clone();
                     let step_index = self.last_agent_step_index();
                     if let Some(step) = self
@@ -1228,7 +1244,7 @@ impl AiFeatureState {
                     message.command_cards = output.command_cards;
                 }
                 self.chat.prompt_draft.clear();
-                if output.mode == AiMode::Agent && command_count == 0 {
+                if output.mode == AiMode::Agent && command_count == 0 && !has_native_call {
                     self.agent.loop_state = None;
                     self.agent.task_prompt = None;
                 }
@@ -1242,6 +1258,10 @@ impl AiFeatureState {
                 })
             }
             Err(error) => {
+                if let Some(native) = &mut self.agent.native {
+                    native.run.status = nyaterm_core::ai::harness::AgentRunStatus::Failed;
+                    native.cancellation.cancel();
+                }
                 self.chat.response_preview = format!("AI request failed: {error}");
                 self.chat.command_cards.clear();
                 self.panel.status = self.chat.response_preview.clone();
@@ -1821,6 +1841,12 @@ impl AiFeatureState {
         &mut self,
         max_steps: u16,
     ) -> Result<(String, u16), String> {
+        if let Some(native) = &self.agent.native {
+            return Ok((
+                native.run.objective.clone(),
+                native.run.used_steps.saturating_sub(1),
+            ));
+        }
         let step_index = self.agent.step_index;
         if step_index.saturating_add(1) >= max_steps {
             self.agent.loop_state = None;
@@ -1848,6 +1874,9 @@ impl AiFeatureState {
 
     pub(in crate::features) fn stop_agent_for_closed_target(&mut self) -> Option<u16> {
         let state = self.agent.loop_state.take()?;
+        if self.ai_native_terminal_closed() {
+            return Some(state.step_index);
+        }
         self.agent.task_prompt = None;
         self.agent.conversation.clear();
         self.chat.command_cards.clear();
@@ -2020,6 +2049,9 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn last_agent_step_index(&self) -> u16 {
+        if self.agent.native.is_some() {
+            return self.agent.step_index;
+        }
         self.agent
             .steps
             .last()

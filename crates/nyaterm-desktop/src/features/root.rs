@@ -1056,7 +1056,7 @@ impl NyaTermApp {
                                     )
                                 }),
                             ))
-                            .when(!request.destructive, |this| {
+                            .when(request.allow_session, |this| {
                                 this.child(overlay_button(
                                     "mcp-approval-session",
                                     t!("ai.mcp.allowSession"),

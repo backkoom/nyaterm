@@ -65,6 +65,13 @@ impl NyaTermApp {
         inserted_to_terminal: bool,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .ai
+            .native_pending_call()
+            .is_some_and(|call| call.id == card.id)
+        {
+            return;
+        }
         let target_session_id = card.target_terminal_session_id.as_deref().or_else(|| {
             card.target
                 .as_ref()
@@ -148,6 +155,8 @@ impl NyaTermApp {
             .ai
             .settings_config()
             .agent_step_timeout_ms
+            .map(|timeout| self.ai.native_step_timeout().unwrap_or(timeout))
+            .or_else(|| self.ai.native_step_timeout())
             .map(Duration::from_millis)
             .unwrap_or(AGENT_DEFAULT_STEP_TIMEOUT);
         let profile = self.ai_execution_profile_for_session(&terminal_session_id);
@@ -259,6 +268,8 @@ impl NyaTermApp {
             .ai
             .settings_config()
             .agent_step_timeout_ms
+            .map(|timeout| self.ai.native_step_timeout().unwrap_or(timeout))
+            .or_else(|| self.ai.native_step_timeout())
             .map(Duration::from_millis)
             .unwrap_or(AGENT_DEFAULT_STEP_TIMEOUT);
         let launch = self.ai.begin_chat_job();
@@ -435,16 +446,17 @@ impl NyaTermApp {
                     "Timed out",
                     observation_summary(&observation),
                 );
-                self.start_ai_agent_continuation(state, observation, cx);
+                if !self.complete_native_terminal_observation(&observation, true, false) {
+                    self.start_ai_agent_continuation(state, observation, cx);
+                }
                 true
             }
             AiAgentObservationPoll::Target(state) => {
                 let terminal_output =
                     self.terminal_buffer_text_for_session(&state.terminal_session_id);
-                let output = terminal_output
-                    .get(state.output_start_len..)
-                    .unwrap_or_default()
-                    .to_string();
+                let captured = terminal_output.get(state.output_start_len..);
+                let source_truncated = captured.is_none();
+                let output = captured.unwrap_or_default().to_string();
                 let duration_ms = now
                     .duration_since(state.started_at)
                     .as_millis()
@@ -460,7 +472,10 @@ impl NyaTermApp {
                     &observation,
                     observation_summary(&observation),
                 );
-                self.start_ai_agent_continuation(state, observation, cx);
+                if !self.complete_native_terminal_observation(&observation, false, source_truncated)
+                {
+                    self.start_ai_agent_continuation(state, observation, cx);
+                }
                 true
             }
         }
@@ -494,7 +509,9 @@ impl NyaTermApp {
             &observation,
             observation_summary(&observation),
         );
-        self.start_ai_agent_continuation(state, observation, cx);
+        if !self.complete_native_terminal_observation(&observation, false, false) {
+            self.start_ai_agent_continuation(state, observation, cx);
+        }
         self.defer_ai_panel_snapshot_flush(cx);
         self.ai.switch_scope(&visible_scope);
     }
@@ -540,7 +557,9 @@ impl NyaTermApp {
             "Output dropped",
             observation_summary(&observation),
         );
-        self.start_ai_agent_continuation(state, observation, cx);
+        if !self.complete_native_terminal_observation(&observation, false, true) {
+            self.start_ai_agent_continuation(state, observation, cx);
+        }
         self.defer_ai_panel_snapshot_flush(cx);
         self.ai.switch_scope(&visible_scope);
         true
@@ -579,6 +598,9 @@ impl NyaTermApp {
         observation: CommandObservation,
         cx: &mut Context<Self>,
     ) {
+        if self.complete_native_terminal_observation(&observation, false, false) {
+            return;
+        }
         let observation_message = build_observation_message(
             &observation,
             &state.command,
@@ -593,6 +615,15 @@ impl NyaTermApp {
         observation_message: String,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .ai
+            .complete_native_terminal(Err(nyaterm_mcp_protocol::RpcError {
+                code: "execution_failed".into(),
+                message: observation_message.clone(),
+            }))
+        {
+            return;
+        }
         let conversation = self.ai.agent_conversation_snapshot();
         let Some(launch) = self
             .ai
@@ -700,6 +731,21 @@ impl NyaTermApp {
         card_id: String,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .ai
+            .native_pending_call()
+            .is_some_and(|call| call.id == card_id)
+        {
+            self.respond_to_mcp_approval(
+                &format!(
+                    "{}:{card_id}",
+                    self.ai.native_owner().expect("native owner")
+                ),
+                crate::features::mcp::McpApprovalDecision::Deny,
+                cx,
+            );
+            return;
+        }
         if let Some(card) = self.ai.find_command_card(&card_id) {
             self.reject_ai_agent_command_card_value(card, cx);
         }

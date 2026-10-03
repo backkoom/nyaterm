@@ -18,7 +18,21 @@ use super::super::super::state::AiAgentBackgroundEffect;
 impl NyaTermApp {
     pub(in crate::features) fn cancel_ai_chat(&mut self, cx: &mut Context<Self>) {
         let before = self.ai_header_presentation();
+        if self
+            .ai
+            .native_pending_call()
+            .is_some_and(|call| call.tool == nyaterm_core::ai::harness::AgentTool::RequestUserInput)
+        {
+            self.record_native_control_audit("request_user_input", false, cx);
+        }
+        if let Some(view) = self.ai.native_run_view() {
+            self.forget_text_inputs(&format!("ai.agent-answer.{}.", view.run_id));
+        }
+        let native_owner = self.ai.native_owner();
         self.ai.cancel_chat_and_agent();
+        if let Some(owner) = native_owner {
+            self.clear_capability_owner(&owner, cx);
+        }
         self.sync_session_event_bridge_policy();
         self.settings
             .set_store_message(self.ai.panel_status().to_string());
@@ -106,7 +120,7 @@ impl NyaTermApp {
             .as_ref()
             .map(|request| request.source_label.clone());
         let session_id = self.ai.chat_session_id().to_string();
-        let request = AiChatRequest {
+        let mut request = AiChatRequest {
             stream_id: None,
             session_id: Some(session_id.clone()),
             connection_id,
@@ -173,6 +187,10 @@ impl NyaTermApp {
             self.ai
                 .begin_chat_request(request_prompt, mode.clone(), source_label.as_deref());
         self.reset_text_input("ai.chat.prompt", "", cx);
+        if request.mode == AiMode::Agent && request.agent_kind == AiAgentKind::Nyaterm {
+            self.ai.begin_native_run(request.clone());
+            request.options.agent_context = self.ai.native_request_context();
+        }
         let job_id = launch.job_id;
         let cancel = launch.cancel;
         let tx = launch.tx;
@@ -802,11 +820,21 @@ impl NyaTermApp {
                 }
             }
             AiChatWorkerEvent::Finished(event) => {
+                let native_call = event
+                    .result
+                    .as_ref()
+                    .ok()
+                    .and_then(|output| output.native_call.clone());
                 if let Some(effect) =
                     self.ai
                         .finish_chat_job(event.job_id, event.session_id, event.result)
                 {
                     dirty = true;
+                    if let Some(call) = native_call {
+                        self.dispatch_native_agent_call(call, cx);
+                    } else if let Some(owner) = self.ai.ended_native_owner() {
+                        self.clear_capability_owner(&owner, cx);
+                    }
                     self.settings.update_store_status(
                         if effect.succeeded {
                             format!("AI session {} updated", effect.session_id)

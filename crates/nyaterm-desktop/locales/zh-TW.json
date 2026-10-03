@@ -111,6 +111,16 @@
     "showLabel": "顯示工具名稱"
   },
   "ai": {
+    "harness": {
+      "plan": "任務計畫",
+      "waitingForUser": "等待你的回答",
+      "answerPlaceholder": "自由文字回答…",
+      "submitAnswers": "提交回答",
+      "cancelRun": "取消任務",
+      "verified": "已驗證",
+      "unverified": "未驗證",
+      "blocked": "受阻"
+    },
     "modeNyatermAgent": "NyaAgent",
     "modeCodexAgent": "Codex Agent",
     "modeClaudeCodeAgent": "Claude Code",

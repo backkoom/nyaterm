@@ -111,6 +111,16 @@
     "showLabel": "ラベルを表示"
   },
   "ai": {
+    "harness": {
+      "plan": "タスク計画",
+      "waitingForUser": "回答を待っています",
+      "answerPlaceholder": "自由に回答…",
+      "submitAnswers": "回答を送信",
+      "cancelRun": "タスクをキャンセル",
+      "verified": "検証済み",
+      "unverified": "未検証",
+      "blocked": "ブロック中"
+    },
     "modeNyatermAgent": "NyaAgent",
     "modeCodexAgent": "Codex Agent",
     "modeClaudeCodeAgent": "Claude Code",

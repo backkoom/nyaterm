@@ -222,7 +222,9 @@ impl NyaTermApp {
                     }
                     NyaInputEvent::Submitted(text) => {
                         app.on_text_input_changed(subscription_id.clone(), text.clone(), cx);
-                        if subscription_id.as_ref() == "ai.chat.prompt" {
+                        if subscription_id.starts_with("ai.agent-answer.") {
+                            app.submit_native_answer_input(subscription_id.as_ref(), cx);
+                        } else if subscription_id.as_ref() == "ai.chat.prompt" {
                             if app.ai.chat_mention_is_open() {
                                 app.select_ai_mention_candidate(cx);
                             } else {
@@ -501,6 +503,8 @@ impl NyaTermApp {
             self.apply_send_command_control_input(control, text, cx);
         } else if let Some(field) = id.strip_prefix("security.editor.") {
             self.apply_security_editor_input(field, text, cx);
+        } else if id.starts_with("ai.agent-answer.") {
+            self.apply_native_answer_input(id.as_ref(), text, cx);
         } else if id.as_ref() == "ai.chat.prompt" {
             self.apply_ai_prompt(text, cx);
         } else if id.as_ref() == "ai.model-search" {

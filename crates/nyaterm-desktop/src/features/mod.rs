@@ -2,6 +2,7 @@ mod activation;
 mod ai;
 mod app_state;
 mod assets;
+mod capability_runtime;
 mod commands;
 mod connections;
 mod font_catalog;

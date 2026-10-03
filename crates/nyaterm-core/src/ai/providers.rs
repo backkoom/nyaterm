@@ -113,7 +113,11 @@ pub fn build_openai_compatible_chat_request_body_with_stream(
         "content": request_system_prompt(request),
     }));
 
-    if let Some(session_id) = request.session_id.as_deref() {
+    if let Some(session_id) = request
+        .session_id
+        .as_deref()
+        .filter(|_| request.options.agent_context.is_none())
+    {
         let max_turns = request.options.history_turns as usize;
         if max_turns > 0 {
             let session_messages = history
@@ -149,6 +153,13 @@ pub fn build_openai_compatible_chat_request_body_with_stream(
         "content": request_user_prompt(request, settings),
     }));
 
+    if let Some(context) = &request.options.agent_context {
+        super::harness::transcript::append_openai(
+            &mut messages,
+            context,
+            request.options.agent_json_protocol,
+        );
+    }
     let mut body = serde_json::json!({
         "model": genai_model_name(&resolved_model.provider_kind, &resolved_model.model_name),
         "messages": messages,
@@ -161,7 +172,17 @@ pub fn build_openai_compatible_chat_request_body_with_stream(
     }
     if request.mode == AiMode::Agent && !request.options.agent_json_protocol {
         body["tools"] = agent_openai_tools();
-        body["tool_choice"] = serde_json::json!("required");
+        body["parallel_tool_calls"] = serde_json::json!(false);
+        body["tool_choice"] = if request
+            .options
+            .agent_context
+            .as_ref()
+            .is_some_and(|context| context.remaining_steps == 0)
+        {
+            serde_json::json!({"type":"function","function":{"name":"final_answer"}})
+        } else {
+            serde_json::json!("required")
+        };
     }
     if request.options.connectivity_test {
         body.as_object_mut().expect("request body").remove("tools");
@@ -199,7 +220,23 @@ pub fn build_anthropic_chat_request_body_with_stream(
     history: &[AiMessage],
     stream: bool,
 ) -> serde_json::Value {
-    let messages = chat_history_for_request(request, settings, history, "assistant");
+    let mut messages = chat_history_for_request(
+        request,
+        settings,
+        if request.options.agent_context.is_some() {
+            &[]
+        } else {
+            history
+        },
+        "assistant",
+    );
+    if let Some(context) = &request.options.agent_context {
+        super::harness::transcript::append_anthropic(
+            &mut messages,
+            context,
+            request.options.agent_json_protocol,
+        );
+    }
     let mut body = serde_json::json!({
         "model": genai_model_name(&resolved_model.provider_kind, &resolved_model.model_name),
         "system": request_system_prompt(request),
@@ -209,7 +246,16 @@ pub fn build_anthropic_chat_request_body_with_stream(
     });
     if request.mode == AiMode::Agent && !request.options.agent_json_protocol {
         body["tools"] = agent_anthropic_tools();
-        body["tool_choice"] = serde_json::json!({ "type": "any" });
+        body["tool_choice"] = if request
+            .options
+            .agent_context
+            .as_ref()
+            .is_some_and(|context| context.remaining_steps == 0)
+        {
+            serde_json::json!({"type":"tool","name":"final_answer","disable_parallel_tool_use":true})
+        } else {
+            serde_json::json!({ "type": "any", "disable_parallel_tool_use":true })
+        };
     }
     if request.options.connectivity_test {
         body.as_object_mut().expect("request body").remove("tools");
@@ -227,17 +273,33 @@ pub fn build_gemini_chat_request_body(
     settings: &AiSettings,
     history: &[AiMessage],
 ) -> serde_json::Value {
-    let contents = chat_history_for_request(request, settings, history, "model")
-        .into_iter()
-        .map(|message| {
-            serde_json::json!({
-                "role": message["role"].clone(),
-                "parts": [{
-                    "text": message["content"].clone(),
-                }],
-            })
+    let mut contents = chat_history_for_request(
+        request,
+        settings,
+        if request.options.agent_context.is_some() {
+            &[]
+        } else {
+            history
+        },
+        "model",
+    )
+    .into_iter()
+    .map(|message| {
+        serde_json::json!({
+            "role": message["role"].clone(),
+            "parts": [{
+                "text": message["content"].clone(),
+            }],
         })
-        .collect::<Vec<_>>();
+    })
+    .collect::<Vec<_>>();
+    if let Some(context) = &request.options.agent_context {
+        super::harness::transcript::append_gemini(
+            &mut contents,
+            context,
+            request.options.agent_json_protocol,
+        );
+    }
 
     let mut body = serde_json::json!({
         "systemInstruction": {
@@ -255,7 +317,7 @@ pub fn build_gemini_chat_request_body(
         body["toolConfig"] = serde_json::json!({
             "functionCallingConfig": {
                 "mode": "ANY",
-                "allowedFunctionNames": ["execute_command", "final_answer"],
+                "allowedFunctionNames": if request.options.agent_context.as_ref().is_some_and(|context|context.remaining_steps == 0) { vec!["final_answer"] } else { super::harness::AgentToolRegistry::TOOLS.iter().map(|tool| tool.name()).collect::<Vec<_>>() },
             }
         });
     }
@@ -437,6 +499,10 @@ pub fn parse_gemini_stream_chunk(chunk: &str) -> Result<Vec<AiChatStreamDelta>, 
                     .unwrap_or_default();
                 if name_delta.is_some() || !arguments_delta.is_empty() {
                     tool_call_deltas.push(AiToolCallDelta {
+                        thought_signature: part
+                            .get("thoughtSignature")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToOwned::to_owned),
                         index: tool_call_deltas.len(),
                         id_delta: None,
                         name_delta,
@@ -513,6 +579,7 @@ pub fn parse_anthropic_chat_response(body: &str) -> Result<AiChatCompletion, AiM
                     })?
                     .to_string();
                 tool_calls.push(AiToolCall {
+                    thought_signature: None,
                     id: part
                         .get("id")
                         .and_then(serde_json::Value::as_str)
@@ -568,7 +635,14 @@ pub fn parse_gemini_chat_response(body: &str) -> Result<AiChatCompletion, AiMode
                 })?
                 .to_string();
             tool_calls.push(AiToolCall {
-                id: None,
+                thought_signature: part
+                    .get("thoughtSignature")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                id: function_call
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
                 name,
                 arguments: function_call
                     .get("args")
@@ -704,6 +778,7 @@ fn extract_openai_compatible_tool_calls(
                 None => serde_json::Value::Object(Default::default()),
             };
             Ok(AiToolCall {
+                thought_signature: None,
                 id: call
                     .get("id")
                     .and_then(serde_json::Value::as_str)
@@ -776,6 +851,7 @@ fn extract_openai_compatible_stream_tool_call_deltas(
                 return None;
             }
             Some(AiToolCallDelta {
+                thought_signature: None,
                 index: call
                     .get("index")
                     .and_then(serde_json::Value::as_u64)
@@ -831,6 +907,7 @@ fn extract_anthropic_stream_tool_call_deltas(value: &serde_json::Value) -> Vec<A
                 return Vec::new();
             }
             vec![AiToolCallDelta {
+                thought_signature: None,
                 index,
                 id_delta,
                 name_delta,
@@ -857,6 +934,7 @@ fn extract_anthropic_stream_tool_call_deltas(value: &serde_json::Value) -> Vec<A
                 return Vec::new();
             }
             vec![AiToolCallDelta {
+                thought_signature: None,
                 index,
                 id_delta: None,
                 name_delta: None,
@@ -1053,13 +1131,35 @@ mod tests {
         let tools = body["tools"].as_array().expect("tools");
 
         assert_eq!(body["tool_choice"], "required");
-        assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0]["function"]["name"], "execute_command");
         assert_eq!(
-            tools[0]["function"]["parameters"]["required"],
-            serde_json::json!(["thought", "command", "riskLevel", "riskReason"])
+            tools.len(),
+            crate::ai::harness::AgentToolRegistry::TOOLS.len()
         );
-        assert_eq!(tools[1]["function"]["name"], "final_answer");
+        let names: Vec<_> = tools
+            .iter()
+            .map(|tool| tool["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            crate::ai::harness::AgentToolRegistry::TOOLS
+                .iter()
+                .map(|tool| tool.name())
+                .collect::<Vec<_>>()
+        );
+        let execute = tools
+            .iter()
+            .find(|tool| tool["function"]["name"] == "terminal_execute")
+            .unwrap();
+        assert!(
+            execute["function"]["parameters"]["properties"]
+                .get("command")
+                .is_some()
+        );
+        assert!(
+            execute["function"]["parameters"]["properties"]
+                .get("targetTerminalSessionId")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1236,7 +1336,7 @@ mod tests {
         let agent_body =
             build_anthropic_chat_request_body(&resolved, &agent_request, &settings, &history);
         assert_eq!(agent_body["tool_choice"]["type"], "any");
-        assert_eq!(agent_body["tools"][0]["name"], "execute_command");
+        assert_eq!(agent_body["tools"][0]["name"], "get_environment");
         let tool_completion = parse_anthropic_chat_response(
             r#"{"content":[{"type":"tool_use","id":"tool-1","name":"final_answer","input":{"thought":"done","answer":"ok"}}]}"#,
         )
@@ -1339,7 +1439,7 @@ mod tests {
         );
         assert_eq!(
             agent_body["tools"][0]["functionDeclarations"][0]["name"],
-            "execute_command"
+            "get_environment"
         );
         let tool_completion = parse_gemini_chat_response(
             r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"execute_command","args":{"thought":"inspect","command":"pwd","riskLevel":"low","riskReason":"read only"}}}]}}]}"#,

@@ -115,6 +115,24 @@ impl NyaTermApp {
         execute: bool,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .ai
+            .native_pending_call()
+            .is_some_and(|call| call.id == card.id)
+        {
+            if execute {
+                self.respond_to_mcp_approval(
+                    &format!(
+                        "{}:{}",
+                        self.ai.native_owner().expect("native owner"),
+                        card.id
+                    ),
+                    crate::features::mcp::McpApprovalDecision::AllowOnce,
+                    cx,
+                );
+            }
+            return;
+        }
         let available_targets = self.ai_effective_target_session_ids();
         let declared_target = card
             .target_terminal_session_id

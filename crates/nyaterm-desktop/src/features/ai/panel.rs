@@ -31,6 +31,7 @@ use crate::features::runtime_jobs::AiAgentStepView;
 
 mod command_syntax;
 mod components;
+pub(super) mod harness;
 mod messages;
 mod transcript;
 use components::{ai_message_menu_button, ai_message_menu_position, ai_send_button, ai_setup_step};
@@ -77,6 +78,8 @@ pub(in crate::features) struct AiAgentStepPresentation {
 
 #[derive(Clone)]
 pub(in crate::features) struct AiPanelSnapshot {
+    pub native_run: Option<super::state::harness::NativeRunView>,
+    pub native_answer_inputs: Vec<Entity<nyaterm_ui::NyaInputState>>,
     pub chrome: AiPanelChrome,
     pub ui_font_family: SharedString,
     pub enabled: bool,
@@ -149,6 +152,7 @@ pub(in crate::features) struct AiPanel {
     mention_scroll: ScrollHandle,
     model_scroll: ScrollHandle,
     picker_reveal_pending: bool,
+    focused_question: Option<(String, String)>,
     #[cfg(test)]
     paint_count: usize,
     #[cfg(test)]
@@ -170,6 +174,7 @@ impl AiPanel {
             mention_scroll: ScrollHandle::new(),
             model_scroll: ScrollHandle::new(),
             picker_reveal_pending: false,
+            focused_question: None,
             #[cfg(test)]
             paint_count: 0,
             #[cfg(test)]
@@ -356,6 +361,14 @@ impl AiPanel {
             .when_some(snapshot.detected_error.clone(), |this, detected| {
                 this.child(self.ai_detected_error_banner(&snapshot, detected, cx))
             })
+            .when_some(
+                snapshot.native_run.clone().filter(|view| {
+                    !view.plan.tasks.is_empty()
+                        || !view.questions.is_empty()
+                        || view.verification.is_some()
+                }),
+                |this, view| this.child(self.native_run_card(&snapshot, view, cx)),
+            )
             .child(
                 div()
                     .flex_1()
@@ -1935,6 +1948,19 @@ impl AiPanel {
 
 impl gpui::Render for AiPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(snapshot) = &self.snapshot
+            && let Some(view) = snapshot.native_run.as_ref().filter(|view| {
+                view.status == nyaterm_core::ai::harness::AgentRunStatus::WaitingForUser
+            })
+            && let (Some(call_id), Some(input)) =
+                (&view.call_id, snapshot.native_answer_inputs.first())
+        {
+            let key = (view.run_id.clone(), call_id.clone());
+            if self.focused_question.as_ref() != Some(&key) {
+                window.focus(&input.read(cx).focus_handle(), cx);
+                self.focused_question = Some(key);
+            }
+        }
         // The virtual list detects width changes itself. Font metrics and
         // translated labels also invalidate heights of off-screen rows.
         let text_style = (
@@ -2319,9 +2345,34 @@ impl NyaTermApp {
         } else {
             None
         };
+        let native_run = self.ai.native_run_view();
+        let mut native_answer_inputs = Vec::new();
+        if let Some(view) = &native_run
+            && view.status == nyaterm_core::ai::harness::AgentRunStatus::WaitingForUser
+            && let Some(call_id) = &view.call_id
+        {
+            for (index, question) in view.questions.iter().enumerate() {
+                let id = harness::answer_input_id(&view.run_id, call_id, index);
+                self.ensure_text_input(
+                    id.clone(),
+                    view.answers
+                        .get(&question.id)
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                    TextInputSetup::placeholder(t!("ai.harness.answerPlaceholder"))
+                        .submit_on_enter(),
+                    cx,
+                );
+                if let Some(input) = self.existing_text_input(&id) {
+                    native_answer_inputs.push(input);
+                }
+            }
+        }
         let (viewport_width, viewport_height) = self.shell.viewport_size();
 
         AiPanelSnapshot {
+            native_run,
+            native_answer_inputs,
             ui_font_family: if self.settings.summary().ui_font_family.trim().is_empty() {
                 crate::features::shell::gpui_ui_font_fallback().into()
             } else {
@@ -2837,6 +2888,7 @@ mod tests {
                     launch.job_id,
                     launch.session_id,
                     Ok(AiChatJobOutput {
+                        native_call: None,
                         mode: AiMode::Ask,
                         text: "done".to_string(),
                         reasoning: None,

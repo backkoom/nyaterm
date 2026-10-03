@@ -111,6 +111,16 @@
     "showLabel": "Afficher les libellés"
   },
   "ai": {
+    "harness": {
+      "plan": "Plan de tâche",
+      "waitingForUser": "En attente de vos réponses",
+      "answerPlaceholder": "Réponse libre…",
+      "submitAnswers": "Envoyer les réponses",
+      "cancelRun": "Annuler la tâche",
+      "verified": "Vérifié",
+      "unverified": "Non vérifié",
+      "blocked": "Bloqué"
+    },
     "modeNyatermAgent": "NyaAgent",
     "modeCodexAgent": "Codex Agent",
     "modeClaudeCodeAgent": "Claude Code",

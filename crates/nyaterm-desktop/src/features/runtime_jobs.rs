@@ -199,6 +199,7 @@ impl AiChatWorkerEvent {
 
 #[derive(Debug)]
 pub(in crate::features) struct AiChatJobOutput {
+    pub(in crate::features) native_call: Option<nyaterm_core::ai::harness::AgentToolCall>,
     pub(in crate::features) mode: AiMode,
     pub(in crate::features) text: String,
     pub(in crate::features) reasoning: Option<String>,

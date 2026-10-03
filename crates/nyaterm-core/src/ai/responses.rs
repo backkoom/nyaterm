@@ -67,7 +67,7 @@ pub fn build_openai_responses_request_body(
     );
     let mut body = serde_json::json!({
         "model": resolved_model.model_name,
-        "input": chat.get("messages").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "input": super::harness::transcript::responses_input(chat.get("messages").and_then(serde_json::Value::as_array).map(Vec::as_slice).unwrap_or_default()),
         "stream": stream,
         "store": false,
     });
@@ -76,7 +76,17 @@ pub fn build_openai_responses_request_body(
     }
     if request.mode == AiMode::Agent && !request.options.agent_json_protocol {
         body["tools"] = responses_tools();
-        body["tool_choice"] = serde_json::json!("required");
+        body["parallel_tool_calls"] = serde_json::json!(false);
+        body["tool_choice"] = if request
+            .options
+            .agent_context
+            .as_ref()
+            .is_some_and(|context| context.remaining_steps == 0)
+        {
+            serde_json::json!({"type":"function","name":"final_answer"})
+        } else {
+            serde_json::json!("required")
+        };
     }
     if request.options.connectivity_test {
         body["max_output_tokens"] = serde_json::json!(64);
@@ -134,6 +144,7 @@ pub fn parse_openai_responses_stream_chunk(
             "response.function_call_arguments.delta" => {
                 deltas.push(AiChatStreamDelta {
                     tool_call_deltas: vec![AiToolCallDelta {
+                        thought_signature: None,
                         index: response_output_index(&value),
                         id_delta: value
                             .get("item_id")
@@ -156,6 +167,7 @@ pub fn parse_openai_responses_stream_chunk(
                 {
                     deltas.push(AiChatStreamDelta {
                         tool_call_deltas: vec![AiToolCallDelta {
+                            thought_signature: None,
                             index: response_output_index(&value),
                             id_delta: item
                                 .get("call_id")
@@ -367,6 +379,7 @@ fn completed_tool_calls(response: &serde_json::Value) -> Result<Vec<AiToolCall>,
         let arguments = serde_json::from_str(raw_arguments)
             .map_err(|error| AiModelError::InvalidChatJson(error.to_string()))?;
         calls.push(AiToolCall {
+            thought_signature: None,
             id: item
                 .get("call_id")
                 .or_else(|| item.get("id"))
