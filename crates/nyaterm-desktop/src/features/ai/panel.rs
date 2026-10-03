@@ -734,7 +734,6 @@ impl AiPanel {
             .max_h(px(192.))
             .overflow_y_scroll()
             .track_scroll(&self.mention_scroll)
-            .vertical_scrollbar(&self.mention_scroll)
             .flex()
             .flex_col();
         for (index, candidate) in snapshot.mention_candidates.iter().enumerate() {
@@ -1085,7 +1084,6 @@ impl AiPanel {
             .max_h(px(300.))
             .overflow_y_scroll()
             .track_scroll(&self.model_scroll)
-            .vertical_scrollbar(&self.model_scroll)
             .flex()
             .flex_col()
             .child(ai_menu_heading(palette, t!("ai.reasoningIntensity")));
