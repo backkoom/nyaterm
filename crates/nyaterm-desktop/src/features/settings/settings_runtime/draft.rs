@@ -700,6 +700,53 @@ mod tests {
     }
 
     #[test]
+    fn editing_or_clearing_external_editor_refreshes_the_draft_and_persists() {
+        for next in ["", r"D:\Softwares\Microsoft VS Code\Code.exe"] {
+            let mut cx = TestAppContext::single();
+            let app = app(&mut cx);
+            let input = cx.update_entity(&app, |app, cx| {
+                let saved = app
+                    .store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        let mut settings = store.load_app_settings_summary()?;
+                        settings.transfer_default_editor = r"D:\Softwares\Zed\Zed.exe".into();
+                        store.save_transfer_settings(&settings)?;
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap();
+                app.apply_gpui_settings(saved, cx);
+                app.begin_settings_draft(cx);
+                app.ensure_settings_tab_inputs(crate::models::SettingsTab::Transfer, cx);
+                app.existing_text_input("settings.transfer.default-editor")
+                    .unwrap()
+            });
+            cx.update_entity(&input, |_, cx| {
+                cx.emit(nyaterm_ui::NyaInputEvent::Changed(next.to_string()));
+            });
+            cx.run_until_parked();
+            cx.update_entity(&app, |app, cx| {
+                assert_eq!(app.settings.summary().transfer_default_editor, next);
+                assert!(app.settings_panel.read(cx).snapshot().unwrap().draft_dirty);
+                assert!(
+                    app.settings
+                        .draft_dirty_domains()
+                        .contains(&crate::features::settings::SettingsPersistenceDomain::Transfer)
+                );
+                app.apply_settings_draft(false, cx);
+            });
+            cx.run_until_parked();
+            let saved = cx.update_entity(&app, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap()
+            });
+            assert_eq!(saved.transfer_default_editor, next);
+        }
+    }
+
+    #[test]
     fn tray_preference_persists_without_saving_unrelated_settings_drafts() {
         for draft_open in [false, true] {
             let mut cx = TestAppContext::single();

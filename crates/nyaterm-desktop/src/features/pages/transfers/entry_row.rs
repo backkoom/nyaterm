@@ -3,7 +3,6 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels,
     SharedString, StatefulInteractiveElement as _, Styled as _, div, prelude::*, px, rgb,
 };
-use nyaterm_core::truncate_preview;
 use nyaterm_transport::{SftpFileEntry, SftpFileType};
 use nyaterm_ui::{NyaHoverCard, NyaPopoverAlign, NyaPopoverPlacement};
 
@@ -360,10 +359,11 @@ pub(super) fn transfer_browser_entry_row(
                                     })
                                 }))
                                 .truncate()
-                                .child(truncate_preview(&entry.name, 42)),
+                                .child(entry.name.clone()),
                             detail,
                         )
                         .placement(NyaPopoverPlacement::Top)
+                        .flexible_trigger()
                         .align(NyaPopoverAlign::Start)
                         .open_delay(std::time::Duration::from_millis(800))
                         .close_delay(std::time::Duration::from_millis(100)),
