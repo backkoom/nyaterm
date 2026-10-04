@@ -2092,6 +2092,7 @@
     "unread": "未讀"
   },
   "settings": {
+    "syncCapacityRetry": "清理旧快照并重试同步",
     "keywordHighlightLogicalLinesDesc": "關鍵字會跨自動折行連續比對，但不會跨實際換行比對。",
     "shortcutConflictMessage": "快捷鍵與 %{shortcut} 衝突",
     "nativeGpuRenderer": "原生 GPU 算繪",

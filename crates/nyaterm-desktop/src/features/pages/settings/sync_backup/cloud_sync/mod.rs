@@ -684,6 +684,23 @@ impl SettingsPanel {
                                     this.prompt_provider_cloud_sync_push(window, cx);
                                 }),
                             ))
+                            .when(
+                                nyaterm_core::cloud_sync::needs_gist_capacity_recovery(
+                                    &self.cloud_sync.settings().provider,
+                                    self.cloud_sync.status(),
+                                ),
+                                |row| {
+                                    row.child(cloud_sync_action_button(
+                                        palette,
+                                        "settings-provider-capacity-retry",
+                                        t!("settings.syncCapacityRetry"),
+                                        can_run_enabled_actions,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.prompt_provider_cloud_sync_push(window, cx)
+                                        }),
+                                    ))
+                                },
+                            )
                             .child(cloud_sync_action_button(
                                 palette,
                                 "settings-provider-cloud-sync-pull",
