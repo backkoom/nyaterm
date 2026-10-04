@@ -66,6 +66,11 @@ impl NyaTermApp {
             }
             return running;
         }
+        if let Some(controller) = &self.desktop_controller {
+            let _ = controller.update(cx, |controller, _| {
+                controller.update_tab_drag(|drag| drag.cancel_without_release(self.workspace_id));
+            });
+        }
         let mut dirty = self.terminal.clear_terminal_file_drop_hover();
         let transfer_dirty = self.transfer.set_browser_external_drop_hover(false);
         dirty |= transfer_dirty;

@@ -22,6 +22,11 @@ use nyaterm_store::{
 };
 use nyaterm_ui::{NyaRoot, nya_root};
 
+use super::tab_drag::{TabDragCoordinator, TabDragSource, detach_placement};
+use super::window_state::MainWindowPlacement;
+
+#[cfg(test)]
+mod tab_drag_tests;
 use super::{
     AppShell, AppShellStartup, GlobalStateMutation, ProcessStateStore, SessionHub,
     SharedStateDomain, SharedStateEvent,
@@ -184,6 +189,7 @@ pub struct DesktopController {
     device_windows: DeviceWindowManifest,
     windows: HashMap<WorkspaceId, WorkspaceWindow>,
     pending_tab_moves: HashMap<WorkspaceId, MoveTabTreeRequest>,
+    tab_drag: TabDragCoordinator,
     settings_owner_workspace_id: Option<WorkspaceId>,
     tray: Option<SystemTray>,
     screen_locked: bool,
@@ -221,6 +227,7 @@ impl DesktopController {
             device_windows,
             windows: HashMap::new(),
             pending_tab_moves: HashMap::new(),
+            tab_drag: TabDragCoordinator::default(),
             settings_owner_workspace_id: None,
             tray: None,
             screen_locked: false,
@@ -251,7 +258,7 @@ impl DesktopController {
         }
         for workspace_id in ids {
             let startup = self.startup.for_workspace(workspace_id);
-            self.open_workspace_with_startup(startup, None, false, cx)?;
+            self.open_workspace_with_startup(startup, None, false, None, cx)?;
         }
         let _ = self.activate_and_deliver(self.most_recent_workspace_id, initial_activation, cx);
         self.launch_initial_bootstrap(cx);
@@ -1102,11 +1109,26 @@ impl DesktopController {
         request: OpenWorkspaceRequest,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<WorkspaceId> {
+        self.open_workspace_at(request, None, cx)
+    }
+
+    fn open_workspace_at(
+        &mut self,
+        request: OpenWorkspaceRequest,
+        placement: Option<MainWindowPlacement>,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<WorkspaceId> {
         anyhow::ensure!(!self.process_quitting, "the application is closing");
         let workspace_id = WorkspaceId::new();
         let ui = self.workspace_ui_seed(request.layout_source_workspace_id, cx);
         let startup = self.startup.for_new_workspace(workspace_id, ui);
-        self.open_workspace_with_startup(startup, request.activation, request.activate, cx)?;
+        self.open_workspace_with_startup(
+            startup,
+            request.activation,
+            request.activate,
+            placement,
+            cx,
+        )?;
         Ok(workspace_id)
     }
 
@@ -1171,10 +1193,11 @@ impl DesktopController {
         startup: AppShellStartup,
         initial_activation: Option<ActivationRequest>,
         activate: bool,
+        placement_override: Option<MainWindowPlacement>,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
         let workspace_id = startup.workspace_id();
-        let placement = startup.main_window_placement(cx);
+        let placement = placement_override.unwrap_or_else(|| startup.main_window_placement(cx));
         let runtime = self.runtime.clone();
         let controller = cx.entity();
         let session_hub = self.session_hub.clone();
@@ -1229,6 +1252,8 @@ impl DesktopController {
                 shell,
             },
         );
+        self.tab_drag
+            .remember_normal_size(workspace_id, placement.window_bounds.get_bounds().size);
         if let Some(process_state) = self.process_state.clone() {
             self.deliver_process_state(workspace_id, process_state, cx);
         }
@@ -1432,6 +1457,7 @@ impl DesktopController {
             return Err(StoreSubmitError::ShuttingDown);
         }
         self.closing_workspaces.insert(workspace_id);
+        self.tab_drag.cancel_workspace(workspace_id);
         cx.spawn(async move |this, cx| {
             let persistence = persistence_task.await;
             if let Err(error) = persistence.outcome {
@@ -1552,6 +1578,7 @@ impl DesktopController {
         next_recent: Option<WorkspaceId>,
         cx: &mut Context<Self>,
     ) {
+        self.tab_drag.close(workspace_id);
         let Some(entry) = self.windows.remove(&workspace_id) else {
             self.closing_workspaces.remove(&workspace_id);
             return;
@@ -1576,6 +1603,7 @@ impl DesktopController {
             }
             let _ = this.update(cx, |controller, cx| {
                 controller.closing_workspaces.remove(&workspace_id);
+                controller.close_failed_tab_windows(cx);
                 cx.defer(move |cx| {
                     let _ = entry
                         .handle
@@ -1600,6 +1628,7 @@ impl DesktopController {
                 shell.finish_workspace_close_failure(message, cx)
             });
         }
+        self.close_failed_tab_windows(cx);
     }
 
     fn defer_workspace_close_failure(
@@ -1690,6 +1719,7 @@ impl DesktopController {
     }
 
     pub fn request_quit(&mut self, cx: &mut Context<Self>) {
+        self.tab_drag.cancel();
         if self.process_quitting {
             return;
         }
@@ -2005,6 +2035,16 @@ impl DesktopController {
         request: MoveTabTreeRequest,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.process_quitting
+            || self
+                .closing_workspaces
+                .contains(&request.source_workspace_id)
+            || self
+                .closing_workspaces
+                .contains(&request.target_workspace_id)
+        {
+            return Err("a workspace is closing".into());
+        }
         if request.source_workspace_id == request.target_workspace_id {
             return Err("source and target workspaces must differ".into());
         }
@@ -2053,6 +2093,9 @@ impl DesktopController {
         let _ = target.handle.update(cx, |_, window, cx| {
             window.activate_window();
             cx.activate(true);
+            target_app.update(cx, |app, cx| {
+                app.focus_terminal_session(&request.root_tab_id, window, cx);
+            });
         });
         self.mark_active(request.target_workspace_id);
         Ok(())
@@ -2065,11 +2108,38 @@ impl DesktopController {
         source_revision: u64,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<WorkspaceId> {
-        let target_workspace_id = self.open_workspace(
+        self.open_workspace_for_tab_at(source_workspace_id, root_tab_id, source_revision, None, cx)
+    }
+
+    fn open_workspace_for_tab_at(
+        &mut self,
+        source_workspace_id: WorkspaceId,
+        root_tab_id: String,
+        source_revision: u64,
+        placement: Option<MainWindowPlacement>,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<WorkspaceId> {
+        anyhow::ensure!(
+            !self.closing_workspaces.contains(&source_workspace_id),
+            "the source workspace is closing"
+        );
+        let source = self
+            .windows
+            .get(&source_workspace_id)
+            .ok_or_else(|| anyhow::anyhow!("the source window closed during the drag"))?;
+        let app = source
+            .shell
+            .update(cx, |shell, _| shell.app.clone())?
+            .ok_or_else(|| anyhow::anyhow!("the source window is still loading"))?;
+        app.read(cx)
+            .can_transfer_tab_tree(&root_tab_id, source_revision)
+            .map_err(anyhow::Error::msg)?;
+        let target_workspace_id = self.open_workspace_at(
             OpenWorkspaceRequest {
                 layout_source_workspace_id: Some(source_workspace_id),
                 ..Default::default()
             },
+            placement,
             cx,
         )?;
         self.pending_tab_moves.insert(
@@ -2089,9 +2159,122 @@ impl DesktopController {
         let Some(request) = self.pending_tab_moves.remove(&workspace_id) else {
             return;
         };
+        let source = request.source_workspace_id;
         if let Err(error) = self.move_tab_tree(request, cx) {
             tracing::warn!(%error, "could not move tab to newly opened window");
+            self.report_tab_move_failure(source, error, cx);
+            let empty = self
+                .windows
+                .get(&workspace_id)
+                .and_then(|entry| {
+                    entry
+                        .shell
+                        .update(cx, |shell, _| shell.app.clone())
+                        .ok()
+                        .flatten()
+                })
+                .is_some_and(|app| app.read(cx).can_close_failed_tab_workspace());
+            if empty {
+                self.tab_drag.queue_failed_window(workspace_id);
+                self.close_failed_tab_windows(cx);
+            }
         }
+    }
+
+    fn close_failed_tab_windows(&mut self, cx: &mut Context<Self>) {
+        // Window manifests are saved serially. If another window is closing,
+        // retry after it finishes, and recheck that the user has not started
+        // a session in this newly created window in the meantime.
+        while !self.process_quitting && self.closing_workspaces.is_empty() {
+            let Some(workspace_id) = self.tab_drag.next_failed_window() else {
+                break;
+            };
+            let empty = self
+                .windows
+                .get(&workspace_id)
+                .and_then(|entry| {
+                    entry
+                        .shell
+                        .update(cx, |shell, _| shell.app.clone())
+                        .ok()
+                        .flatten()
+                })
+                .is_some_and(|app| app.read(cx).can_close_failed_tab_workspace());
+            if empty {
+                self.request_close_unready_workspace(workspace_id, cx);
+            }
+        }
+    }
+
+    pub(crate) fn update_tab_drag<R>(
+        &mut self,
+        update: impl FnOnce(&mut TabDragCoordinator) -> R,
+    ) -> R {
+        update(&mut self.tab_drag)
+    }
+
+    pub(crate) fn tab_drag_source(&self) -> Option<&TabDragSource> {
+        self.tab_drag.source()
+    }
+
+    pub(crate) fn remember_tab_window_size(
+        &mut self,
+        workspace_id: WorkspaceId,
+        size: gpui::Size<gpui::Pixels>,
+    ) {
+        if self.windows.contains_key(&workspace_id)
+            && !self.closing_workspaces.contains(&workspace_id)
+        {
+            self.tab_drag.remember_normal_size(workspace_id, size);
+        }
+    }
+
+    pub(crate) fn finish_tab_drag_release(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some((source, release)) = self.tab_drag.finish(id) else {
+            return;
+        };
+        if self.process_quitting || self.closing_workspaces.contains(&source.workspace_id) {
+            return;
+        }
+        let placement = detach_placement(&source, release, cx).or_else(|| {
+            // Wayland cannot position a toplevel. Supply a normal size and let
+            // the compositor choose its origin through the usual opening path.
+            let mut placement = self.startup.main_window_placement(cx);
+            placement.display_id = None;
+            placement.window_bounds = gpui::WindowBounds::Windowed(gpui::Bounds::new(
+                placement.window_bounds.get_bounds().origin,
+                source.normal_size,
+            ));
+            Some(placement)
+        });
+        if let Err(error) = self.open_workspace_for_tab_at(
+            source.workspace_id,
+            source.root_tab_id,
+            source.revision,
+            placement,
+            cx,
+        ) {
+            self.report_tab_move_failure(source.workspace_id, error.to_string(), cx);
+        }
+    }
+
+    fn report_tab_move_failure(
+        &self,
+        workspace_id: WorkspaceId,
+        error: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.windows.get(&workspace_id) else {
+            return;
+        };
+        let shell = entry.shell.clone();
+        cx.defer(move |cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                if let Some(app) = &shell.app {
+                    app.update(cx, |app, cx| app.report_tab_move_failure(error, cx));
+                }
+            });
+        });
     }
 }
 

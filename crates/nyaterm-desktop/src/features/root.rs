@@ -200,6 +200,10 @@ impl NyaTermApp {
             .text_color(rgb(palette.text))
             .font(self.gpui_ui_font().font())
             .text_size(px(self.settings.summary().ui_font_size.clamp(12, 24) as f32))
+            .child(self.session_tab_drag_listener_layer(cx))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.cancel_session_tab_drag_on_escape(event, window, cx);
+            }))
             .on_click(cx.listener(|this, _, _, _| {
                 this.mark_user_activity();
             }))

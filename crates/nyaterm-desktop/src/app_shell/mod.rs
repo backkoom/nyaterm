@@ -3,6 +3,7 @@
 mod controller;
 mod process_state;
 pub(crate) mod session_hub;
+pub(crate) mod tab_drag;
 mod window_state;
 
 use self::window_state::{

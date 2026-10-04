@@ -174,7 +174,7 @@ impl NyaTermApp {
         self.ordered_tab_sessions()
     }
 
-    pub(in crate::features) fn focus_terminal_session(
+    pub(crate) fn focus_terminal_session(
         &self,
         session: &str,
         window: &mut Window,

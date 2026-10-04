@@ -468,6 +468,7 @@ impl NyaTermApp {
             preview_text_muted: palette.text_muted,
             preview_accent: accent_color,
         };
+        let drag_source_app = cx.entity().downgrade();
         let hover_card = self.session_tab_hover_card(&session.id, palette);
         let hover_card_id = format!("session-tab-hover-card-{session_id}");
         let tab = div()
@@ -495,7 +496,10 @@ impl NyaTermApp {
             .cursor_pointer()
             .hover(move |this| this.bg(hover_bg))
             .cursor_move()
-            .on_drag(drag_payload, |payload, position, _, cx| {
+            .on_drag(drag_payload, move |payload, position, window, cx| {
+                let _ = drag_source_app.update(cx, |app, cx| {
+                    app.begin_session_tab_drag(payload, position, window, cx);
+                });
                 cx.new(|_| SessionTabDragPreview::new(payload.clone(), position))
             })
             .drag_over::<SessionTabDragPayload>(move |this, payload, _, _| {
@@ -533,6 +537,7 @@ impl NyaTermApp {
             ))
             .on_drop(
                 cx.listener(move |this, payload: &SessionTabDragPayload, _, cx| {
+                    this.accept_session_tab_drop(payload, cx);
                     if payload.source_workspace_id != this.workspace_id {
                         this.request_tab_tree_move(
                             payload,
@@ -984,6 +989,7 @@ impl NyaTermApp {
                     ))
                     .on_drop(
                         cx.listener(move |this, payload: &SessionTabDragPayload, _, cx| {
+                            this.accept_session_tab_drop(payload, cx);
                             if payload.source_workspace_id == this.workspace_id {
                                 if let Some(group) = &end_drop_group {
                                     this.dock_tab_on_terminal_window_leaf(
@@ -1030,6 +1036,7 @@ impl NyaTermApp {
                             .border_color(rgb(palette.focus_ring))
                     })
                     .on_drop(cx.listener(|this, payload: &SessionTabDragPayload, _, cx| {
+                        this.accept_session_tab_drop(payload, cx);
                         if payload.source_workspace_id != this.workspace_id {
                             this.request_tab_tree_move(
                                 payload,

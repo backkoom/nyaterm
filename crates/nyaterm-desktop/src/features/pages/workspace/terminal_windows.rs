@@ -194,6 +194,7 @@ impl NyaTermApp {
             ))
             .on_drop(
                 cx.listener(move |this, payload: &SessionTabDragPayload, _, cx| {
+                    this.accept_session_tab_drop(payload, cx);
                     let zone = this
                         .terminal
                         .terminal_window_drop_for_leaf(&drop_id)
