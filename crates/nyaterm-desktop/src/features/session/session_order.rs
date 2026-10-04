@@ -71,6 +71,7 @@ impl NyaTermApp {
         let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
         self.session
             .register_provisional_reconnect(session_id, metadata);
+        self.sync_session_event_bridge_config();
         if let Some(encoding) = encoding {
             self.terminal.ensure_frame_session(
                 session_id.to_string(),
@@ -93,6 +94,7 @@ impl NyaTermApp {
                 self.terminal_scrollback_line_limit(),
             );
         }
+        self.sync_session_event_bridge_config();
         self.reconcile_terminal_windows();
         if !is_terminal {
             self.terminal.remove_frame_session(session_id);

@@ -287,6 +287,14 @@ impl NyaTermApp {
         } else {
             self.encode_session_outgoing(&id, plan.insert_text.as_bytes())
         };
+        let insertion_wire = match insertion_wire {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.set_terminal_status_if_changed(format!("input failed: {error}"));
+                cx.notify();
+                return true;
+            }
+        };
         let (wire, logical) = shell_edit_payload(&plan, mode, insertion_wire);
         let snapshot = self.terminal_snapshot_for_session(Some(&id), 0);
         self.terminal.view.frame_pipeline.arm_output_event_wake();

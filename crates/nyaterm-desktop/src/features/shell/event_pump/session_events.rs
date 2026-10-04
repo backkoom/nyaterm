@@ -396,7 +396,7 @@ impl NyaTermApp {
         let mut root_chrome_dirty = self.note_zmodem_output_discontinuity(&session_id, bytes, cx);
         self.note_ai_agent_output_discontinuity(&session_id, bytes, cx);
         self.session.route_session_events_to_ui(&session_id);
-        let encoding = self.settings.summary().interaction_default_encoding.clone();
+        let encoding = self.effective_session_encoding(&session_id);
         self.terminal
             .note_session_output_discontinuity(session_id.clone(), &encoding, bytes);
         let marker = terminal_output_dropped_marker(bytes);
@@ -610,9 +610,7 @@ impl NyaTermApp {
             chunk_timings.ai_capture += stage_duration;
             if !result.visible_text.is_empty() {
                 let stage_started_at = Instant::now();
-                let visible_bytes =
-                    self.encode_visible_terminal_text_for_output(session_id, &result.visible_text);
-                self.submit_terminal_frame_output(session_id, visible_bytes);
+                self.submit_terminal_decoded_output(session_id, result.visible_text);
                 let stage_duration = stage_started_at.elapsed();
                 drain_timings.terminal_append += stage_duration;
                 chunk_timings.terminal_append += stage_duration;

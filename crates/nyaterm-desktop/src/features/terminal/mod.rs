@@ -20,6 +20,25 @@ mod terminal_surface_entity;
 mod view_state;
 mod window_state;
 
+pub(in crate::features) fn encoding_error_text(
+    error: nyaterm_core::character_encoding::EncodingError,
+) -> String {
+    use nyaterm_core::character_encoding::EncodingError;
+    match error {
+        EncodingError::UnsupportedEncoding => {
+            rust_i18n::t!("terminal.encodingUnsupported").to_string()
+        }
+        EncodingError::InvalidUtf8Input => {
+            rust_i18n::t!("terminal.encodingInvalidInput").to_string()
+        }
+        EncodingError::UnrepresentableText(encoding) => rust_i18n::t!(
+            "terminal.encodingUnrepresentable",
+            encoding = encoding.label()
+        )
+        .to_string(),
+    }
+}
+
 pub(in crate::features) const TERMINAL_KEY_CONTEXT: &str = "Terminal";
 
 actions!(terminal, [TerminalTab, TerminalShiftTab, TerminalControlC]);

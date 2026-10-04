@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 alacritty_terminal.workspace = true
 encoding_rs.workspace = true
+nyaterm-core.workspace = true
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 memchr = "2"
 regex.workspace = true

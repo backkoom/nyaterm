@@ -1686,7 +1686,7 @@ fn graphics_kitty_query_via_advance() {
 #[test]
 fn encoding_gbk_output_decodes_to_grid() {
     let mut screen = TerminalScreen::new(40, 8);
-    screen.set_encoding("GBK");
+    screen.set_encoding("GBK").unwrap();
     // GBK "测"
     screen.advance(&[0xb2, 0xe2]);
     let snap = screen.snapshot();
@@ -1697,7 +1697,7 @@ fn encoding_gbk_output_decodes_to_grid() {
 #[test]
 fn decoded_local_text_bypasses_session_charset() {
     let mut screen = TerminalScreen::new(40, 8);
-    screen.set_encoding("GBK");
+    screen.set_encoding("GBK").unwrap();
 
     screen.advance_decoded_text("本地提示");
 
@@ -1710,7 +1710,7 @@ fn decoded_local_text_bypasses_session_charset() {
 #[test]
 fn encoding_gbk_output_decodes_split_multibyte_to_grid() {
     let mut screen = TerminalScreen::new(40, 8);
-    screen.set_encoding("GBK");
+    screen.set_encoding("GBK").unwrap();
     // GBK "测试" split in the middle of the first character.
     screen.advance(&[0xb2]);
     assert!(
@@ -1728,7 +1728,7 @@ fn encoding_gbk_output_decodes_split_multibyte_to_grid() {
 #[test]
 fn output_decoder_gbk_decodes_split_multibyte_text() {
     let mut decoder = TerminalOutputDecoder::new();
-    decoder.set_encoding("GBK");
+    decoder.set_encoding("GBK").unwrap();
     assert!(decoder.decode_output_text(&[0xb2]).is_empty());
     let text = decoder.decode_output_text(&[0xe2, 0xca, 0xd4]);
     assert_eq!(text, "测试");
@@ -1787,7 +1787,7 @@ fn output_decoder_tail_skips_graphics_payload() {
 #[test]
 fn output_decoder_skips_graphics_payload() {
     let mut decoder = TerminalOutputDecoder::new();
-    decoder.set_encoding("GBK");
+    decoder.set_encoding("GBK").unwrap();
     let text = decoder.decode_output_text(b"pre\x1b_Ga=T,i=1,c=1,r=1;QUI=\x1b\\post");
     assert_eq!(text, "prepost");
 }
@@ -1810,10 +1810,10 @@ fn output_decoder_skips_sixel_graphics_payload() {
 #[test]
 fn output_decoder_encoding_change_drops_pending_multibyte_state() {
     let mut decoder = TerminalOutputDecoder::new();
-    decoder.set_encoding("GBK");
+    decoder.set_encoding("GBK").unwrap();
 
     assert!(decoder.decode_output_text(&[0xb2]).is_empty());
-    decoder.set_encoding("UTF-8");
+    decoder.set_encoding("UTF-8").unwrap();
 
     assert_eq!(decoder.decode_output_text(b"ok"), "ok");
 }
@@ -1823,7 +1823,7 @@ fn terminal_screen_encoding_change_drops_pending_graphics_state() {
     let mut screen = TerminalScreen::new(40, 8);
 
     screen.advance(b"\x1b_Ga=T,i=1,c=1,r=1;QUI=");
-    screen.set_encoding("GBK");
+    screen.set_encoding("GBK").unwrap();
     screen.advance(b"\x1b\\");
 
     assert!(
@@ -1835,7 +1835,146 @@ fn terminal_screen_encoding_change_drops_pending_graphics_state() {
 #[test]
 fn encoding_outgoing_reencodes_utf8_text() {
     let mut screen = TerminalScreen::new(40, 8);
-    screen.set_encoding("GBK");
-    assert_eq!(screen.encode_outgoing_str("测试"), [0xb2, 0xe2, 0xca, 0xd4]);
-    assert_eq!(screen.encode_outgoing(b"\x1b[A"), b"\x1b[A");
+    screen.set_encoding("GBK").unwrap();
+    assert_eq!(
+        screen.encode_outgoing_str("测试").unwrap(),
+        [0xb2, 0xe2, 0xca, 0xd4]
+    );
+    assert_eq!(screen.encode_outgoing(b"\x1b[A").unwrap(), b"\x1b[A");
+}
+
+#[test]
+fn charset_controls_graphics_and_replies_are_independent_of_chunk_boundaries() {
+    use nyaterm_core::character_encoding::CharacterEncoding;
+    for (encoding, text) in [
+        (CharacterEncoding::Utf8, "测试"),
+        (CharacterEncoding::Gbk, "测试"),
+        (CharacterEncoding::Gb18030, "测试😀"),
+        (CharacterEncoding::Big5, "測試"),
+        (CharacterEncoding::ShiftJis, "日本語"),
+        (CharacterEncoding::EucKr, "한국어"),
+    ] {
+        let mut wire = b"\x1b[31m".to_vec();
+        wire.extend(encoding.encode(text).unwrap());
+        wire.extend_from_slice(b"\x1b[0m\x1b[2;3H\x1b]2;");
+        wire.extend(encoding.encode(text).unwrap());
+        wire.extend_from_slice(b"\x07\x1b_Ga=T,f=32,s=1,v=1,i=9;/wAA/w==\x1b\\");
+        wire.extend_from_slice(b"\x1b_Ga=q,i=7;\x1b\\\x1b[6n");
+        let mut baseline = TerminalScreen::new(30, 5);
+        baseline.set_encoding(encoding.label()).unwrap();
+        baseline.advance(&wire);
+        let expected = baseline.snapshot();
+        let expected_effects = baseline.take_effects();
+        assert!(snapshot_text(&expected).contains(text));
+        assert_eq!(expected.images.len(), 1);
+        assert!(!expected_effects.pty_write.is_empty());
+        for split in 0..=wire.len() {
+            let mut screen = TerminalScreen::new(30, 5);
+            screen.set_encoding(encoding.label()).unwrap();
+            screen.advance(&wire[..split]);
+            screen.advance(&wire[split..]);
+            let snapshot = screen.snapshot();
+            assert_eq!(snapshot.cursor, expected.cursor, "{encoding} split {split}");
+            assert_eq!(
+                snapshot.images.len(),
+                expected.images.len(),
+                "{encoding} split {split}"
+            );
+            for (actual, expected) in snapshot.images.iter().zip(&expected.images) {
+                assert_eq!(actual.data, expected.data, "{encoding} split {split}");
+                assert_eq!(
+                    (
+                        actual.row,
+                        actual.col,
+                        actual.width_cells,
+                        actual.height_cells
+                    ),
+                    (
+                        expected.row,
+                        expected.col,
+                        expected.width_cells,
+                        expected.height_cells
+                    ),
+                    "{encoding} split {split}"
+                );
+            }
+            for (actual, expected) in snapshot.rows().iter().zip(expected.rows()) {
+                assert_eq!(actual.cells, expected.cells, "{encoding} split {split}");
+                assert_eq!(
+                    actual.styled_spans, expected.styled_spans,
+                    "{encoding} split {split}"
+                );
+            }
+            let effects = screen.take_effects();
+            assert_eq!(
+                effects.pty_write, expected_effects.pty_write,
+                "{encoding} split {split}"
+            );
+            assert_eq!(
+                effects.title, expected_effects.title,
+                "{encoding} split {split}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejected_encoding_and_alias_switch_preserve_pending_characters() {
+    let mut screen = TerminalScreen::new(20, 3);
+    screen.set_encoding("GBK").unwrap();
+    screen.advance(&[0xb2]);
+    assert!(screen.set_encoding("KOI8-R").is_err());
+    screen.set_encoding("CP936").unwrap();
+    screen.advance(&[0xe2]);
+    assert!(snapshot_text(&screen.snapshot()).contains('测'));
+    let mut decoder = TerminalOutputDecoder::new();
+    decoder.set_encoding("GBK").unwrap();
+    assert!(decoder.decode_output_text(&[0xb2]).is_empty());
+    assert!(decoder.set_encoding("UTF-16").is_err());
+    decoder.set_encoding("GB2312").unwrap();
+    assert_eq!(decoder.decode_output_text(&[0xe2]), "测");
+}
+
+#[test]
+fn logical_input_rejects_unmappable_and_non_utf8_bytes() {
+    use nyaterm_core::character_encoding::{CharacterEncoding, EncodingError};
+    let mut screen = TerminalScreen::default();
+    screen.set_encoding("GBK").unwrap();
+    assert_eq!(
+        screen.encode_outgoing_str("secret😀"),
+        Err(EncodingError::UnrepresentableText(CharacterEncoding::Gbk))
+    );
+    assert_eq!(
+        screen.encode_outgoing(&[0xff]),
+        Err(EncodingError::InvalidUtf8Input)
+    );
+    screen.set_encoding("UTF-8").unwrap();
+    assert_eq!(
+        screen.encode_outgoing(&[0xff]),
+        Err(EncodingError::InvalidUtf8Input)
+    );
+    screen.set_encoding("GB18030").unwrap();
+    let encoded = screen.encode_outgoing_str("😀").unwrap();
+    screen.advance(&encoded);
+    assert!(snapshot_text(&screen.snapshot()).contains('😀'));
+}
+
+#[test]
+fn utf8_mouse_coordinates_are_protocol_bytes_in_legacy_charset_sessions() {
+    for label in ["UTF-8", "GBK", "GB18030", "Big5", "Shift_JIS", "EUC-KR"] {
+        let mut screen = TerminalScreen::new(120, 120);
+        screen.set_encoding(label).unwrap();
+        screen.advance(b"\x1b[?1000h\x1b[?1005h");
+        assert!(screen.mouse_utf8());
+        assert_eq!(
+            crate::encode_mouse_report(&screen, 0, 100, 110, true),
+            b"\x1b[M \xc2\x85\xc2\x8f"
+        );
+        assert!(crate::encode_mouse_report(&screen, 0, 2015, 0, true).is_empty());
+        screen.advance(b"\x1b[?1006h");
+        assert_eq!(
+            crate::encode_mouse_report(&screen, 0, 100, 110, true),
+            b"\x1b[<0;101;111M"
+        );
+    }
 }

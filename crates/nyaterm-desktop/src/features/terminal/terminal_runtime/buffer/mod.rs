@@ -239,6 +239,22 @@ impl NyaTermApp {
         self.terminal_scrollback_line_limit().saturating_mul(96)
     }
 
+    pub(in crate::features) fn submit_terminal_decoded_output(
+        &self,
+        session_id: &str,
+        text: String,
+    ) {
+        self.terminal.view.frame_pipeline.ensure_session(
+            session_id.to_string(),
+            self.effective_session_encoding(session_id),
+            self.terminal_scrollback_line_limit(),
+        );
+        self.terminal
+            .view
+            .frame_pipeline
+            .submit_decoded_output(session_id.to_string(), text);
+    }
+
     pub(in crate::features) fn submit_terminal_frame_output(
         &self,
         session_id: &str,
@@ -247,7 +263,7 @@ impl NyaTermApp {
         self.terminal.view.frame_pipeline.submit_output(
             session_id.to_string(),
             data,
-            self.settings.summary().interaction_default_encoding.clone(),
+            self.effective_session_encoding(session_id),
             self.terminal_scrollback_line_limit(),
         );
     }
@@ -259,16 +275,15 @@ impl NyaTermApp {
         if outputs.is_empty() {
             return;
         }
-        let encoding = self.settings.summary().interaction_default_encoding.clone();
         let scrollback_limit = self.terminal_scrollback_line_limit();
         let submissions = outputs
             .into_iter()
             .filter_map(|(session_id, data)| {
                 (!data.is_empty()).then_some(TerminalFrameOutputSubmission {
-                    session_id,
                     data,
-                    encoding: encoding.clone(),
+                    encoding: self.effective_session_encoding(&session_id),
                     scrollback_limit,
+                    session_id,
                 })
             })
             .collect::<Vec<_>>();
@@ -1459,23 +1474,17 @@ impl NyaTermApp {
         session_id: &str,
         data: &[u8],
     ) -> String {
-        let encoding = self.settings.summary().interaction_default_encoding.clone();
+        let encoding = self.effective_session_encoding(session_id);
         let view = self
             .terminal
             .view
             .views
             .entry(session_id.to_string())
             .or_insert_with(TerminalViewState::new);
-        view.recording_decoder.set_encoding(&encoding);
+        if let Err(error) = view.recording_decoder.set_encoding(&encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         view.recording_decoder.decode_output_text(data)
-    }
-
-    pub(in crate::features) fn encode_visible_terminal_text_for_output(
-        &self,
-        session_id: &str,
-        text: &str,
-    ) -> Vec<u8> {
-        self.encode_session_outgoing(session_id, text.as_bytes())
     }
 
     pub(in crate::features) fn append_terminal_log_for_session(
@@ -1508,7 +1517,7 @@ impl NyaTermApp {
 
         if let Some(session_id) = session_id {
             let is_active = self.session.active_id() == Some(session_id);
-            let encoding = self.settings.summary().interaction_default_encoding.clone();
+            let encoding = self.effective_session_encoding(session_id);
             let view = self
                 .terminal
                 .view

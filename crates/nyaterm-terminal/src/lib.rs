@@ -614,13 +614,17 @@ impl TerminalOutputDecoder {
         }
     }
 
-    pub fn set_encoding(&mut self, label: &str) {
-        let next = SessionEncoding::from_label(label);
+    pub fn set_encoding(
+        &mut self,
+        label: &str,
+    ) -> Result<(), nyaterm_core::character_encoding::EncodingError> {
+        let next = SessionEncoding::from_label(label)?;
         if self.session_encoding.label() == next.label() {
-            return;
+            return Ok(());
         }
         self.session_encoding = next;
         self.graphics_ingress = GraphicsIngress::new();
+        Ok(())
     }
 
     pub fn encoding_label(&self) -> &str {
@@ -865,6 +869,10 @@ impl TerminalCore {
         self.term.mode().intersects(TermMode::MOUSE_MODE)
     }
 
+    pub fn mouse_utf8(&self) -> bool {
+        self.term.mode().contains(TermMode::UTF8_MOUSE)
+    }
+
     pub fn mouse_sgr(&self) -> bool {
         self.term.mode().contains(TermMode::SGR_MOUSE)
     }
@@ -1030,12 +1038,12 @@ impl TerminalCore {
         let rows = self.rows as u16;
         let mut config = self.term_config.clone();
         config.scrolling_history = self.scrollback_limit;
-        let encoding_label = self.session_encoding.label().to_string();
+        let session_encoding = self.session_encoding.clone();
         let cell_metrics = (self.cell_width_px, self.cell_height_px);
         *self = Self::new_with_config(cols, rows, config);
         self.primary_lines.epoch = next_epoch;
         self.alternate_lines.epoch = next_epoch;
-        self.set_encoding(&encoding_label);
+        self.session_encoding = session_encoding;
         self.set_cell_metrics(cell_metrics.0, cell_metrics.1);
     }
 
@@ -1098,13 +1106,17 @@ impl TerminalCore {
     /// Set session charset used for output decode and input encode.
     /// No-op when the resolved label is unchanged so multi-byte decoder state
     /// survives across output chunks.
-    pub fn set_encoding(&mut self, label: &str) {
-        let next = SessionEncoding::from_label(label);
+    pub fn set_encoding(
+        &mut self,
+        label: &str,
+    ) -> Result<(), nyaterm_core::character_encoding::EncodingError> {
+        let next = SessionEncoding::from_label(label)?;
         if self.session_encoding.label() == next.label() {
-            return;
+            return Ok(());
         }
         self.session_encoding = next;
         self.graphics_ingress = GraphicsIngress::new();
+        Ok(())
     }
 
     pub fn encoding_label(&self) -> &str {
@@ -1112,11 +1124,17 @@ impl TerminalCore {
     }
 
     /// Encode UTF-8 / ASCII input bytes for the session wire charset.
-    pub fn encode_outgoing(&self, utf8_or_ascii: &[u8]) -> Vec<u8> {
+    pub fn encode_outgoing(
+        &self,
+        utf8_or_ascii: &[u8],
+    ) -> Result<Vec<u8>, nyaterm_core::character_encoding::EncodingError> {
         self.session_encoding.encode_outgoing(utf8_or_ascii)
     }
 
-    pub fn encode_outgoing_str(&self, text: &str) -> Vec<u8> {
+    pub fn encode_outgoing_str(
+        &self,
+        text: &str,
+    ) -> Result<Vec<u8>, nyaterm_core::character_encoding::EncodingError> {
         self.session_encoding.encode_str(text)
     }
 
@@ -2846,11 +2864,36 @@ pub fn encode_mouse_report_with_modifiers(
         let suffix = if press { 'M' } else { 'm' };
         format!("\x1b[<{code};{x};{y}{suffix}").into_bytes()
     } else {
-        let cb = 32u16.saturating_add(u16::from(code)).min(255) as u8;
-        let cx = 32u16.saturating_add(x).min(255) as u8;
-        let cy = 32u16.saturating_add(y).min(255) as u8;
-        vec![0x1b, b'[', b'M', cb, cx, cy]
+        encode_legacy_mouse_report(code, col, row, screen.mouse_utf8())
     }
+}
+
+/// Encode X10 or DECSET 1005 coordinates independently of the session charset.
+pub fn encode_legacy_mouse_report(code: u8, col: u16, row: u16, utf8: bool) -> Vec<u8> {
+    if utf8 && (col >= 2015 || row >= 2015) {
+        return Vec::new();
+    }
+    let mut bytes = vec![
+        0x1b,
+        b'[',
+        b'M',
+        32u16.saturating_add(u16::from(code)).min(255) as u8,
+    ];
+    for coordinate in [col, row] {
+        let value = 33u16.saturating_add(coordinate);
+        if utf8 {
+            let mut buffer = [0; 4];
+            bytes.extend_from_slice(
+                char::from_u32(u32::from(value))
+                    .unwrap()
+                    .encode_utf8(&mut buffer)
+                    .as_bytes(),
+            );
+        } else {
+            bytes.push(value.min(255) as u8);
+        }
+    }
+    bytes
 }
 
 /// Encode plain Up/Down for alternate-screen mouse wheel emulation.

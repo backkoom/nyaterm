@@ -213,9 +213,15 @@ impl NyaTermApp {
             right_inspector_collapsed = true;
         }
         let mut terminal_output_decoder = TerminalOutputDecoder::default();
-        terminal_output_decoder.set_encoding(&settings.interaction_default_encoding);
+        if let Err(error) =
+            terminal_output_decoder.set_encoding(&settings.interaction_default_encoding)
+        {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         let mut terminal_screen = initial_terminal_screen();
-        terminal_screen.set_encoding(&settings.interaction_default_encoding);
+        if let Err(error) = terminal_screen.set_encoding(&settings.interaction_default_encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         let terminal_frame_pipeline = TerminalFramePipeline::spawn(recording_writer);
         let session_event_bridge = SessionEventBridge::spawn(
             Arc::clone(&session_manager),

@@ -1288,3 +1288,17 @@ fn serial_flow_control_preserves_legacy_and_round_trips_supported_values() {
     invalid["flow_control"] = "rtscts".into();
     assert!(serde_json::from_value::<ConnectionType>(invalid).is_err());
 }
+
+#[test]
+fn encoding_aliases_and_unknown_labels_survive_saved_connection_round_trips() {
+    for label in ["GB2312", "CP936", "sjis", "euckr", "future-encoding"] {
+        let value = serde_json::json!({"id":"compat", "name":"compat", "type":"ssh", "host":"localhost", "port":22, "username":"user", "encoding":label, "sftp":{"filename_encoding":label,"future_option":true}});
+        let connection: SavedConnection = serde_json::from_value(value).unwrap();
+        let saved = serde_json::to_value(&connection).unwrap();
+        assert_eq!(saved["encoding"], label);
+        assert_eq!(saved["sftp"]["filename_encoding"], label);
+        assert_eq!(saved["sftp"]["future_option"], true);
+        let reloaded: SavedConnection = serde_json::from_value(saved).unwrap();
+        assert_eq!(reloaded, connection);
+    }
+}

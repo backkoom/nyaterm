@@ -2151,20 +2151,21 @@ impl SftpService {
         let attempts = options.max_retries().saturating_add(1);
         self.run_upload_operation("upload_file", attempts, async move {
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
+            let codec = SftpPathCodec::from_ssh_config(&config)?;
+            let raw_path = codec.encode_path(&remote_path)?;
             let mut last_error = None;
             for _attempt in 0..=options.max_retries() {
                 control.check_cancelled()?;
                 let result = async {
-                    let codec = SftpPathCodec::from_ssh_config(&config)?;
                     let session = open_sftp_session_with_client_config(
                         &config,
                         multiplex.as_ref(),
                         sftp_client_config_for_options(&options),
                     )
                     .await?;
-                    let bytes = upload_local_file(
+                    let bytes = upload_local_file_bytes(
                         &session.sftp,
-                        &codec,
+                        raw_path.clone(),
                         &local_path,
                         &remote_path,
                         &control,
@@ -2209,11 +2210,12 @@ impl SftpService {
         let multiplex = self.multiplex.clone();
         let attempts = options.max_retries().saturating_add(1);
         self.run_upload_operation("upload_remote_file", attempts, async move {
+            let codec = SftpPathCodec::from_ssh_config(&config)?;
+            let raw_path = remote_file_path_bytes(&codec, &remote_path)?;
             let mut last_error = None;
             for _attempt in 0..=options.max_retries() {
                 control.check_cancelled()?;
                 let result = async {
-                    let codec = SftpPathCodec::from_ssh_config(&config)?;
                     let session = open_sftp_session_with_client_config(
                         &config,
                         multiplex.as_ref(),
@@ -2222,7 +2224,7 @@ impl SftpService {
                     .await?;
                     let bytes = upload_local_file_bytes(
                         &session.sftp,
-                        remote_file_path_bytes(&codec, &remote_path)?,
+                        raw_path.clone(),
                         &local_path,
                         &remote_path.display_path,
                         &control,
@@ -2354,11 +2356,12 @@ impl SftpService {
         self.run_upload_operation("upload_path", attempts, async move {
             let metadata = tokio::fs::metadata(&local_path).await?;
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
+            let codec = SftpPathCodec::from_ssh_config(&config)?;
+            codec.encode_path(&remote_path)?;
             let mut last_error = None;
             for _attempt in 0..=path_options.transfer_options().max_retries() {
                 control.check_cancelled()?;
                 let result = async {
-                    let codec = SftpPathCodec::from_ssh_config(&config)?;
                     let session = open_sftp_session_with_client_config(
                         &config,
                         multiplex.as_ref(),
@@ -2709,6 +2712,8 @@ fn sftp_error_is_stream_closed(error: &anyhow::Error) -> bool {
 mod compatibility_tests;
 #[cfg(test)]
 mod editor_save_tests;
+#[cfg(test)]
+mod filename_tests;
 
 fn last_sftp_retry_error(last_error: Option<anyhow::Error>) -> anyhow::Error {
     last_error.unwrap_or_else(|| anyhow::anyhow!("SFTP transfer failed before starting"))
@@ -3989,11 +3994,7 @@ mod tests {
         assert_eq!(codec.encoding_name(), "GBK");
 
         let error = SftpPathCodec::from_encoding_name("KOI8-R").expect_err("unknown encoding");
-        assert!(
-            error
-                .to_string()
-                .contains("Unsupported SFTP filename encoding")
-        );
+        assert!(error.to_string().contains("Unsupported character encoding"));
     }
 
     #[test]

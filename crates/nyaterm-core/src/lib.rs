@@ -4,6 +4,7 @@ pub mod ai;
 pub mod app_identity;
 pub mod assets;
 pub mod capabilities;
+pub mod character_encoding;
 pub mod cloud_sync;
 pub mod command_search;
 pub mod command_suggestion_suppression;

@@ -272,10 +272,16 @@ impl NyaTermApp {
                 "disabled" => self.set_terminal_keep_alive_mode("disabled", cx),
                 _ => self.set_terminal_keep_alive_mode("compatible", cx),
             },
-            "settings.interaction.default-encoding" => match value {
-                "GBK" => self.set_interaction_encoding("GBK", cx),
-                _ => self.set_interaction_encoding("UTF-8", cx),
-            },
+            "settings.interaction.default-encoding" => {
+                match nyaterm_core::character_encoding::CharacterEncoding::parse(value) {
+                    Ok(encoding) => self.set_interaction_encoding(encoding.label(), cx),
+                    Err(error) => {
+                        self.shell
+                            .set_status(crate::features::terminal::encoding_error_text(error));
+                        cx.notify();
+                    }
+                }
+            }
             "settings.interaction.tab-double" => {
                 self.set_tab_mouse_action(TabMouseActionTarget::Double, value, cx);
             }

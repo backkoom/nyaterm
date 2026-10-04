@@ -3133,6 +3133,10 @@
     "unsupportedOption": "該 SSH 輸入使用了臨時連結暫不支援的選項。"
   },
   "terminal": {
+    "encodingUnsupported": "不支援此字元編碼，請選擇受支援的編碼。",
+    "encodingInvalidInput": "輸入必須是有效的 UTF-8 文字。",
+    "encodingUnrepresentable": "輸入無法使用 %{encoding} 編碼，未傳送任何內容。",
+
     "uploadingClipboardImage": "正在上傳剪貼簿圖片",
     "clipboardImageFailed": "無法將剪貼簿圖片貼到此工作階段。",
     "disconnectedStatus": "工作階段已中斷",

@@ -132,10 +132,15 @@ impl NyaTermApp {
                 self.terminal.view.output = String::from(INITIAL_TERMINAL_BANNER);
                 self.terminal.view.output_decoder.reset_decoder();
                 self.terminal.view.screen = initial_terminal_screen();
-                self.terminal
+                if let Err(error) = self
+                    .terminal
                     .view
                     .screen
-                    .set_encoding(&self.settings.summary().interaction_default_encoding);
+                    .set_encoding(&self.settings.summary().interaction_default_encoding)
+                {
+                    self.shell
+                        .set_status(crate::features::terminal::encoding_error_text(error));
+                }
                 self.shell.set_status("session closed".to_string());
             }
         } else {
@@ -269,10 +274,15 @@ impl NyaTermApp {
                 self.terminal.view.output = String::from(INITIAL_TERMINAL_BANNER);
                 self.terminal.view.output_decoder.reset_decoder();
                 self.terminal.view.screen = initial_terminal_screen();
-                self.terminal
+                if let Err(error) = self
+                    .terminal
                     .view
                     .screen
-                    .set_encoding(&self.settings.summary().interaction_default_encoding);
+                    .set_encoding(&self.settings.summary().interaction_default_encoding)
+                {
+                    self.shell
+                        .set_status(crate::features::terminal::encoding_error_text(error));
+                }
             }
         }
 

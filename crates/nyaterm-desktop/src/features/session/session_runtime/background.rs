@@ -211,6 +211,15 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        if let Some(label) = launch_config.encoding()
+            && let Err(error) = nyaterm_core::character_encoding::CharacterEncoding::parse(label)
+        {
+            self.shell
+                .set_status(crate::features::terminal::encoding_error_text(error));
+            cx.notify();
+            return;
+        }
+
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
             custom_name,

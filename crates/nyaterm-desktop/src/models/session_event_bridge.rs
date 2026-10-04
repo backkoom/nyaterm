@@ -80,6 +80,8 @@ struct SessionEventBridgeControl {
     owned_sessions: HashSet<String>,
     ui_routed_sessions: HashSet<String>,
     encoding: String,
+    // Read-only projection of launch metadata; default changes cannot alter live streams.
+    session_encodings: HashMap<String, String>,
     scrollback_limit: usize,
     source_queued_events: usize,
     source_queued_output_bytes: usize,
@@ -88,7 +90,8 @@ struct SessionEventBridgeControl {
 #[derive(Clone)]
 struct SessionEventBridgeControlSnapshot {
     ui_routed_sessions: HashSet<String>,
-    encoding: String,
+    // Read-only projection of launch metadata; default changes cannot alter live streams.
+    session_encodings: HashMap<String, String>,
     scrollback_limit: usize,
 }
 
@@ -125,6 +128,7 @@ impl SessionEventBridge {
                 owned_sessions: HashSet::new(),
                 ui_routed_sessions: HashSet::new(),
                 encoding,
+                session_encodings: HashMap::new(),
                 scrollback_limit,
                 source_queued_events: 0,
                 source_queued_output_bytes: 0,
@@ -218,14 +222,23 @@ impl SessionEventBridge {
         self.state.ui_queue.push(event);
     }
 
-    pub(crate) fn configure(&self, encoding: String, scrollback_limit: usize) {
+    pub(crate) fn configure(
+        &self,
+        encoding: String,
+        scrollback_limit: usize,
+        session_encodings: HashMap<String, String>,
+    ) {
         let Ok(mut control) = self.state.control.lock() else {
             return;
         };
-        if control.encoding == encoding && control.scrollback_limit == scrollback_limit {
+        if control.encoding == encoding
+            && control.scrollback_limit == scrollback_limit
+            && control.session_encodings == session_encodings
+        {
             return;
         }
         control.encoding = encoding;
+        control.session_encodings = session_encodings;
         control.scrollback_limit = scrollback_limit;
     }
 
@@ -358,7 +371,7 @@ impl SessionEventBridgeState {
         let control = self.control.lock().ok()?;
         Some(SessionEventBridgeControlSnapshot {
             ui_routed_sessions: control.ui_routed_sessions.clone(),
-            encoding: control.encoding.clone(),
+            session_encodings: control.session_encodings.clone(),
             scrollback_limit: control.scrollback_limit,
         })
     }
@@ -641,9 +654,9 @@ fn run_session_event_bridge(
                             .direct_output_bytes
                             .fetch_add(data.len() as u64, Ordering::Relaxed);
                         pending_direct_outputs.push(TerminalFrameOutputSubmission {
-                            session_id,
+                            session_id: session_id.clone(),
                             data,
-                            encoding: control.encoding.clone(),
+                            encoding: control.session_encodings[&session_id].clone(),
                             scrollback_limit: control.scrollback_limit,
                         });
                     } else if bridge_output_is_backpressured(
@@ -659,9 +672,9 @@ fn run_session_event_bridge(
                             .direct_backpressure_bytes
                             .fetch_add(data.len() as u64, Ordering::Relaxed);
                         pending_direct_outputs.push(TerminalFrameOutputSubmission {
-                            session_id,
+                            session_id: session_id.clone(),
                             data,
-                            encoding: control.encoding.clone(),
+                            encoding: control.session_encodings[&session_id].clone(),
                             scrollback_limit: control.scrollback_limit,
                         });
                     } else {
@@ -755,7 +768,8 @@ fn bridge_output_can_go_direct(
     session_id: &str,
     needs_ui_probe: bool,
 ) -> bool {
-    !control.ui_routed_sessions.contains(session_id)
+    control.session_encodings.contains_key(session_id)
+        && !control.ui_routed_sessions.contains(session_id)
         && frame_pipeline_queued_output_bytes < SESSION_EVENT_BRIDGE_DIRECT_OUTPUT_BACKPRESSURE
         && !needs_ui_probe
 }
@@ -766,7 +780,8 @@ fn bridge_output_is_backpressured(
     session_id: &str,
     needs_ui_probe: bool,
 ) -> bool {
-    !control.ui_routed_sessions.contains(session_id)
+    control.session_encodings.contains_key(session_id)
+        && !control.ui_routed_sessions.contains(session_id)
         && frame_pipeline_queued_output_bytes >= SESSION_EVENT_BRIDGE_DIRECT_OUTPUT_BACKPRESSURE
         && !needs_ui_probe
 }
@@ -839,7 +854,12 @@ mod tests {
     fn bridge_direct_policy_rejects_sideband_triggers() {
         let control = SessionEventBridgeControlSnapshot {
             ui_routed_sessions: HashSet::new(),
-            encoding: "UTF-8".to_string(),
+            session_encodings: [
+                ("s1".to_string(), "UTF-8".to_string()),
+                ("s2".to_string(), "UTF-8".to_string()),
+            ]
+            .into_iter()
+            .collect(),
             scrollback_limit: 1000,
         };
         assert!(bridge_output_can_go_direct(&control, 0, "s1", false));
@@ -854,7 +874,12 @@ mod tests {
         routed.insert("s1".to_string());
         let control = SessionEventBridgeControlSnapshot {
             ui_routed_sessions: routed,
-            encoding: "UTF-8".to_string(),
+            session_encodings: [
+                ("s1".to_string(), "UTF-8".to_string()),
+                ("s2".to_string(), "UTF-8".to_string()),
+            ]
+            .into_iter()
+            .collect(),
             scrollback_limit: 1000,
         };
         assert!(!bridge_output_can_go_direct(&control, 0, "s1", false));
@@ -865,7 +890,12 @@ mod tests {
     fn bridge_direct_policy_yields_under_frame_backpressure() {
         let control = SessionEventBridgeControlSnapshot {
             ui_routed_sessions: HashSet::new(),
-            encoding: "UTF-8".to_string(),
+            session_encodings: [
+                ("s1".to_string(), "UTF-8".to_string()),
+                ("s2".to_string(), "UTF-8".to_string()),
+            ]
+            .into_iter()
+            .collect(),
             scrollback_limit: 1000,
         };
 

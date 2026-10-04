@@ -160,7 +160,7 @@ pub(super) fn set_connection_editor_select_value(
             editor.backspace_mode = value.unwrap_or_else(|| "del".to_string());
         }
         ConnectionEditorSelect::Encoding => {
-            editor.encoding = value.unwrap_or_else(|| "global".to_string());
+            editor.encoding = value.filter(|value| value != "global").unwrap_or_default();
         }
         ConnectionEditorSelect::SftpCwdFollowMode => {
             editor.sftp_cwd_follow_mode = value.unwrap_or_else(|| "shell_integration".to_string());
@@ -171,7 +171,9 @@ pub(super) fn set_connection_editor_select_value(
                 .map(|value| value.clamp(4, 64));
         }
         ConnectionEditorSelect::SftpFilenameEncoding => {
-            editor.sftp_filename_encoding = value.unwrap_or_else(|| "terminal".to_string());
+            editor.sftp_filename_encoding = value
+                .filter(|value| value != "terminal")
+                .unwrap_or_default();
         }
         ConnectionEditorSelect::SshAlgorithmMode => {
             let mode = value.unwrap_or_else(|| "compatible".to_string());

@@ -282,6 +282,7 @@ pub(crate) struct TerminalProtocolState {
     pub(crate) bracketed_paste: bool,
     pub(crate) mouse_reporting: bool,
     pub(crate) mouse_sgr: bool,
+    pub(crate) mouse_utf8: bool,
     pub(crate) mouse_drag_reporting: bool,
     pub(crate) mouse_motion_reporting: bool,
     pub(crate) application_cursor_keys: bool,
@@ -302,6 +303,7 @@ impl TerminalProtocolState {
             bracketed_paste: screen.bracketed_paste(),
             mouse_reporting: screen.mouse_reporting(),
             mouse_sgr: screen.mouse_sgr(),
+            mouse_utf8: screen.mouse_utf8(),
             mouse_drag_reporting: screen.mouse_drag_reporting(),
             mouse_motion_reporting: screen.mouse_motion_reporting(),
             application_cursor_keys: screen.application_cursor_keys(),
@@ -368,10 +370,7 @@ impl TerminalProtocolState {
             let suffix = if press { 'M' } else { 'm' };
             format!("\x1b[<{code};{x};{y}{suffix}").into_bytes()
         } else {
-            let cb = 32u16.saturating_add(u16::from(code)).min(255) as u8;
-            let cx = 32u16.saturating_add(x).min(255) as u8;
-            let cy = 32u16.saturating_add(y).min(255) as u8;
-            vec![0x1b, b'[', b'M', cb, cx, cy]
+            nyaterm_terminal::encode_legacy_mouse_report(code, col, row, self.mouse_utf8)
         }
     }
 }
@@ -935,9 +934,15 @@ impl TerminalViewState {
     }
 
     pub(crate) fn set_encoding(&mut self, encoding: &str) {
-        self.screen.set_encoding(encoding);
-        self.output_decoder.set_encoding(encoding);
-        self.recording_decoder.set_encoding(encoding);
+        if let Err(error) = self.screen.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
+        if let Err(error) = self.output_decoder.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
+        if let Err(error) = self.recording_decoder.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
     }
 
     pub(crate) fn reset_reconnect_stream(&mut self, encoding: &str) {
@@ -1586,6 +1591,14 @@ impl TerminalFramePipeline {
         });
     }
 
+    pub(crate) fn submit_decoded_output(&self, session_id: String, text: String) {
+        if !text.is_empty() {
+            let _ = self
+                .command_tx
+                .send(TerminalFrameCommand::DecodedOutput { session_id, text });
+        }
+    }
+
     pub(crate) fn submit_output(
         &self,
         session_id: impl Into<String>,
@@ -1797,6 +1810,11 @@ impl Default for TerminalFramePipeline {
 
 #[derive(Debug)]
 enum TerminalFrameCommand {
+    DecodedOutput {
+        session_id: String,
+        text: String,
+    },
+
     NavigateCommand {
         session_id: String,
         action: nyaterm_terminal::command_navigation::CommandNavigationAction,
@@ -2358,12 +2376,18 @@ impl std::fmt::Debug for TerminalFrameSession {
 impl TerminalFrameSession {
     fn new(encoding: &str, scrollback_limit: usize) -> Self {
         let mut screen = TerminalScreen::default();
-        screen.set_encoding(encoding);
+        if let Err(error) = screen.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         screen.set_scrollback_limit(scrollback_limit);
         let mut output_decoder = TerminalOutputDecoder::default();
-        output_decoder.set_encoding(encoding);
+        if let Err(error) = output_decoder.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         let mut recording_decoder = TerminalOutputDecoder::default();
-        recording_decoder.set_encoding(encoding);
+        if let Err(error) = recording_decoder.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         Self {
             screen,
             output_decoder,
@@ -2376,10 +2400,16 @@ impl TerminalFrameSession {
     }
 
     fn set_encoding_and_limit(&mut self, encoding: &str, scrollback_limit: usize) {
-        self.screen.set_encoding(encoding);
+        if let Err(error) = self.screen.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         self.screen.set_scrollback_limit(scrollback_limit);
-        self.output_decoder.set_encoding(encoding);
-        self.recording_decoder.set_encoding(encoding);
+        if let Err(error) = self.output_decoder.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
+        if let Err(error) = self.recording_decoder.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
     }
 
     fn reset_reconnect_stream(&mut self, encoding: &str, scrollback_limit: usize) {
@@ -2393,12 +2423,18 @@ impl TerminalFrameSession {
 
     fn seed(&mut self, output: String, encoding: &str, scrollback_limit: usize) {
         self.screen = terminal_screen_from_output(&output);
-        self.screen.set_encoding(encoding);
+        if let Err(error) = self.screen.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         self.screen.set_scrollback_limit(scrollback_limit);
         self.output_decoder = TerminalOutputDecoder::default();
-        self.output_decoder.set_encoding(encoding);
+        if let Err(error) = self.output_decoder.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         self.recording_decoder = TerminalOutputDecoder::default();
-        self.recording_decoder.set_encoding(encoding);
+        if let Err(error) = self.recording_decoder.set_encoding(encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         self.revision = self.revision.saturating_add(1);
         self.action_link_cache = None;
     }
@@ -2915,6 +2951,25 @@ impl TerminalFrameOutputBatch {
     }
 }
 
+fn terminal_advance_decoded_result(
+    screen: &mut TerminalScreen,
+    session_id: &str,
+    text: &str,
+    recording_writer: &RecordingWriteHandle,
+) -> TerminalAdvanceResult {
+    recording_writer.write_output(session_id.to_string(), text.to_string());
+    screen.advance_decoded_text(text);
+    let mut visible_text = String::new();
+    append_terminal_frame_visible_tail(&mut visible_text, text);
+    TerminalAdvanceResult {
+        visible_text,
+        recording_text_bytes: text.len(),
+        effects: screen.take_effects(),
+        accepted_bytes: text.len(),
+        skipped_output_bytes: 0,
+    }
+}
+
 fn terminal_advance_result(
     screen: &mut TerminalScreen,
     output_decoder: &mut TerminalOutputDecoder,
@@ -3341,6 +3396,7 @@ fn terminal_frame_command_priority_snapshot_insert_before(command: &TerminalFram
 fn terminal_frame_command_output_bytes(command: &TerminalFrameCommand) -> usize {
     match command {
         TerminalFrameCommand::Output { data, .. } => data.len(),
+        TerminalFrameCommand::DecodedOutput { text, .. } => text.len(),
         _ => 0,
     }
 }
@@ -3450,6 +3506,24 @@ fn run_terminal_frame_processor(
                 }
                 sessions.remove(&session_id);
                 snapshot_priority.remove(&session_id);
+            }
+            TerminalFrameCommand::DecodedOutput { session_id, text } => {
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    let started_at = Instant::now();
+                    let mut batch = TerminalFrameOutputBatch::default();
+                    batch.absorb(terminal_advance_decoded_result(
+                        &mut session.screen,
+                        &session_id,
+                        &text,
+                        &recording_writer,
+                    ));
+                    session.revision = session.revision.saturating_add(1);
+                    let event = session.output_event_from_batch(session_id, batch, started_at);
+                    push_terminal_frame_worker_event(
+                        &event_queue,
+                        TerminalFrameEvent::Output(event),
+                    );
+                }
             }
             TerminalFrameCommand::AppendLocalText { session_id, text } => {
                 if let Some(session) = sessions.get_mut(&session_id) {

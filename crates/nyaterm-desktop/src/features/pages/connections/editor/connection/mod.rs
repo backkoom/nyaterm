@@ -625,8 +625,12 @@ impl NyaTermApp {
             )
         }))
         .collect::<Vec<_>>();
-        let encoding_options = ["global", "UTF-8", "GBK", "GB2312", "GB18030"]
-            .into_iter()
+        let encoding_options = std::iter::once("global")
+            .chain(
+                nyaterm_core::character_encoding::CharacterEncoding::ALL
+                    .into_iter()
+                    .map(|encoding| encoding.label()),
+            )
             .map(|value| {
                 let label = if value == "global" {
                     t!("connection.encodingFollowGlobal").to_string()
@@ -636,7 +640,14 @@ impl NyaTermApp {
                 ConnectionEditorChoice::new(
                     Some(value.to_string()),
                     label,
-                    editor.encoding == value,
+                    (value == "global"
+                        && (editor.encoding.trim().is_empty()
+                            || editor.encoding.trim().eq_ignore_ascii_case("global")))
+                        || editor.encoding == value
+                        || nyaterm_core::character_encoding::CharacterEncoding::parse(
+                            &editor.encoding,
+                        )
+                        .is_ok_and(|encoding| encoding.label() == value),
                 )
             })
             .collect::<Vec<_>>();
@@ -788,8 +799,12 @@ impl NyaTermApp {
             )
         })
         .collect::<Vec<_>>();
-        let sftp_filename_encoding_options = ["terminal", "UTF-8", "GBK", "GB2312", "GB18030"]
-            .into_iter()
+        let sftp_filename_encoding_options = std::iter::once("terminal")
+            .chain(
+                nyaterm_core::character_encoding::CharacterEncoding::ALL
+                    .into_iter()
+                    .map(|encoding| encoding.label()),
+            )
             .map(|value| {
                 let label = if value == "terminal" {
                     t!("dialog.sftpFilenameEncodingFollowTerminal").to_string()
@@ -799,7 +814,19 @@ impl NyaTermApp {
                 ConnectionEditorChoice::new(
                     Some(value.to_string()),
                     label,
-                    editor.sftp_filename_encoding == value,
+                    (value == "terminal"
+                        && (editor.sftp_filename_encoding.trim().is_empty()
+                            || ["terminal", "global"].iter().any(|follow| {
+                                editor
+                                    .sftp_filename_encoding
+                                    .trim()
+                                    .eq_ignore_ascii_case(follow)
+                            })))
+                        || editor.sftp_filename_encoding == value
+                        || nyaterm_core::character_encoding::CharacterEncoding::parse(
+                            &editor.sftp_filename_encoding,
+                        )
+                        .is_ok_and(|encoding| encoding.label() == value),
                 )
             })
             .collect::<Vec<_>>();
@@ -3064,7 +3091,7 @@ mod tests {
             agent_preview: None,
             agent_preview_loading: false,
             backspace_mode: "del".to_string(),
-            encoding: "global".to_string(),
+            encoding: String::new(),
             ssh_profile: Default::default(),
             terminal_type: None,
             sftp_enabled: true,
@@ -3073,7 +3100,7 @@ mod tests {
             sftp_shell_detection_timeout_ms: "3000".to_string(),
             sftp_pipeline_depth: None,
             sftp_extra: Default::default(),
-            sftp_filename_encoding: "terminal".to_string(),
+            sftp_filename_encoding: String::new(),
             ssh_algorithm_mode: "compatible".to_string(),
             ssh_algorithm_kex: Vec::new(),
             ssh_algorithm_ciphers: Vec::new(),

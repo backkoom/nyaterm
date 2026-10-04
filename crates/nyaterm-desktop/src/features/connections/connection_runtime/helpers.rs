@@ -136,7 +136,7 @@ pub(super) fn connection_editor_from_saved(
         agent_preview: None,
         agent_preview_loading: false,
         backspace_mode: "del".to_string(),
-        encoding: "global".to_string(),
+        encoding: String::new(),
         ssh_profile: connection.ssh_profile,
         terminal_type: connection.terminal_type,
         sftp_enabled: sftp.enabled,
@@ -145,11 +145,7 @@ pub(super) fn connection_editor_from_saved(
         sftp_shell_detection_timeout_ms: sftp.shell_detection_timeout_ms.to_string(),
         sftp_pipeline_depth: sftp.pipeline_depth,
         sftp_extra: sftp.extra.clone(),
-        sftp_filename_encoding: if sftp.filename_encoding.is_empty() {
-            "terminal".to_string()
-        } else {
-            sftp.filename_encoding
-        },
+        sftp_filename_encoding: sftp.filename_encoding,
         ssh_algorithm_mode: ssh_algorithm_mode_value(ssh_algorithms.mode),
         ssh_algorithm_kex: ssh_algorithms.kex,
         ssh_algorithm_ciphers: ssh_algorithms.ciphers,
@@ -336,19 +332,13 @@ pub(super) fn connection_editor_from_saved(
     editor
 }
 
+// Keep the raw stored label until the user explicitly changes this field.
 fn encoding_to_editor_value(value: &str) -> String {
-    if value.trim().is_empty() {
-        "global".to_string()
-    } else {
-        value.trim().to_string()
-    }
+    value.to_string()
 }
 
 fn editor_encoding_to_saved(value: &str) -> String {
-    match value.trim() {
-        "" | "global" => String::new(),
-        value => value.to_string(),
-    }
+    value.to_string()
 }
 
 fn sftp_cwd_follow_mode_value(value: SftpCwdFollowMode) -> String {
@@ -799,10 +789,7 @@ pub(super) fn build_saved_connection_from_editor(
                 .parse::<u64>()
                 .unwrap_or(3000)
                 .clamp(100, 60_000),
-            filename_encoding: match editor.sftp_filename_encoding.trim() {
-                "" | "terminal" | "global" => String::new(),
-                value => value.to_string(),
-            },
+            filename_encoding: editor.sftp_filename_encoding.clone(),
         }
     } else {
         SftpSettings::default()
@@ -1187,6 +1174,19 @@ mod tests {
             last_used_at_ms: None,
         };
 
+        for label in [
+            "", "global", " GLOBAL ", " CP936 ", "GB2312", "sjis", "euckr", "unknown",
+        ] {
+            let mut legacy = connection.clone();
+            if let ConnectionType::Ssh { encoding, .. } = &mut legacy.config {
+                *encoding = label.into();
+            }
+            legacy.sftp.filename_encoding = label.into();
+            let editor = connection_editor_from_saved(legacy.clone(), false);
+            let saved = build_saved_connection_from_editor(&editor).unwrap();
+            assert_eq!(saved.config, legacy.config);
+            assert_eq!(saved.sftp, legacy.sftp);
+        }
         let editor = connection_editor_from_saved(connection.clone(), false);
         let saved = build_saved_connection_from_editor(&editor).expect("valid connection");
 

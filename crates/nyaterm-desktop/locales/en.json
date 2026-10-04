@@ -3133,6 +3133,10 @@
     "unsupportedOption": "Temporary links only support direct connections."
   },
   "terminal": {
+    "encodingUnsupported": "Unsupported character encoding. Select a supported encoding.",
+    "encodingInvalidInput": "Input must be valid UTF-8.",
+    "encodingUnrepresentable": "Input cannot be represented in %{encoding}. Nothing was sent.",
+
     "uploadingClipboardImage": "Uploading clipboard image",
     "clipboardImageFailed": "Could not paste the clipboard image into this session.",
     "disconnectedStatus": "Session disconnected",

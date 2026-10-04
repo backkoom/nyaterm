@@ -3133,6 +3133,9 @@
     "unsupportedOption": "一時リンクは直接接続のみサポートします。"
   },
   "terminal": {
+    "encodingUnsupported": "未対応の文字エンコーディングです。対応するエンコーディングを選択してください。",
+    "encodingInvalidInput": "入力は有効な UTF-8 である必要があります。",
+    "encodingUnrepresentable": "入力を %{encoding} で表現できません。何も送信されませんでした。",
     "uploadingClipboardImage": "クリップボード画像をアップロード中",
     "clipboardImageFailed": "このセッションにクリップボード画像を貼り付けできません。",
     "disconnectedStatus": "セッションが切断されました",

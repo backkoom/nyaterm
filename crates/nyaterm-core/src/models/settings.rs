@@ -795,6 +795,19 @@ fn default_highlight_color_light() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_and_unknown_encoding_labels_round_trip_unchanged() {
+        for label in ["UTF8", " CP936 ", "shift-jis", "euckr", "unknown", ""] {
+            let mut document = serde_json::to_value(super::AppSettingsSummary::default()).unwrap();
+            document["interaction_default_encoding"] = serde_json::json!(label);
+            let settings: super::AppSettingsSummary = serde_json::from_value(document).unwrap();
+            assert_eq!(
+                serde_json::to_value(settings).unwrap()["interaction_default_encoding"],
+                label
+            );
+        }
+    }
+
     use super::{
         AppSettingsSummary, TransferBrowserViewMode, default_panel_open_mode,
         normalize_panel_open_mode,

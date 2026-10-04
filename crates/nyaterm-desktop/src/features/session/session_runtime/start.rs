@@ -1079,11 +1079,13 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
     let key_auth = load_ssh_key_auth_with_context(context, auth.key_id.as_deref(), &auth.mode)?;
     let proxy_jump = load_proxy_jump_config_with_context(context, connection, visited_proxy_jumps)?;
     let proxy = load_proxy_config_with_context(context, connection)?;
-    let encoding = if encoding.trim().is_empty() {
-        context.default_encoding.clone()
-    } else {
-        encoding
-    };
+    let encoding = nyaterm_core::character_encoding::CharacterEncoding::resolve_connection(
+        &encoding,
+        &context.default_encoding,
+    )
+    .map_err(crate::features::terminal::encoding_error_text)?
+    .label()
+    .to_string();
     let host_key_alias = connection.network.as_ref().and_then(|network| {
         network
             .host_key_alias
@@ -1297,7 +1299,7 @@ fn stored_connection_password_id(auth: Option<&ConnectionAuth>) -> Option<String
 }
 
 fn resolve_effective_connection_encoding(value: &str, app: &NyaTermApp) -> String {
-    if value.trim().is_empty() {
+    if value.trim().is_empty() || value.trim().eq_ignore_ascii_case("global") {
         app.settings.summary().interaction_default_encoding.clone()
     } else {
         value.trim().to_string()

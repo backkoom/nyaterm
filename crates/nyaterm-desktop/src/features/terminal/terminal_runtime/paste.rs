@@ -124,12 +124,12 @@ impl NyaTermApp {
         &self,
         session_id: &str,
         text: &str,
-    ) -> Vec<u8> {
-        let body = self.encode_session_outgoing(session_id, text.as_bytes());
-        Self::wrap_terminal_paste_wire_bytes_for_bracketed(
+    ) -> Result<Vec<u8>, String> {
+        let body = self.encode_session_outgoing(session_id, text.as_bytes())?;
+        Ok(Self::wrap_terminal_paste_wire_bytes_for_bracketed(
             &body,
             self.session_bracketed_paste(session_id),
-        )
+        ))
     }
 
     pub(in crate::features) fn wrap_terminal_paste_wire_bytes_for_bracketed(
@@ -181,7 +181,14 @@ impl NyaTermApp {
         let peers = self.sync_peer_session_ids(&session_id);
         let mut ok_sessions = Vec::new();
         let recording_bytes = text.as_bytes();
-        let primary_bytes = self.wrap_terminal_paste_bytes_for_session(&session_id, text);
+        let primary_bytes = match self.wrap_terminal_paste_bytes_for_session(&session_id, text) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.set_terminal_status_if_changed(format!("paste failed: {error}"));
+                cx.notify();
+                return;
+            }
+        };
         let byte_count = primary_bytes.len();
         match self.write_session_wire_input_recorded_as(
             &session_id,
@@ -200,7 +207,13 @@ impl NyaTermApp {
         let mut synced = 0usize;
         let mut failed = 0usize;
         for peer_id in peers {
-            let peer_bytes = self.wrap_terminal_paste_bytes_for_session(&peer_id, text);
+            let peer_bytes = match self.wrap_terminal_paste_bytes_for_session(&peer_id, text) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    failed += 1;
+                    continue;
+                }
+            };
             match self.write_session_wire_input_recorded_as(&peer_id, &peer_bytes, recording_bytes)
             {
                 Ok(()) => {

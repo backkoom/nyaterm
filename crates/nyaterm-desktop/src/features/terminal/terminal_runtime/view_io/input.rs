@@ -816,7 +816,7 @@ impl NyaTermApp {
             .then(|| self.read_terminal_input_line_for_session(session_id))
             .flatten();
         let encoded = if disposition.encode_session_charset {
-            self.encode_session_outgoing(session_id, bytes)
+            self.encode_session_outgoing(session_id, bytes)?
         } else {
             bytes.to_vec()
         };
@@ -883,7 +883,7 @@ impl NyaTermApp {
         debug_assert!(!disposition.record_logical_input);
         debug_assert!(!disposition.record_raw_input);
         debug_assert!(!disposition.allow_command_history);
-        let encoded = self.encode_session_outgoing(session_id, bytes);
+        let encoded = self.encode_session_outgoing(session_id, bytes)?;
         self.session
             .manager()
             .write(session_id, &encoded)
@@ -1013,18 +1013,45 @@ impl NyaTermApp {
         &self,
         session_id: &str,
         bytes: &[u8],
-    ) -> Vec<u8> {
-        if let Some(view) = self.terminal.view.views.get(session_id) {
-            return view.screen.encode_outgoing(bytes);
-        }
-        self.terminal.view.screen.encode_outgoing(bytes)
+    ) -> Result<Vec<u8>, String> {
+        let label = self.effective_session_encoding(session_id);
+        let encoding = nyaterm_core::character_encoding::CharacterEncoding::parse(&label)
+            .map_err(crate::features::terminal::encoding_error_text)?;
+        let text = std::str::from_utf8(bytes).map_err(|_| {
+            crate::features::terminal::encoding_error_text(
+                nyaterm_core::character_encoding::EncodingError::InvalidUtf8Input,
+            )
+        })?;
+        encoding
+            .encode(text)
+            .map_err(crate::features::terminal::encoding_error_text)
     }
 
-    /// Keep all live terminal screens on the current interaction encoding.
+    pub(in crate::features) fn effective_session_encoding(&self, session_id: &str) -> String {
+        self.session
+            .metadata_entries()
+            .find(|(id, _)| *id == session_id)
+            .and_then(|(_, metadata)| metadata.launch_config.encoding())
+            .map(ToString::to_string)
+            .or_else(|| {
+                self.terminal
+                    .view
+                    .views
+                    .get(session_id)
+                    .map(|view| view.screen.encoding_label().to_string())
+            })
+            .unwrap_or_else(|| self.settings.summary().interaction_default_encoding.clone())
+    }
+
+    /// Reapply launch encodings; the global default only affects future sessions.
     pub(in crate::features) fn sync_terminal_encodings_from_settings(&mut self) {
         let label = self.settings.summary().interaction_default_encoding.clone();
-        self.terminal.view.screen.set_encoding(&label);
-        self.terminal.view.output_decoder.set_encoding(&label);
+        if let Err(error) = self.terminal.view.screen.set_encoding(&label) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
+        if let Err(error) = self.terminal.view.output_decoder.set_encoding(&label) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
         let session_encodings = self
             .session
             .metadata_entries()
@@ -1036,11 +1063,9 @@ impl NyaTermApp {
             })
             .collect::<std::collections::HashMap<_, _>>();
         for (session_id, view) in &mut self.terminal.view.views {
-            let encoding = session_encodings
-                .get(session_id)
-                .map(String::as_str)
-                .unwrap_or(label.as_str());
-            view.set_encoding(encoding);
+            if let Some(encoding) = session_encodings.get(session_id) {
+                view.set_encoding(encoding);
+            }
         }
         self.sync_session_event_bridge_config();
     }

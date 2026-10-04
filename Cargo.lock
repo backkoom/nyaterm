@@ -6635,6 +6635,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "memchr",
+ "nyaterm-core",
  "regex",
  "unicode-segmentation",
  "unicode-width",

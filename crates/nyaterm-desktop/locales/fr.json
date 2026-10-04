@@ -3133,6 +3133,9 @@
     "unsupportedOption": "Les liens temporaires ne prennent en charge que les connexions directes."
   },
   "terminal": {
+    "encodingUnsupported": "Encodage de caractères non pris en charge. Sélectionnez un encodage compatible.",
+    "encodingInvalidInput": "La saisie doit être du UTF-8 valide.",
+    "encodingUnrepresentable": "La saisie ne peut pas être représentée en %{encoding}. Rien n’a été envoyé.",
     "uploadingClipboardImage": "Envoi de l’image du presse-papiers",
     "clipboardImageFailed": "Impossible de coller l’image du presse-papiers dans cette session.",
     "disconnectedStatus": "Session déconnectée",

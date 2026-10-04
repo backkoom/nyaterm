@@ -793,7 +793,17 @@ impl SessionFeatureState {
         encoding: String,
         scrollback_limit: usize,
     ) {
-        self.event_bridge.configure(encoding, scrollback_limit);
+        let session_encodings = self
+            .metadata_entries()
+            .filter_map(|(id, metadata)| {
+                metadata
+                    .launch_config
+                    .encoding()
+                    .map(|encoding| (id.to_string(), encoding.to_string()))
+            })
+            .collect();
+        self.event_bridge
+            .configure(encoding, scrollback_limit, session_encodings);
     }
 
     pub(in crate::features) fn route_session_events_to_ui(&self, session_id: &str) {
