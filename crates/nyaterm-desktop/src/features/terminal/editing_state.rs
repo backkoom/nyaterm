@@ -17,6 +17,7 @@ pub(super) struct TerminalEditingState {
 
 #[derive(Default)]
 pub(super) struct SessionEditingState {
+    pub(super) command_navigation_interactive: bool,
     pub(super) model: ShellEditState,
     pub(super) capability: EditCapability,
     pub(super) mapping: Option<InputMapping>,

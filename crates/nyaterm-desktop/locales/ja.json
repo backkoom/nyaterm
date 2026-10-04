@@ -2629,6 +2629,9 @@
       "view": "表示とレイアウト"
     },
     "shortcutLabels": {
+      "commandNavPrev": "Previous command",
+      "commandNavNext": "Next command",
+      "commandNavSelect": "Select command block",
       "clearScreen": "画面をクリア",
       "copy": "コピー",
       "find": "検索",

@@ -8,6 +8,7 @@ use crate::shortcuts::{
     NextTerminalGroup, OpenChat, OpenNewSessionMenu, OpenSettings, PreviousTab,
     PreviousTerminalGroup, QuickSwitch, RenameFile, ResetZoom, ShortcutId, ShortcutInvocation,
     ShowAllCommands, ShowCommandSuggestions, SwitchToTab, TemporarySshLink, TerminalClear,
+    TerminalClearAll, TerminalCommandNext, TerminalCommandPrevious, TerminalCommandSelect,
     TerminalCopy, TerminalFind, TerminalPaste, TerminalPasteSelected, TerminalSelectAll,
     ToggleLeftSidebar, ToggleNativeFullscreen, TogglePaneFocus, ToggleRecording,
     ToggleRightSidebar, ZoomIn, ZoomOut,
@@ -16,7 +17,14 @@ use crate::shortcuts::{
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
     // GPUI still delivers KeyDown after an interceptor stops propagation.
     // This action must run in the keymap instead, or the terminal sends ^L twice.
-    id != ShortcutId::TerminalClear
+    !matches!(
+        id,
+        ShortcutId::TerminalClear
+            | ShortcutId::TerminalClearAll
+            | ShortcutId::TerminalCommandPrevious
+            | ShortcutId::TerminalCommandNext
+            | ShortcutId::TerminalCommandSelect
+    )
 }
 
 impl NyaTermApp {
@@ -71,6 +79,19 @@ impl NyaTermApp {
             }
             ShortcutId::TerminalFind => self.open_terminal_search(window, cx),
             ShortcutId::TerminalClear => self.send_terminal_clear_screen(cx),
+            ShortcutId::TerminalClearAll => self.clear_terminal(cx),
+            ShortcutId::TerminalCommandPrevious => self.navigate_terminal_command(
+                nyaterm_terminal::command_navigation::CommandNavigationAction::Previous,
+                cx,
+            ),
+            ShortcutId::TerminalCommandNext => self.navigate_terminal_command(
+                nyaterm_terminal::command_navigation::CommandNavigationAction::Next,
+                cx,
+            ),
+            ShortcutId::TerminalCommandSelect => self.navigate_terminal_command(
+                nyaterm_terminal::command_navigation::CommandNavigationAction::Select,
+                cx,
+            ),
             ShortcutId::TerminalSelectAll => self.select_all_terminal(cx),
             ShortcutId::ManageSyncGroups => self.open_sync_groups(window, cx),
             ShortcutId::ShowCommandSuggestions => self.show_manual_command_suggestions(cx),
@@ -205,6 +226,16 @@ impl NyaTermApp {
             ))
             .on_action(direct_handler!(TerminalFind, TerminalFind))
             .on_action(direct_handler!(TerminalClear, TerminalClear))
+            .on_action(direct_handler!(TerminalClearAll, TerminalClearAll))
+            .on_action(direct_handler!(
+                TerminalCommandPrevious,
+                TerminalCommandPrevious
+            ))
+            .on_action(direct_handler!(TerminalCommandNext, TerminalCommandNext))
+            .on_action(direct_handler!(
+                TerminalCommandSelect,
+                TerminalCommandSelect
+            ))
             .on_action(direct_handler!(TerminalSelectAll, TerminalSelectAll))
             .on_action(direct_handler!(ManageSyncGroups, ManageSyncGroups))
             .on_action(direct_handler!(

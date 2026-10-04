@@ -2629,6 +2629,9 @@
       "view": "檢視與佈局"
     },
     "shortcutLabels": {
+      "commandNavPrev": "上一命令",
+      "commandNavNext": "下一命令",
+      "commandNavSelect": "选择命令块",
       "clearScreen": "清屏",
       "copy": "複製",
       "find": "查詢",

@@ -20,6 +20,10 @@ pub(crate) enum ShortcutId {
     TerminalPasteSelected,
     TerminalFind,
     TerminalClear,
+    TerminalClearAll,
+    TerminalCommandPrevious,
+    TerminalCommandNext,
+    TerminalCommandSelect,
     TerminalSelectAll,
     ManageSyncGroups,
     ShowCommandSuggestions,
@@ -62,6 +66,10 @@ impl ShortcutId {
             Self::TerminalPasteSelected => "terminal.pasteSelected",
             Self::TerminalFind => "terminal.find",
             Self::TerminalClear => "terminal.clear",
+            Self::TerminalClearAll => "terminal.clearAll",
+            Self::TerminalCommandPrevious => "terminal.commandNav.prev",
+            Self::TerminalCommandNext => "terminal.commandNav.next",
+            Self::TerminalCommandSelect => "terminal.commandNav.select",
             Self::TerminalSelectAll => "terminal.selectAll",
             Self::ManageSyncGroups => "terminal.manageSyncGroups",
             Self::ShowCommandSuggestions => "terminal.showCommandSuggestions",
@@ -369,7 +377,7 @@ macro_rules! shortcut {
     };
 }
 
-pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 37] = [
+pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 41] = [
     shortcut!(
         TerminalCopy,
         Terminal,
@@ -413,6 +421,50 @@ pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 37] = [
         "meta+shift+f",
         Supported,
         "Opens terminal buffer search."
+    ),
+    shortcut!(
+        TerminalClearAll,
+        Terminal,
+        "terminalCtx.clearAll",
+        Terminal,
+        ShortcutKind::Direct,
+        "ctrl+shift+l",
+        "meta+shift+l",
+        Supported,
+        "Clears completed output and history while preserving input."
+    ),
+    shortcut!(
+        TerminalCommandPrevious,
+        Terminal,
+        "settings.shortcutLabels.commandNavPrev",
+        Terminal,
+        ShortcutKind::Direct,
+        "ctrl+shift+left",
+        "meta+shift+left",
+        Supported,
+        "Go to the previous command."
+    ),
+    shortcut!(
+        TerminalCommandNext,
+        Terminal,
+        "settings.shortcutLabels.commandNavNext",
+        Terminal,
+        ShortcutKind::Direct,
+        "ctrl+shift+right",
+        "meta+shift+right",
+        Supported,
+        "Go to the next command."
+    ),
+    shortcut!(
+        TerminalCommandSelect,
+        Terminal,
+        "settings.shortcutLabels.commandNavSelect",
+        Terminal,
+        ShortcutKind::Direct,
+        "ctrl+shift+/",
+        "meta+shift+/",
+        Supported,
+        "Select and extend command blocks."
     ),
     shortcut!(
         TerminalClear,
@@ -1024,6 +1076,10 @@ fn binding_for_action(id: ShortcutId, chord: &ShortcutChord, context: Option<&st
         ShortcutId::TerminalPasteSelected => binding!(TerminalPasteSelected),
         ShortcutId::TerminalFind => binding!(TerminalFind),
         ShortcutId::TerminalClear => binding!(TerminalClear),
+        ShortcutId::TerminalClearAll => binding!(TerminalClearAll),
+        ShortcutId::TerminalCommandPrevious => binding!(TerminalCommandPrevious),
+        ShortcutId::TerminalCommandNext => binding!(TerminalCommandNext),
+        ShortcutId::TerminalCommandSelect => binding!(TerminalCommandSelect),
         ShortcutId::TerminalSelectAll => binding!(TerminalSelectAll),
         ShortcutId::ManageSyncGroups => binding!(ManageSyncGroups),
         ShortcutId::ShowCommandSuggestions => binding!(ShowCommandSuggestions),
@@ -1314,7 +1370,7 @@ mod tests {
 
     #[test]
     fn registry_is_complete_unique_and_has_valid_platform_defaults() {
-        assert_eq!(SHORTCUT_REGISTRY.len(), 37);
+        assert_eq!(SHORTCUT_REGISTRY.len(), 41);
         let mut ids = HashSet::new();
         for definition in SHORTCUT_REGISTRY {
             assert!(ids.insert(definition.id));

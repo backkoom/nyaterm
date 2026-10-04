@@ -215,6 +215,41 @@ pub fn command_starts_suggestion_suppressing_program(command: &str) -> bool {
         .any(|segment| command_segment_starts_interactive_program(&segment))
 }
 
+/// Conservative submission fallback for command anchors when OSC marks are absent.
+/// Script runners with an explicit script or `-c` task are not interactive.
+pub fn command_starts_interactive_input(command: &str) -> bool {
+    if command_starts_suggestion_suppressing_program(command) {
+        return true;
+    }
+    split_command_segments(&sanitize_terminal_command(command))
+        .into_iter()
+        .any(|segment| {
+            let tokens = unwrap_command(&tokenize_shell_like(&segment));
+            let Some(first) = tokens.first() else {
+                return false;
+            };
+            let name = command_name(first);
+            match name.as_str() {
+                "cmd" | "powershell" | "pwsh" | "bash" | "zsh" | "fish" | "sh" | "wsl" => {
+                    tokens.len() == 1
+                        || tokens
+                            .iter()
+                            .skip(1)
+                            .all(|token| matches!(token.to_ascii_lowercase().as_str(), "-i" | "/k"))
+                }
+                "python" | "python3" | "python2" | "node" | "ruby" | "php" => {
+                    tokens.len() == 1
+                        || tokens
+                            .iter()
+                            .any(|token| matches!(token.as_str(), "-i" | "--interactive" | "-a"))
+                }
+                "mysql" | "mariadb" | "psql" | "sqlite3" | "redis-cli" | "irb" | "ipython"
+                | "R" | "julia" | "lua" | "telnet" | "ftp" | "sftp" => true,
+                _ => false,
+            }
+        })
+}
+
 pub fn is_pager_search_or_command_input(value: &str) -> bool {
     value.trim_start().starts_with(['/', '?', ':'])
 }
@@ -250,5 +285,31 @@ mod tests {
         assert!(is_pager_search_or_command_input("/error"));
         assert!(is_pager_single_key_input("q"));
         assert!(!is_pager_single_key_input("x"));
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    #[test]
+    fn interpreter_detection_distinguishes_scripts_from_interactive_input() {
+        use super::command_starts_interactive_input;
+        for command in [
+            "python3",
+            "sudo python -i",
+            "mysql -u root",
+            "node",
+            "env A=1 psql",
+            "less file",
+        ] {
+            assert!(command_starts_interactive_input(command), "{command}");
+        }
+        for command in [
+            "python3 script.py",
+            "node task.js",
+            "python -c 'print(1)'",
+            "ls",
+        ] {
+            assert!(!command_starts_interactive_input(command), "{command}");
+        }
     }
 }

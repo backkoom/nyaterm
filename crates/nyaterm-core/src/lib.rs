@@ -145,8 +145,8 @@ pub use command_search::{
     fuzzy_search_items, manual_empty_command_suggestions, search_command_sources,
 };
 pub use command_suggestion_suppression::{
-    command_starts_suggestion_suppressing_program, is_pager_search_or_command_input,
-    is_pager_single_key_input,
+    command_starts_interactive_input, command_starts_suggestion_suppressing_program,
+    is_pager_search_or_command_input, is_pager_single_key_input,
 };
 pub use credential_autofill::{
     CredentialPromptKind, compile_prompt_regex, credential_matches_prompt,

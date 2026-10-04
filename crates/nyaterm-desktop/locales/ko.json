@@ -2629,6 +2629,9 @@
       "view": "보기 및 레이아웃"
     },
     "shortcutLabels": {
+      "commandNavPrev": "Previous command",
+      "commandNavNext": "Next command",
+      "commandNavSelect": "Select command block",
       "clearScreen": "화면 지우기",
       "copy": "복사",
       "find": "찾기",

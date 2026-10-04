@@ -2629,6 +2629,9 @@
       "view": "Affichage et disposition"
     },
     "shortcutLabels": {
+      "commandNavPrev": "Previous command",
+      "commandNavNext": "Next command",
+      "commandNavSelect": "Select command block",
       "clearScreen": "Effacer l'écran",
       "copy": "Copier",
       "find": "Rechercher",

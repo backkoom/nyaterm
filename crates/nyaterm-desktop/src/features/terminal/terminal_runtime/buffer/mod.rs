@@ -854,7 +854,55 @@ impl NyaTermApp {
             TerminalFrameEvent::Snapshot(snapshot) => {
                 self.apply_terminal_snapshot_frame(snapshot, cx)
             }
+            TerminalFrameEvent::CommandNavigation { session_id, result } => {
+                if self.session.active_id() == Some(session_id.as_str()) {
+                    self.clear_terminal_selection(cx);
+                    self.clear_terminal_scroll_residual_for_session(Some(&session_id));
+                    self.set_terminal_scroll_offset_for_session_state_only(
+                        Some(&session_id),
+                        result.display_offset,
+                    );
+                    self.request_terminal_frame_snapshot_for_user_scroll(
+                        &session_id,
+                        result.display_offset,
+                    );
+                    if let Some((start, end)) = result.selection {
+                        self.terminal.selection.session_id = Some(session_id.clone());
+                        self.terminal.selection.selection =
+                            Some(crate::models::TerminalSelection::from_range(
+                                crate::models::TerminalBufferCellPos::new(start, 0),
+                                crate::models::TerminalBufferCellPos::new(
+                                    end,
+                                    result.cols.saturating_sub(1),
+                                ),
+                            ));
+                    }
+                    self.notify_terminal_surface_only(Some(&session_id), cx);
+                }
+                TerminalFrameApplyResult {
+                    chrome_dirty: false,
+                    surface_notify: None,
+                }
+            }
             TerminalFrameEvent::ClearExceptInput(snapshot) => {
+                // Readline shells can repaint their input after the local clear.
+                // Windows local shells retain the ConPTY host's physical cursor.
+                let redraw = self
+                    .session
+                    .metadata(&snapshot.session_id)
+                    .is_some_and(|metadata| {
+                        !metadata.disconnected
+                            && match &metadata.launch_config {
+                                crate::models::SessionLaunchConfig::Ssh(config) => {
+                                    !config.is_network_device()
+                                }
+                                crate::models::SessionLaunchConfig::Local(_) => !cfg!(windows),
+                                _ => false,
+                            }
+                    });
+                if redraw {
+                    let _ = self.write_session_raw_input_recorded(&snapshot.session_id, &[0x0c]);
+                }
                 if let Some(view) = self.terminal.view.views.get_mut(&snapshot.session_id) {
                     view.clear_presentation_except_input(snapshot.revision, &snapshot.snapshot);
                 }

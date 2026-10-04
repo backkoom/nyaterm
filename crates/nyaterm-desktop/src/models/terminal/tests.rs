@@ -1014,7 +1014,8 @@ fn terminal_frame_pipeline_background_chunks_are_deterministic_after_priority_sn
             TerminalFrameEvent::Output(_)
             | TerminalFrameEvent::ClearExceptInput(_)
             | TerminalFrameEvent::Search(_)
-            | TerminalFrameEvent::Rekeyed { .. } => None,
+            | TerminalFrameEvent::Rekeyed { .. }
+            | TerminalFrameEvent::CommandNavigation { .. } => None,
         })
         .expect("visible priority request should emit a snapshot");
     let expected = terminal_frame_snapshot_with_scroll_window(&reference, 0, true);

@@ -39,6 +39,50 @@ impl NyaTermApp {
         if text.is_empty() {
             return;
         }
+        let submitted_for_navigation =
+            get_tracked_submission_command(self.terminal.editing.input());
+        let interactive = self
+            .terminal
+            .editing
+            .state_mut()
+            .command_navigation_interactive;
+        let eligible = text == "\r"
+            && !submitted_for_navigation.is_empty()
+            && !interactive
+            && !self.ai.agent_capture_is_active_for(&id)
+            && self
+                .session
+                .metadata(&id)
+                .is_some_and(|metadata| match &metadata.launch_config {
+                    crate::models::SessionLaunchConfig::Local(_) => true,
+                    crate::models::SessionLaunchConfig::Ssh(config) => {
+                        !config.effective_terminal_shell_integration()
+                    }
+                    _ => false,
+                });
+        self.terminal
+            .view
+            .frame_pipeline
+            .note_command_input(id.clone(), eligible);
+        if text == "\u{4}"
+            || (text == "\r"
+                && matches!(
+                    submitted_for_navigation.trim(),
+                    "exit" | "quit" | "exit()" | "quit()" | ".exit" | ".quit" | "\\q"
+                ))
+        {
+            self.terminal
+                .editing
+                .state_mut()
+                .command_navigation_interactive = false;
+        } else if text == "\r"
+            && nyaterm_core::command_starts_interactive_input(&submitted_for_navigation)
+        {
+            self.terminal
+                .editing
+                .state_mut()
+                .command_navigation_interactive = true;
+        }
         let was_suppressed = self.terminal.assist.command_suggestions_suppressed;
         if text == "\u{3}" || (was_suppressed && text == "q") {
             self.terminal.assist.command_suggestions_suppressed = false;

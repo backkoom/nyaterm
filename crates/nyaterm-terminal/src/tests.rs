@@ -1176,33 +1176,41 @@ fn clear_except_input_preserves_prompt_edit_and_cursor_but_removes_history() {
     let after = screen.snapshot();
     assert_eq!(screen.scrollback_len(), 0);
     assert!(before.cursor.row > 0);
-    assert_eq!(after.cursor.row, 0);
+    assert_eq!(after.cursor.row, before.cursor.row);
     assert_eq!(after.cursor.col, before.cursor.col);
-    assert!(after.rows()[0].text.contains("prompt> draft"));
+    assert!(
+        after.rows()[before.cursor.row]
+            .text
+            .contains("prompt> draft")
+    );
     assert!(!screen.all_lines().join("\n").contains("old"));
     assert!(!screen.all_lines().join("\n").contains("below"));
     screen.advance(b"!\r\nnext");
-    assert!(screen.snapshot().rows()[0].text.contains("draft!"));
+    assert!(
+        screen.snapshot().rows()[before.cursor.row]
+            .text
+            .contains("draft!")
+    );
 }
 
 #[test]
-fn clear_except_input_moves_bottom_prompt_to_first_row() {
+fn clear_except_input_keeps_bottom_prompt_at_host_cursor_coordinates() {
     let mut screen = TerminalScreen::new(20, 12);
     screen.advance(b"\x1b[12;1Hroot# draft");
     screen.clear_except_input();
 
     let snapshot = screen.snapshot();
-    assert_eq!(snapshot.cursor.row, 0);
-    assert_eq!(snapshot.rows()[0].text, "root# draft");
+    assert_eq!(snapshot.cursor.row, 11);
+    assert_eq!(snapshot.rows()[11].text, "root# draft");
     assert!(
         snapshot
             .rows()
             .iter()
-            .skip(1)
+            .take(11)
             .all(|row| row.text.is_empty())
     );
     screen.advance(b"!");
-    assert_eq!(screen.snapshot().rows()[0].text, "root# draft!");
+    assert_eq!(screen.snapshot().rows()[11].text, "root# draft!");
 }
 
 #[test]
@@ -1217,9 +1225,9 @@ fn clear_except_input_retains_wrapped_edit_rows() {
         .expect("input start");
     screen.clear_except_input();
     let after = screen.snapshot();
-    assert_eq!(after.cursor.row, before.cursor.row - start_row);
+    assert_eq!(after.cursor.row, before.cursor.row);
     assert_eq!(after.cursor.col, before.cursor.col);
-    assert!(after.rows()[0].text.starts_with("input>"));
+    assert!(after.rows()[start_row].text.starts_with("input>"));
     assert!(screen.all_lines().join("\n").contains("input>"));
     assert!(screen.all_lines().join("").contains("abcdefghij"));
     assert!(!screen.all_lines().join("\n").contains("obsolete"));
@@ -1234,7 +1242,7 @@ fn clear_except_input_preserves_remote_saved_cursor_and_terminal_modes() {
     screen.advance(b"\x1b8X");
     let snapshot = screen.snapshot();
     assert!(snapshot.rows()[3].text.starts_with('X'));
-    assert!(snapshot.rows()[0].text.contains("prompt> draft"));
+    assert!(snapshot.rows()[2].text.contains("prompt> draft"));
 }
 
 #[test]
@@ -1243,7 +1251,7 @@ fn clear_except_input_keeps_wrapped_cursor_line_without_shell_markers() {
     screen.advance(b"obsolete\r\nlong-prompt> edit");
     screen.clear_except_input();
     assert!(
-        screen.snapshot().rows()[0].text.starts_with("long-pro"),
+        screen.snapshot().rows()[1].text.starts_with("long-pro"),
         "{:?}",
         screen.all_lines()
     );

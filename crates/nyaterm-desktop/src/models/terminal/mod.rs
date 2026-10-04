@@ -1522,6 +1522,23 @@ impl TerminalFramePipeline {
         })
     }
 
+    pub(crate) fn navigate_command(
+        &self,
+        session_id: String,
+        action: nyaterm_terminal::command_navigation::CommandNavigationAction,
+    ) {
+        let _ = self
+            .command_tx
+            .send(TerminalFrameCommand::NavigateCommand { session_id, action });
+    }
+
+    pub(crate) fn note_command_input(&self, session_id: String, fallback: bool) {
+        let _ = self.command_tx.send(TerminalFrameCommand::CommandInput {
+            session_id,
+            fallback,
+        });
+    }
+
     pub(crate) fn clear_session_except_input(&self, session_id: impl Into<String>) {
         let _ = self
             .command_tx
@@ -1780,6 +1797,14 @@ impl Default for TerminalFramePipeline {
 
 #[derive(Debug)]
 enum TerminalFrameCommand {
+    NavigateCommand {
+        session_id: String,
+        action: nyaterm_terminal::command_navigation::CommandNavigationAction,
+    },
+    CommandInput {
+        session_id: String,
+        fallback: bool,
+    },
     EnsureSession {
         session_id: String,
         encoding: String,
@@ -1860,6 +1885,10 @@ pub(crate) enum TerminalFrameSnapshotPurpose {
 
 #[derive(Clone, Debug)]
 pub(crate) enum TerminalFrameEvent {
+    CommandNavigation {
+        session_id: String,
+        result: nyaterm_terminal::command_navigation::CommandNavigationResult,
+    },
     Output(TerminalFrameOutputEvent),
     Snapshot(TerminalFrameSnapshotEvent),
     ClearExceptInput(TerminalFrameSnapshotEvent),
@@ -1878,6 +1907,7 @@ impl TerminalFrameEvent {
             Self::Snapshot(event) | Self::ClearExceptInput(event) => &event.session_id,
             Self::Search(event) => &event.session_id,
             Self::Rekeyed { new_id, .. } => new_id,
+            Self::CommandNavigation { session_id, .. } => session_id,
         }
     }
 }
@@ -2105,7 +2135,9 @@ fn terminal_frame_event_wake_interest(event: &TerminalFrameEvent) -> u8 {
             TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT
         }
         TerminalFrameEvent::Search(_) => TERMINAL_FRAME_EVENT_WAKE_SEARCH,
-        TerminalFrameEvent::Rekeyed { .. } => TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT,
+        TerminalFrameEvent::Rekeyed { .. } | TerminalFrameEvent::CommandNavigation { .. } => {
+            TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT
+        }
     }
 }
 
@@ -2286,6 +2318,7 @@ fn terminal_frame_event_can_drop_under_pressure(event: &TerminalFrameEvent) -> b
         TerminalFrameEvent::Snapshot(_)
         | TerminalFrameEvent::ClearExceptInput(_)
         | TerminalFrameEvent::Search(_)
+        | TerminalFrameEvent::CommandNavigation { .. }
         | TerminalFrameEvent::Rekeyed { .. } => false,
     }
 }
@@ -3485,6 +3518,27 @@ fn run_terminal_frame_processor(
                     push_terminal_frame_worker_event(
                         &event_queue,
                         TerminalFrameEvent::Snapshot(event),
+                    );
+                }
+            }
+            TerminalFrameCommand::CommandInput {
+                session_id,
+                fallback,
+            } => {
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    session.screen.reset_command_navigation();
+                    if fallback {
+                        session.screen.record_fallback_command();
+                    }
+                }
+            }
+            TerminalFrameCommand::NavigateCommand { session_id, action } => {
+                if let Some(session) = sessions.get_mut(&session_id)
+                    && let Some(result) = session.screen.navigate_command(action)
+                {
+                    push_terminal_frame_worker_event(
+                        &event_queue,
+                        TerminalFrameEvent::CommandNavigation { session_id, result },
                     );
                 }
             }

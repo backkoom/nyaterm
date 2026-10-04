@@ -494,6 +494,21 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn navigate_terminal_command(
+        &mut self,
+        action: nyaterm_terminal::command_navigation::CommandNavigationAction,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(session_id) = self.session.active_id_owned() {
+            self.terminal
+                .view
+                .frame_pipeline
+                .navigate_command(session_id, action);
+            self.terminal.view.frame_pipeline.arm_event_wakes();
+        }
+        cx.notify();
+    }
+
     pub(in crate::features) fn clear_terminal(&mut self, cx: &mut Context<Self>) {
         self.clear_terminal_selection(cx);
         self.terminal.menus.actions_open = false;

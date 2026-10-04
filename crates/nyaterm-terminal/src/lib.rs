@@ -14,6 +14,7 @@ use alacritty_terminal::vte::ansi;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
 mod cells;
+pub mod command_navigation;
 pub mod editing;
 mod encoding;
 mod graphics;
@@ -474,6 +475,7 @@ impl Dimensions for TermSize {
 
 #[derive(Debug, Clone, Default)]
 struct LineMetadata {
+    command_anchor: bool,
     timestamp_ms: Option<u64>,
     signature: Option<u64>,
     revision: Option<u64>,
@@ -483,6 +485,8 @@ struct LineMetadata {
 
 #[derive(Debug, Default)]
 struct ScreenLineState {
+    command_navigation: command_navigation::CommandNavigationState,
+    pending_command_prompt: Option<i64>,
     epoch: u64,
     logical_origin: i64,
     metadata: BTreeMap<i64, LineMetadata>,
@@ -803,6 +807,10 @@ impl TerminalCore {
         if self.cols != old_cols {
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
+            self.primary_lines.command_navigation = Default::default();
+            self.alternate_lines.command_navigation = Default::default();
+            self.primary_lines.pending_command_prompt = None;
+            self.alternate_lines.pending_command_prompt = None;
             self.primary_lines.active_input_start = None;
             self.primary_lines.input_anchor = None;
             self.primary_lines.active_input_end = None;
@@ -1033,6 +1041,11 @@ impl TerminalCore {
 
     /// Discard history and completed output while retaining the editable input rows.
     pub fn clear_except_input(&mut self) {
+        self.active_line_state_mut().command_navigation = Default::default();
+        self.active_line_state_mut().pending_command_prompt = None;
+        for metadata in self.active_line_state_mut().metadata.values_mut() {
+            metadata.command_anchor = false;
+        }
         let cursor = self.term.renderable_content().cursor.point;
         let cursor_row = cursor.line.0.clamp(0, self.rows.saturating_sub(1) as i32) as usize;
         let state = self.active_line_state();
@@ -1067,19 +1080,14 @@ impl TerminalCore {
             }
         }
         self.term.grid_mut().cursor = cursor;
-        if start > 0 {
-            self.term
-                .grid_mut()
-                .scroll_up(&(Line(0)..Line(end as i32 + 1)), start);
-            self.term.grid_mut().cursor.point.line -= start as i32;
-            // Moving blank rows into history must not make them scrollable again.
-            self.clear_scrollback();
-        }
+        // The host shell owns physical cursor coordinates (especially CMD/ConPTY).
+        // Keep input at its original rows rather than relocating it behind the host.
         self.drain_alacritty_events();
         self.sync_presentation_state();
         let origin = self.active_line_state().logical_origin;
         self.active_line_state_mut().metadata.retain(|line, _| {
-            *line >= origin && *line <= origin.saturating_add((end - start) as i64)
+            *line >= origin.saturating_add(start as i64)
+                && *line <= origin.saturating_add(end as i64)
         });
         self.graphics.clear_screen(self.active_graphics_screen());
         self.clear_snapshot_row_cache();
@@ -1738,6 +1746,10 @@ impl TerminalCore {
         if reset_generation != self.consumed_reset_generation {
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
+            self.primary_lines.command_navigation = Default::default();
+            self.alternate_lines.command_navigation = Default::default();
+            self.primary_lines.pending_command_prompt = None;
+            self.alternate_lines.pending_command_prompt = None;
             self.primary_lines.active_input_start = None;
             self.primary_lines.input_anchor = None;
             self.primary_lines.active_input_end = None;
@@ -1789,6 +1801,8 @@ impl TerminalCore {
     ) {
         if generation != state.consumed_generation {
             state.metadata.clear();
+            state.command_navigation = Default::default();
+            state.pending_command_prompt = None;
             state.logical_origin = 0;
             state.active_input_start = None;
             state.input_anchor = None;
@@ -1854,6 +1868,7 @@ impl TerminalCore {
                     self.commit_shell_input_range(start, end);
                 }
                 let state = self.active_line_state_mut();
+                state.pending_command_prompt = Some(logical_line);
                 state.active_input_start = None;
                 state.input_anchor = None;
                 state.active_input_end = None;
@@ -1873,6 +1888,10 @@ impl TerminalCore {
             }
             ShellBoundaryKind::OutputStart => {
                 metadata.command_mark = Some(ShellCommandMark::Output);
+                let state = self.active_line_state_mut();
+                if let Some(prompt) = state.pending_command_prompt.take() {
+                    state.metadata.entry(prompt).or_default().command_anchor = true;
+                }
                 let start = self.active_line_state().active_input_start;
                 let end = if point.column.0 == 0 {
                     logical_line.saturating_sub(1)
