@@ -1,12 +1,15 @@
 //! GPUI coordination for shell input evidence and predictions.
 
 use std::time::Instant;
+use zeroize::Zeroize;
 
 use gpui::Context;
 use nyaterm_core::command_starts_suggestion_suppressing_program;
+use nyaterm_core::command_suggestion_suppression::command_starts_line_editor;
 use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase};
 use nyaterm_core::terminal::input_tracker::{
     MAX_TRACKED_INPUT_BYTES, TerminalInputState, get_tracked_submission_command,
+    strip_terminal_command_prompt,
 };
 use nyaterm_terminal::editing::{recover_marked_input, resolve_input};
 
@@ -40,7 +43,7 @@ impl NyaTermApp {
             return;
         }
         let submitted_for_navigation =
-            get_tracked_submission_command(self.terminal.editing.input());
+            get_tracked_submission_command(self.terminal.editing.predicted_input());
         let interactive = self
             .terminal
             .editing
@@ -64,6 +67,13 @@ impl NyaTermApp {
             .view
             .frame_pipeline
             .note_command_input(id.clone(), eligible);
+        if text.contains(['\r', '\n']) {
+            let state = self.terminal.editing.state_mut();
+            state.launched_line_editor = command_starts_line_editor(&submitted_for_navigation);
+            state.echo_line_editor = false;
+        } else if matches!(text, "\u{3}" | "\u{4}") {
+            self.terminal.editing.state_mut().launched_line_editor = false;
+        }
         if text == "\u{4}"
             || (text == "\r"
                 && matches!(
@@ -91,7 +101,7 @@ impl NyaTermApp {
             && self.terminal.assist.pending_command_history_entry.is_none()
             && text.contains(['\r', '\n'])
         {
-            let submitted = get_tracked_submission_command(self.terminal.editing.input());
+            let submitted = get_tracked_submission_command(self.terminal.editing.predicted_input());
             if !submitted.is_empty() {
                 if command_starts_suggestion_suppressing_program(&submitted) {
                     self.terminal.assist.command_suggestions_suppressed = true;
@@ -131,6 +141,9 @@ impl NyaTermApp {
                 {
                     state.mapping = None;
                     state.selection = None;
+                    if this.session.active_id() == Some(id.as_str()) {
+                        this.dismiss_command_suggestions(cx);
+                    }
                     cx.notify();
                 }
             });
@@ -165,6 +178,13 @@ impl NyaTermApp {
             return;
         };
         let geometry = (snapshot.cols, snapshot.viewport_rows, line_id.epoch);
+        let shell_session = self.session.metadata(id).is_some_and(|metadata| {
+            matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::Local(_)
+                    | crate::models::SessionLaunchConfig::Ssh(_)
+            )
+        });
         let state = self.terminal.editing.state_mut();
         if state.awaiting_snapshot {
             return;
@@ -214,6 +234,7 @@ impl NyaTermApp {
                 || state.model.input.value.is_empty())
             && let Some((value, cursor)) = recover_marked_input(&snapshot, MAX_TRACKED_INPUT_BYTES)
         {
+            state.model.input.value.zeroize();
             state.model.input = TerminalInputState {
                 value,
                 cursor,
@@ -223,6 +244,40 @@ impl NyaTermApp {
             mapping = resolve_input(&snapshot, &state.model.input.value, cursor);
         }
         let queued = if let Some(mapping) = mapping {
+            // A unique echo can also come from canonical TTY input (cat/tee).
+            // Require a shell prompt or a positively identified child line editor.
+            let prompt = mapping.cells.first().map(|first| {
+                snapshot
+                    .row(first.row)
+                    .into_iter()
+                    .flat_map(|row| row.cells.iter().take(first.col))
+                    .filter(|cell| cell.width != 0)
+                    .map(|cell| {
+                        if cell.text.is_empty() {
+                            " "
+                        } else {
+                            cell.text.as_ref()
+                        }
+                    })
+                    .collect::<String>()
+            });
+            let known_prompt = prompt.as_ref().is_some_and(|prefix| {
+                !prefix.trim().is_empty()
+                    && (strip_terminal_command_prompt(prefix).is_empty()
+                        || state.line_editor_prompt.as_ref() == Some(prefix))
+            });
+            let has_prompt = prompt
+                .as_ref()
+                .is_some_and(|prefix| !prefix.trim().is_empty());
+            state.echo_line_editor =
+                shell_session && (known_prompt || (state.launched_line_editor && has_prompt));
+            if state.echo_line_editor
+                && prompt
+                    .as_ref()
+                    .is_some_and(|prefix| !prefix.trim().is_empty())
+            {
+                state.line_editor_prompt = prompt;
+            }
             if state.mapping.as_ref().is_some_and(|old| old != &mapping) {
                 state.selection = None;
                 state.selection_origin_version = None;
@@ -267,6 +322,66 @@ mod tests {
     use crate::test_support::TestConfigDir;
 
     struct InputHost;
+
+    #[test]
+    fn foreground_echo_cannot_move_delete_or_replace_shell_input() {
+        let dir = TestConfigDir::new("nyaterm-shell-edit-foreground");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"cat", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "$ cat".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.can_use_smart_cursor_selection());
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_shell_editing_input(b"abcdef", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "abcdef".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert_eq!(
+                app.terminal.editing.state().unwrap().capability,
+                EditCapability::EchoMatched
+            );
+            assert!(!app.can_use_smart_cursor_selection());
+            assert!(!app.move_smart_input_cursor(1, cx));
+            let range =
+                nyaterm_core::terminal::input_tracker::InputSelectionRange::new(1, 4).unwrap();
+            assert!(!app.delete_smart_input_selection(range, cx));
+            assert!(!app.replace_smart_input_selection(range, "X", cx));
+            assert!(!app.replace_smart_input_selection_with_paste(range, "X", cx));
+            app.terminal.editing.activate("other");
+            assert!(
+                app.terminal.editing.sessions["s1"]
+                    .model
+                    .input
+                    .value
+                    .is_empty()
+            );
+        });
+    }
+
+    #[test]
+    fn docker_line_editor_supports_custom_prompt_but_loses_permission_on_cat() {
+        let dir = TestConfigDir::new("nyaterm-shell-edit-docker-context");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"docker exec -it box sh", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_shell_editing_input(b"cat", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "custom> cat".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.can_use_smart_cursor_selection());
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_shell_editing_input(b"abcdef", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "abcdef".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(!app.can_use_smart_cursor_selection());
+        });
+    }
 
     impl Render for InputHost {
         fn render(
@@ -331,7 +446,7 @@ mod tests {
                 assert!(app.terminal_should_defer_key_text_to_input_handler(&key));
                 app.replace_text_in_range(None, "中文", window, cx);
                 assert!(app.terminal.input.ime_marked_text.is_empty());
-                assert_eq!(app.terminal.editing.input().value, "a中文ef");
+                assert_eq!(app.terminal.editing.predicted_input().value, "a中文ef");
                 assert_eq!(
                     app.terminal.editing.state().unwrap().model.version,
                     version + 1
@@ -377,7 +492,7 @@ mod tests {
             assert_eq!(state.capability, EditCapability::EchoMatched);
             assert!(app.can_use_smart_cursor_selection());
             app.clear_command_suggestion_draft(cx);
-            assert_eq!(app.terminal.editing.input().value, "echo abc");
+            assert_eq!(app.terminal.editing.predicted_input().value, "echo abc");
         });
     }
 
@@ -401,8 +516,8 @@ mod tests {
             app.terminal
                 .seed_session_view("s1".into(), "\x1b]133;C\x07$ e".into(), "UTF-8");
             app.reconcile_shell_editing("s1", cx);
-            assert!(!app.terminal.editing.input().desynced);
-            assert_eq!(app.terminal.editing.input().value, "echo abc");
+            assert!(!app.terminal.editing.predicted_input().desynced);
+            assert_eq!(app.terminal.editing.predicted_input().value, "echo abc");
             assert!(!app.can_use_smart_cursor_selection());
             app.terminal
                 .seed_session_view("s1".into(), "$ echo abc".into(), "UTF-8");
@@ -447,7 +562,7 @@ mod tests {
             // The fixture deliberately has no live transport; a rejected write
             // consumes the edit gesture without sending a fallback character.
             assert!(app.replace_smart_input_selection(range, "X", cx));
-            assert_eq!(app.terminal.editing.input().value, "abcdef");
+            assert_eq!(app.terminal.editing.predicted_input().value, "abcdef");
             assert_eq!(app.terminal.selection.selection, Some(selection));
             assert_eq!(
                 app.terminal.editing.state().unwrap().model.phase,
@@ -484,7 +599,7 @@ mod tests {
             assert!(app.smart_cursor_selected_input_range().is_some());
             app.note_shell_editing_input(b"d", cx);
             assert!(app.smart_cursor_selected_input_range().is_none());
-            assert_eq!(app.terminal.editing.input().value, "abcd");
+            assert_eq!(app.terminal.editing.predicted_input().value, "abcd");
             app.terminal
                 .seed_session_view("s1".into(), "$ abcd".into(), "UTF-8");
             app.reconcile_shell_editing("s1", cx);
@@ -513,7 +628,7 @@ mod tests {
             app.sync_input.toggle_broadcast_to_all();
             app.terminal.assist.credential_prompt_input_until_ms = u64::MAX;
             app.note_shell_editing_input(b"secret", cx);
-            assert!(app.terminal.editing.input().value.is_empty());
+            assert!(app.terminal.editing.predicted_input().value.is_empty());
             assert!(!app.can_use_smart_cursor_selection());
         });
     }

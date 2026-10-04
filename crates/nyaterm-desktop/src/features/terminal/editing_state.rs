@@ -20,6 +20,9 @@ pub(super) struct SessionEditingState {
     pub(super) command_navigation_interactive: bool,
     pub(super) model: ShellEditState,
     pub(super) capability: EditCapability,
+    pub(super) echo_line_editor: bool,
+    pub(super) launched_line_editor: bool,
+    pub(super) line_editor_prompt: Option<String>,
     pub(super) mapping: Option<InputMapping>,
     pub(super) selection: Option<(TerminalSelection, u64)>,
     pub(super) selection_origin_version: Option<u64>,
@@ -53,6 +56,15 @@ impl SnapshotEvidence {
 }
 
 impl SessionEditingState {
+    pub(super) fn allows_editing(&self) -> bool {
+        self.capability.allows_editing(self.echo_line_editor)
+    }
+
+    fn deactivate(&mut self) {
+        self.model.deactivate(self.allows_editing());
+        self.invalidate();
+    }
+
     pub(super) fn invalidate(&mut self) {
         self.model.invalidate();
         self.capability = EditCapability::None;
@@ -68,7 +80,7 @@ impl TerminalEditingState {
     pub(super) fn activate(&mut self, session_id: &str) {
         if self.active != session_id {
             if let Some(state) = self.sessions.get_mut(&self.active) {
-                state.invalidate();
+                state.deactivate();
             }
             self.active = session_id.to_string();
             self.state_mut().invalidate();
@@ -82,7 +94,7 @@ impl TerminalEditingState {
         self.sessions.entry(self.active.clone()).or_default()
     }
 
-    pub(super) fn input(&self) -> &TerminalInputState {
+    pub(super) fn predicted_input(&self) -> &TerminalInputState {
         static EMPTY: std::sync::OnceLock<TerminalInputState> = std::sync::OnceLock::new();
         self.state().map_or_else(
             || EMPTY.get_or_init(TerminalInputState::new),
@@ -90,11 +102,25 @@ impl TerminalEditingState {
         )
     }
 
+    pub(super) fn assist_input(&self) -> &TerminalInputState {
+        static UNAVAILABLE: std::sync::OnceLock<TerminalInputState> = std::sync::OnceLock::new();
+        self.state()
+            .and_then(|state| state.model.assist_input())
+            .unwrap_or_else(|| {
+                UNAVAILABLE.get_or_init(|| TerminalInputState {
+                    desynced: true,
+                    desync_reason: Some("unconfirmed_input"),
+                    ..TerminalInputState::new()
+                })
+            })
+    }
+
     /// Compatibility adapter for command suggestion replacement. Invalidates any
     /// old mapping before handing out mutable input, so it cannot authorize edits.
     pub(super) fn input_mut(&mut self) -> &mut TerminalInputState {
         let state = self.state_mut();
         state.invalidate();
+        state.model.clear_input();
         &mut state.model.input
     }
 
@@ -115,6 +141,7 @@ impl super::state::TerminalFeatureState {
     pub(in crate::features) fn invalidate_shell_editing_session(&mut self, session_id: &str) {
         if let Some(state) = self.editing.sessions.get_mut(session_id) {
             state.invalidate();
+            state.model.clear_input();
             state.model.input.desynced = true;
         }
     }
@@ -123,21 +150,26 @@ impl super::state::TerminalFeatureState {
 #[cfg(test)]
 mod tests {
     use super::TerminalEditingState;
-    use nyaterm_core::terminal::editing::EditPhase;
+    use nyaterm_core::terminal::editing::{EditCapability, EditPhase};
     use std::time::Instant;
 
     #[test]
-    fn switching_sessions_keeps_one_input_per_session_and_cancels_pending_navigation() {
+    fn switching_sessions_retains_only_confirmed_editable_input() {
         let mut state = TerminalEditingState::default();
         state.activate("one");
         state.state_mut().model.note_input("abc", Instant::now());
+        state.state_mut().model.confirm();
+        state.state_mut().capability = EditCapability::MarkedShell;
         state.state_mut().model.queued_cursor = Some(1);
         state.activate("two");
         state.state_mut().model.note_input("xyz", Instant::now());
         state.activate("one");
-        assert_eq!(state.input().value, "abc");
+        assert_eq!(state.predicted_input().value, "abc");
         assert_eq!(state.state().unwrap().model.phase, EditPhase::Uncertain);
         assert_eq!(state.state().unwrap().model.queued_cursor, None);
-        assert_eq!(state.sessions["two"].model.input.value, "xyz");
+        assert!(state.sessions["two"].model.input.value.is_empty());
+        assert!(state.assist_input().desynced);
+        state.state_mut().model.confirm();
+        assert_eq!(state.assist_input().value, "abc");
     }
 }

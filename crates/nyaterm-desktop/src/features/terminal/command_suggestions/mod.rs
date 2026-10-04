@@ -288,7 +288,7 @@ impl NyaTermApp {
             .interaction_command_suggestion_min_chars
             .max(1) as usize;
         let below_min_chars =
-            terminal_input_tracker_below_min_chars(self.terminal.editing.input(), min_chars);
+            terminal_input_tracker_below_min_chars(self.terminal.editing.assist_input(), min_chars);
         timing.min_chars = min_chars_started_at.elapsed();
         if below_min_chars {
             let hide_started_at = Instant::now();
@@ -305,12 +305,13 @@ impl NyaTermApp {
         }
 
         let pattern_started_at = Instant::now();
-        let pattern_chars = command_suggestion_input_candidate_chars(self.terminal.editing.input());
+        let pattern_chars =
+            command_suggestion_input_candidate_chars(self.terminal.editing.assist_input());
         timing.pattern = pattern_started_at.elapsed();
 
         let pager_started_at = Instant::now();
         let pager_input =
-            command_suggestion_input_obvious_pager_prefix(self.terminal.editing.input());
+            command_suggestion_input_obvious_pager_prefix(self.terminal.editing.assist_input());
         timing.pager = pager_started_at.elapsed();
         if pager_input {
             let hide_started_at = Instant::now();
@@ -327,7 +328,8 @@ impl NyaTermApp {
         }
 
         let eligibility_started_at = Instant::now();
-        let can_suggest = command_suggestion_input_can_defer_refresh(self.terminal.editing.input());
+        let can_suggest =
+            command_suggestion_input_can_defer_refresh(self.terminal.editing.assist_input());
         timing.eligibility = eligibility_started_at.elapsed();
         if !can_suggest {
             let hide_started_at = Instant::now();
@@ -461,7 +463,7 @@ impl NyaTermApp {
             self.hide_command_suggestions_if_present(cx);
             return;
         };
-        if !command_suggestion_input_can_defer_refresh(self.terminal.editing.input()) {
+        if !command_suggestion_input_can_defer_refresh(self.terminal.editing.assist_input()) {
             self.hide_command_suggestions_if_present(cx);
             return;
         }
@@ -486,7 +488,7 @@ impl NyaTermApp {
             .summary()
             .interaction_command_suggestion_max_chars
             .max(min_chars as u32) as usize;
-        let pattern = get_tracked_command(self.terminal.editing.input());
+        let pattern = get_tracked_command(self.terminal.editing.assist_input());
         let pattern_chars = pattern.chars().count();
         let results = if pattern.trim().is_empty() {
             manual_empty_command_suggestions(
@@ -496,7 +498,7 @@ impl NyaTermApp {
                 Some(min_chars),
                 Some(max_chars),
             )
-        } else if can_suggest_from_tracked_command(self.terminal.editing.input(), &pattern) {
+        } else if can_suggest_from_tracked_command(self.terminal.editing.assist_input(), &pattern) {
             search_command_sources(
                 &self.commands.command_history_snapshot(),
                 &self.commands.quick_commands_snapshot(),
@@ -607,10 +609,10 @@ impl NyaTermApp {
             .interaction_command_suggestion_max_chars
             .max(min_chars as u32) as usize;
         let pattern_started_at = Instant::now();
-        let pattern = get_tracked_command(self.terminal.editing.input());
+        let pattern = get_tracked_command(self.terminal.editing.assist_input());
         let pattern_chars = pattern.chars().count();
         timing.pattern = pattern_started_at.elapsed();
-        if !can_suggest_from_tracked_command(self.terminal.editing.input(), &pattern) {
+        if !can_suggest_from_tracked_command(self.terminal.editing.assist_input(), &pattern) {
             let hide_started_at = Instant::now();
             self.hide_command_suggestions_if_present(cx);
             timing.hide_popup = hide_started_at.elapsed();
@@ -660,7 +662,7 @@ impl NyaTermApp {
                 .settings
                 .summary()
                 .interaction_command_suggestions_enabled
-            || get_tracked_command(self.terminal.editing.input()) != request.pattern
+            || get_tracked_command(self.terminal.editing.assist_input()) != request.pattern
         {
             return;
         }
@@ -767,12 +769,17 @@ impl NyaTermApp {
             outcome,
             byte_count,
             pattern_chars,
-            tracker_value_bytes = self.terminal.editing.input().value.len(),
-            tracker_cursor = self.terminal.editing.input().cursor,
-            tracker_desynced = self.terminal.editing.input().desynced,
-            tracker_desync_reason = self.terminal.editing.input().desync_reason.unwrap_or(""),
-            tracker_multiline = self.terminal.editing.input().multiline,
-            tracker_paste_mode = self.terminal.editing.input().paste_mode,
+            tracker_value_bytes = self.terminal.editing.predicted_input().value.len(),
+            tracker_cursor = self.terminal.editing.predicted_input().cursor,
+            tracker_desynced = self.terminal.editing.predicted_input().desynced,
+            tracker_desync_reason = self
+                .terminal
+                .editing
+                .predicted_input()
+                .desync_reason
+                .unwrap_or(""),
+            tracker_multiline = self.terminal.editing.predicted_input().multiline,
+            tracker_paste_mode = self.terminal.editing.predicted_input().paste_mode,
             popup_visible_at_start,
             popup_visible = self.terminal.assist.command_suggestions.is_some(),
             total_us = total_duration.as_micros(),
@@ -815,9 +822,9 @@ impl NyaTermApp {
             result_count,
             command_history_count = self.commands.command_history().len(),
             quick_command_count = self.commands.quick_commands().len(),
-            tracker_value_bytes = self.terminal.editing.input().value.len(),
-            tracker_desynced = self.terminal.editing.input().desynced,
-            tracker_multiline = self.terminal.editing.input().multiline,
+            tracker_value_bytes = self.terminal.editing.predicted_input().value.len(),
+            tracker_desynced = self.terminal.editing.predicted_input().desynced,
+            tracker_multiline = self.terminal.editing.predicted_input().multiline,
             popup_visible_at_start,
             popup_visible = self.terminal.assist.command_suggestions.is_some(),
             total_us = total_duration.as_micros(),
@@ -918,6 +925,10 @@ impl NyaTermApp {
         execute: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.terminal.editing.assist_input().desynced {
+            self.hide_command_suggestions_if_present(cx);
+            return false;
+        }
         let Some(state) = self.terminal.assist.command_suggestions.clone() else {
             return false;
         };
@@ -1551,6 +1562,41 @@ mod tests {
     };
 
     #[test]
+    fn uncertain_input_cannot_start_or_publish_a_suggestion_search() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-confidence");
+        let mut cx = TestAppContext::single();
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"echo", cx);
+            let request = app
+                .prepare_command_suggestion_search(1, cx)
+                .expect("ordinary typing predictions can request suggestions");
+            app.terminal.editing.state_mut().model.invalidate();
+            assert!(app.prepare_command_suggestion_search(1, cx).is_none());
+            app.publish_command_suggestion_search(
+                request,
+                vec![nyaterm_core::FuzzyResult {
+                    command: "echo example".into(),
+                    source: "history".into(),
+                    score: 1,
+                    indices: vec![],
+                    display: "echo example".into(),
+                }],
+                Duration::ZERO,
+                cx,
+            );
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
+            assert!(!app.apply_selected_command_suggestion(true, cx));
+            assert!(app.terminal.assist.pending_command_history_entry.is_none());
+        });
+    }
+
+    #[test]
     fn terminal_line_prefix_uses_terminal_cells_for_wide_chars() {
         assert_eq!(terminal_line_prefix_for_cell_col("界x", 0), "");
         assert_eq!(terminal_line_prefix_for_cell_col("界x", 1), "");
@@ -1729,6 +1775,13 @@ mod tests {
         let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
 
         cx.update_entity(&app, |app, cx| {
+            // Exercise write failure with an eligible typing prediction. A stale
+            // popup is now rejected before any write is attempted.
+            app.terminal
+                .editing
+                .state_mut()
+                .model
+                .note_input("ps", Instant::now());
             app.terminal.assist.command_suggestions = Some(CommandSuggestionState {
                 session_id: "missing".to_string(),
                 draft: "ps".to_string(),
@@ -1827,13 +1880,19 @@ mod tests {
             // Typing inside the program neither suggests nor records history.
             app.note_command_suggestion_input(b"11", cx);
             assert!(app.terminal.assist.command_suggestions.is_none());
-            assert_eq!(app.terminal.editing.input(), &TerminalInputState::new());
+            assert_eq!(
+                app.terminal.editing.predicted_input(),
+                &TerminalInputState::new()
+            );
 
             *app.terminal.editing.input_mut() =
                 apply_terminal_input_data(&TerminalInputState::new(), "vim ");
             app.note_shell_editing_input(b"a.txt\r", cx);
             assert!(app.terminal.assist.pending_command_history_entry.is_none());
-            assert_eq!(app.terminal.editing.input(), &TerminalInputState::new());
+            assert_eq!(
+                app.terminal.editing.predicted_input(),
+                &TerminalInputState::new()
+            );
         });
     }
 
@@ -1885,6 +1944,7 @@ mod tests {
             assert!(!app.active_terminal_uses_alternate_screen());
             *app.terminal.editing.input_mut() =
                 apply_terminal_input_data(&TerminalInputState::new(), "vim 1");
+            app.terminal.editing.state_mut().model.confirm();
             app.prepare_command_suggestion_search(1, cx)
                 .expect("shell line should still build a request")
         });

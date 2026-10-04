@@ -885,7 +885,7 @@ mod tests {
 
         state.reset_assist_for_session_switch();
 
-        assert_eq!(state.editing.input().value, "git status");
+        assert_eq!(state.editing.predicted_input().value, "git status");
         assert!(!state.assist.command_suggestions_suppressed);
         assert!(state.assist.pending_command_history_entry.is_none());
         assert!(state.assist.credential_autofill_buffer.is_empty());

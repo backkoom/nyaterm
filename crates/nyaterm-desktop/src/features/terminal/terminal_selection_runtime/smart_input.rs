@@ -1,8 +1,13 @@
-use gpui::{App, Context, KeyDownEvent, MouseUpEvent, Pixels, Point};
+use gpui::{
+    App, Context, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseUpEvent, Pixels, Point,
+};
 use nyaterm_core::terminal::editing::{EditIntent, EditPhase, EditPlan, plan_edit};
 use nyaterm_core::terminal::input_tracker::InputSelectionRange;
 use nyaterm_terminal::editing::resolve_input;
 use nyaterm_terminal::navigation::{NavigationKey, navigation_key_bytes};
+use nyaterm_terminal_gpui::{
+    TerminalKeyMode, terminal_key_bytes_with_mode, terminal_key_release_bytes_with_mode,
+};
 
 use super::helpers::SmartSelectionEdge;
 use super::metrics::{
@@ -15,7 +20,7 @@ use crate::models::{TerminalBufferCellPos, TerminalSelection};
 
 fn shell_edit_payload(
     plan: &EditPlan,
-    application_cursor: bool,
+    mode: TerminalKeyMode,
     insertion_wire: Vec<u8>,
 ) -> (Vec<u8>, Vec<u8>) {
     let key = if plan.move_right {
@@ -23,12 +28,37 @@ fn shell_edit_payload(
     } else {
         NavigationKey::Left
     };
-    let mut logical = navigation_key_bytes(key, application_cursor).repeat(plan.move_steps);
+    // Recording/tracking consumes legacy logical intents. The wire uses exactly
+    // the same press/release encoder as physical input, including Kitty flags.
+    let mut logical = navigation_key_bytes(key, mode.application_cursor).repeat(plan.move_steps);
     logical.extend(std::iter::repeat_n(0x7f, plan.delete_steps));
-    let mut wire = logical.clone();
+    let mut wire = shell_edit_key_bytes(if plan.move_right { "right" } else { "left" }, mode)
+        .repeat(plan.move_steps);
+    wire.extend(shell_edit_key_bytes("backspace", mode).repeat(plan.delete_steps));
     wire.extend(insertion_wire);
     logical.extend_from_slice(plan.insert_text.as_bytes());
     (wire, logical)
+}
+
+fn shell_edit_key_bytes(key: &str, mode: TerminalKeyMode) -> Vec<u8> {
+    let keystroke = Keystroke {
+        key: key.into(),
+        key_char: None,
+        modifiers: Modifiers::default(),
+    };
+    let mut bytes = terminal_key_bytes_with_mode(
+        &KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        },
+        mode,
+    )
+    .expect("shell editing keys have a terminal encoding");
+    if let Some(release) = terminal_key_release_bytes_with_mode(&KeyUpEvent { keystroke }, mode) {
+        bytes.extend(release);
+    }
+    bytes
 }
 
 impl NyaTermApp {
@@ -88,6 +118,7 @@ impl NyaTermApp {
             && self.active_terminal_display_offset() == 0
             && self.terminal.editing.state().is_some_and(|state| {
                 !state.awaiting_snapshot
+                    && state.allows_editing()
                     && !state.model.input.desynced
                     && !state.model.input.line_rewrite_required
                     && !state.model.input.multiline
@@ -250,14 +281,13 @@ impl NyaTermApp {
             return true;
         }
         let changes_text = plan.delete_steps > 0 || !plan.insert_text.is_empty();
-        let protocol = self.terminal_protocol_state_for_session(&id);
+        let mode = self.terminal_key_mode_for_session(Some(&id));
         let insertion_wire = if paste {
             self.wrap_terminal_paste_bytes_for_session(&id, &plan.insert_text)
         } else {
             self.encode_session_outgoing(&id, plan.insert_text.as_bytes())
         };
-        let (wire, logical) =
-            shell_edit_payload(&plan, protocol.application_cursor_keys, insertion_wire);
+        let (wire, logical) = shell_edit_payload(&plan, mode, insertion_wire);
         let snapshot = self.terminal_snapshot_for_session(Some(&id), 0);
         self.terminal.view.frame_pipeline.arm_output_event_wake();
         if let Err(error) = self.write_session_wire_input_recorded_as(&id, &wire, &logical) {
@@ -390,6 +420,7 @@ mod tests {
 
     use super::shell_edit_payload;
     use crate::features::NyaTermApp;
+    use nyaterm_terminal_gpui::TerminalKeyMode;
 
     #[test]
     fn replacement_paste_frames_only_inserted_encoded_text() {
@@ -409,11 +440,47 @@ mod tests {
         .unwrap();
         let encoded = [0xd6, 0xd0, 0xce, 0xc4];
         let body = NyaTermApp::wrap_terminal_paste_wire_bytes_for_bracketed(&encoded, true);
-        let (wire, logical) = shell_edit_payload(&plan, true, body);
+        let (wire, logical) = shell_edit_payload(
+            &plan,
+            TerminalKeyMode {
+                application_cursor: true,
+                ..TerminalKeyMode::default()
+            },
+            body,
+        );
         assert_eq!(
             wire,
             b"\x1bOD\x1bOD\x7f\x7f\x7f\x1b[200~\xd6\xd0\xce\xc4\x1b[201~"
         );
         assert_eq!(logical, "\x1bOD\x1bOD\x7f\x7f\x7f中文".as_bytes());
+    }
+
+    #[test]
+    fn kitty_replacement_encodes_backspace_press_and_release_without_polluting_prediction() {
+        let input = TerminalInputState {
+            value: "abc".into(),
+            cursor: 3,
+            ..TerminalInputState::default()
+        };
+        let plan = plan_edit(
+            &input,
+            0,
+            EditIntent::Replace {
+                range: 1..2,
+                text: "X",
+            },
+        )
+        .unwrap();
+        let mode = TerminalKeyMode {
+            application_cursor: true,
+            kitty_keyboard_disambiguate: true,
+            kitty_keyboard_report_event_types: true,
+            kitty_keyboard_report_all_keys_as_esc: true,
+            ..TerminalKeyMode::default()
+        };
+        let (wire, logical) = shell_edit_payload(&plan, mode, b"X".to_vec());
+        assert_eq!(wire, b"\x1bOD\x1b[127;1:1u\x1b[127;1:3uX");
+        assert_eq!(logical, b"\x1bOD\x7fX");
+        assert_eq!(plan.predicted.value, "aXc");
     }
 }

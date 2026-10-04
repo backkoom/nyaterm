@@ -4,6 +4,7 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use unicode_segmentation::UnicodeSegmentation;
+use zeroize::Zeroize;
 
 use super::input_tracker::{
     MAX_TRACKED_INPUT_BYTES, TerminalInputState, apply_terminal_input_data_in_place,
@@ -17,6 +18,17 @@ pub enum EditCapability {
     None,
     MarkedShell,
     EchoMatched,
+}
+
+impl EditCapability {
+    /// Echo alone is not evidence that a foreground program has a line editor.
+    pub fn allows_editing(self, echo_line_editor: bool) -> bool {
+        match self {
+            Self::None => false,
+            Self::MarkedShell => true,
+            Self::EchoMatched => echo_line_editor,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -120,6 +132,26 @@ pub struct ShellEditState {
 }
 
 impl ShellEditState {
+    /// Suggestions can use an ordinary typing prediction, but never stale input
+    /// after a timeout, session switch, or other loss of confidence.
+    pub fn assist_input(&self) -> Option<&TerminalInputState> {
+        (self.phase != EditPhase::Uncertain && !self.input.desynced).then_some(&self.input)
+    }
+
+    pub fn clear_input(&mut self) {
+        self.input.value.zeroize();
+        self.input = TerminalInputState::new();
+        self.invalidate();
+    }
+
+    pub fn deactivate(&mut self, editable: bool) {
+        if self.phase != EditPhase::Ready || !editable {
+            self.clear_input();
+        } else {
+            self.invalidate();
+        }
+    }
+
     pub fn note_input(&mut self, text: &str, now: Instant) {
         apply_terminal_input_data_in_place(&mut self.input, text);
         self.version = self.version.wrapping_add(1);
@@ -141,6 +173,7 @@ impl ShellEditState {
         if self.phase != EditPhase::Ready || plan.input_version != self.version {
             return false;
         }
+        self.input.value.zeroize();
         self.input = plan.predicted;
         self.version = self.version.wrapping_add(1);
         self.phase = EditPhase::Pending;
@@ -176,11 +209,17 @@ impl ShellEditState {
     }
 }
 
+impl Drop for ShellEditState {
+    fn drop(&mut self) {
+        self.input.value.zeroize();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        EDIT_CONFIRMATION_TIMEOUT, EditIntent, EditPhase, ShellEditState, plan_edit,
-        supports_scalar_editing,
+        EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditIntent, EditPhase, ShellEditState,
+        plan_edit, supports_scalar_editing,
     };
     use crate::terminal::input_tracker::TerminalInputState;
     use std::time::Instant;
@@ -249,5 +288,57 @@ mod tests {
         assert_eq!(state.version, 2);
         state.queued_cursor = Some(1);
         assert_eq!(state.confirm(), Some(1));
+    }
+
+    #[test]
+    fn echo_requires_line_editor_context_for_every_edit() {
+        assert!(!EditCapability::None.allows_editing(true));
+        assert!(EditCapability::MarkedShell.allows_editing(false));
+        assert!(!EditCapability::EchoMatched.allows_editing(false));
+        assert!(EditCapability::EchoMatched.allows_editing(true));
+    }
+
+    #[test]
+    fn deactivation_discards_unconfirmed_and_noneditable_input() {
+        for (phase, editable, retained) in [
+            (EditPhase::Pending, true, false),
+            (EditPhase::Uncertain, true, false),
+            (EditPhase::Ready, false, false),
+            (EditPhase::Ready, true, true),
+        ] {
+            let mut state = ShellEditState::default();
+            state.note_input("synthetic input", Instant::now());
+            state.phase = phase;
+            state.queued_cursor = Some(1);
+            state.deactivate(editable);
+            assert_eq!(!state.input.value.is_empty(), retained);
+            assert_eq!(state.phase, EditPhase::Uncertain);
+            assert!(state.queued_cursor.is_none());
+            assert!(state.assist_input().is_none());
+        }
+    }
+
+    #[test]
+    fn suggestions_can_use_typing_prediction_but_not_expired_input() {
+        let mut state = ShellEditState::default();
+        let now = Instant::now();
+        assert!(state.assist_input().is_none());
+        state.note_input("git", now);
+        assert_eq!(state.assist_input().unwrap().value, "git");
+        state.expire(now + EDIT_CONFIRMATION_TIMEOUT);
+        assert!(state.assist_input().is_none());
+        state.confirm();
+        assert_eq!(state.assist_input().unwrap().value, "git");
+    }
+
+    #[test]
+    fn tracked_input_debug_redacts_unrecognized_sensitive_input() {
+        let input = TerminalInputState {
+            value: "synthetic-secret-for-test".into(),
+            ..TerminalInputState::default()
+        };
+        let debug = format!("{input:?}");
+        assert!(!debug.contains(&input.value));
+        assert!(debug.contains("[REDACTED]"));
     }
 }
