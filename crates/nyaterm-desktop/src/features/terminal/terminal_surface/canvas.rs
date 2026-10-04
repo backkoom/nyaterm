@@ -542,6 +542,9 @@ impl NyaTermApp {
                         .pr(px(8.))
                         .text_color(rgb(palette.text_dimmed))
                         .font(terminal_gpui_font.clone())
+                        .font_weight(FontWeight(
+                            self.settings.summary().terminal_font_weight as f32,
+                        ))
                         .text_size(px(self.settings.summary().terminal_font_size as f32))
                         .when(show_timestamps, |this| {
                             this.child(div().w(px(ts_w)).flex_none().child(labels.timestamp))
@@ -666,7 +669,6 @@ impl NyaTermApp {
             .unwrap_or(palette.link);
         let sync_status_label = if sync_is_paused { "Paused" } else { "Syncing" };
         let output_session_id = session_id.clone();
-        let terminal_font_size = self.settings.summary().terminal_font_size as f32;
         let performance_overlay = self
             .terminal
             .view
@@ -715,17 +717,6 @@ impl NyaTermApp {
             .map(|metadata| terminal_canvas_session_kind_label(&metadata.launch_config))
             .unwrap_or("Local");
         let (drop_title, drop_hint) = nyaterm_core::terminal_drop_overlay_copy(drop_session_kind);
-        let selection_belongs_to_surface = self
-            .terminal
-            .selection
-            .session_id
-            .as_deref()
-            .map(|selection_session_id| selection_session_id == session_id)
-            .unwrap_or(is_active);
-        let context_selection = selection_belongs_to_surface
-            .then(|| self.selected_terminal_text())
-            .flatten()
-            .unwrap_or_default();
         let context_menu_enabled = !session_id.is_empty()
             && self
                 .settings
@@ -734,19 +725,16 @@ impl NyaTermApp {
                 == nyaterm_core::TerminalRightClickAction::Menu
             && (!terminal_mouse_reporting
                 || self.settings.summary().interaction_mouse_events_require_alt);
-        let context_menu_items =
-            self.terminal_context_menu_items(session_id.to_string(), context_selection, cx);
+        let context_menu_app = cx.entity().downgrade();
+        let context_menu_session_id = session_id.clone();
 
+        // Menus and terminal chrome inherit the UI typography. Terminal text
+        // surfaces set their own font so it cannot leak into popup labels.
         let canvas = div()
             .flex_1()
             .h_full()
             .min_h_0()
             .bg(self.shell_terminal_surface_color(palette.terminal_bg))
-            .font(terminal_gpui_font)
-            .text_size(px(terminal_font_size))
-            .font_weight(FontWeight(
-                self.settings.summary().terminal_font_weight as f32,
-            ))
             .text_color(rgb(palette.terminal_fg))
             .child(
                 div()
@@ -835,7 +823,7 @@ impl NyaTermApp {
                         )
                     })
                     .child(
-                        NyaContextMenu::new(
+                        NyaContextMenu::new_dynamic(
                             div()
                                 .id(SharedString::from(format!(
                                     "terminal-output-{output_session_id}"
@@ -1086,7 +1074,11 @@ impl NyaTermApp {
                                                 .border_color(rgb(palette.link))
                                                 .bg(rgba((palette.terminal_cursor << 8) | 0x33))
                                                 .text_color(rgb(palette.terminal_fg))
-                                                .font_family(terminal_font_family.clone())
+                                                .font(terminal_gpui_font.clone())
+                                                .font_weight(FontWeight(
+                                                    self.settings.summary().terminal_font_weight
+                                                        as f32,
+                                                ))
                                                 .text_size(px(self
                                                     .settings
                                                     .summary()
@@ -1282,7 +1274,16 @@ impl NyaTermApp {
                                             ),
                                     )
                                 }),
-                            context_menu_items,
+                            move |_, cx| {
+                                context_menu_app
+                                    .update(cx, |this, cx| {
+                                        this.terminal_context_menu_items_for_session(
+                                            context_menu_session_id.clone(),
+                                            cx,
+                                        )
+                                    })
+                                    .unwrap_or_default()
+                            },
                         )
                         .min_width(px(200.))
                         .enabled(context_menu_enabled),

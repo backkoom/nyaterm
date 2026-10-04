@@ -48,6 +48,8 @@ impl NyaTermApp {
         }
         self.terminal.selection.selection = None;
         self.terminal.selection.session_id = None;
+        self.terminal.selection.all_buffer_text = None;
+        self.terminal.selection.all_buffer_text_task = None;
         self.terminal.selection.dragging = false;
         self.terminal.selection.drag_pointer_position = None;
         self.terminal.selection.scroll_rehit_armed = false;
@@ -78,6 +80,8 @@ impl NyaTermApp {
         if self.terminal.selection.selection.is_some() || self.terminal.selection.dragging {
             self.terminal.selection.selection = None;
             self.terminal.selection.session_id = None;
+            self.terminal.selection.all_buffer_text = None;
+            self.terminal.selection.all_buffer_text_task = None;
             self.terminal.selection.dragging = false;
             self.terminal.selection.drag_pointer_position = None;
             self.terminal.selection.scroll_rehit_armed = false;
@@ -93,6 +97,14 @@ impl NyaTermApp {
 
     pub(in crate::features) fn select_all_terminal(&mut self, cx: &mut Context<Self>) {
         let (_, cols) = self.active_terminal_grid_size();
+        self.terminal.selection.all_buffer_text = None;
+        self.terminal.selection.all_buffer_text_task = None;
+        self.terminal.selection.all_buffer_text_generation = self
+            .terminal
+            .selection
+            .all_buffer_text_generation
+            .wrapping_add(1);
+        let generation = self.terminal.selection.all_buffer_text_generation;
         self.terminal.selection.dragging = false;
         self.terminal.selection.drag_pointer_position = None;
         self.terminal.selection.scroll_rehit_armed = false;
@@ -107,6 +119,32 @@ impl NyaTermApp {
         self.clear_terminal_selected_occurrence(cx);
         self.terminal.selection.selection = Some(TerminalSelection::all_buffer(cols));
         self.terminal.selection.session_id = self.session.active_id_owned();
+        if let Some(session_id) = self.terminal.selection.session_id.clone() {
+            let response = self
+                .terminal
+                .view
+                .frame_pipeline
+                .request_all_text(session_id.clone());
+            self.terminal.selection.all_buffer_text_task = Some(cx.spawn(async move |this, cx| {
+                let Ok(text) = response.await else {
+                    return;
+                };
+                let _ = this.update(cx, |this, cx| {
+                    // A reconnect can rename the session while this request is
+                    // pending. Match the selection request, not the old id.
+                    if this.terminal.selection.all_buffer_text_generation == generation
+                        && this
+                            .terminal
+                            .selection
+                            .selection
+                            .is_some_and(|selection| selection.all_buffer)
+                    {
+                        this.terminal.selection.all_buffer_text = Some(text.unwrap_or_default());
+                        cx.notify();
+                    }
+                });
+            }));
+        }
         self.shell
             .set_status("selected all terminal text".to_string());
         self.notify_terminal_selection_owner_surface(cx);
@@ -123,6 +161,14 @@ impl NyaTermApp {
             .or(self.session.active_id());
         if selection.is_empty() {
             return None;
+        }
+        if selection.all_buffer {
+            return self
+                .terminal
+                .selection
+                .all_buffer_text
+                .clone()
+                .filter(|text| !text.is_empty());
         }
         if let Some(view) =
             session_id.and_then(|session_id| self.terminal.view.views.get(session_id))
@@ -246,12 +292,15 @@ impl NyaTermApp {
             }
         }
         let cols = geometry.cols;
+        self.terminal.selection.all_buffer_text = None;
+        self.terminal.selection.all_buffer_text_task = None;
         self.begin_smart_input_selection();
         // Shift+click extends the existing selection from its anchor (xterm-style).
         if event.modifiers.shift
             && event.click_count <= 1
             && let Some(selection) = self.terminal.selection.selection.as_mut()
         {
+            selection.all_buffer = false;
             selection.head = buffer_cell;
             if self.terminal.selection.session_id.is_none() {
                 self.terminal.selection.session_id = selection_session_id;
@@ -1033,6 +1082,9 @@ fn terminal_selected_text_from_screen(
     selection: TerminalSelection,
     screen: &TerminalScreen,
 ) -> Option<String> {
+    if selection.all_buffer {
+        return screen.all_text();
+    }
     let rows = screen.all_text_rows();
     terminal_selected_text_from_line_source(selection, rows.len(), 0, |index| {
         rows.get(index)
@@ -1046,20 +1098,6 @@ fn terminal_selected_text_from_line_source<'a>(
     absolute_start: usize,
     mut line_at: impl FnMut(usize) -> Option<(&'a str, bool)>,
 ) -> Option<String> {
-    if selection.all_buffer {
-        let mut text = String::new();
-        for index in 0..line_count {
-            let (line, wrapped) = line_at(index)?;
-            if index > 0 && !wrapped {
-                text.push('\n');
-            }
-            text.push_str(line.trim_end());
-        }
-        while text.ends_with('\n') {
-            text.pop();
-        }
-        return (!text.is_empty()).then_some(text);
-    }
     let (start, end) = selection.ordered();
     let absolute_end = absolute_start.saturating_add(line_count);
     if start.line < absolute_start || end.line >= absolute_end {

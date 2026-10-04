@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-use gpui::{Entity, FocusHandle, Subscription};
+use gpui::{Entity, FocusHandle, Subscription, Task};
 use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
 use nyaterm_ui::NyaDocumentEditorState;
@@ -98,6 +98,10 @@ pub(super) struct TerminalPasteReviewState {
 pub(super) struct TerminalSelectionState {
     pub(super) selection: Option<TerminalSelection>,
     pub(super) session_id: Option<String>,
+    /// Derived once from the worker's authoritative buffer for each Select All.
+    pub(super) all_buffer_text: Option<String>,
+    pub(super) all_buffer_text_task: Option<Task<()>>,
+    pub(super) all_buffer_text_generation: u64,
     pub(super) selected_occurrence: TerminalSelectedOccurrenceState,
     pub(super) dragging: bool,
     pub(super) drag_pointer_position: Option<gpui::Point<gpui::Pixels>>,
@@ -245,6 +249,9 @@ impl TerminalFeatureState {
             selection: TerminalSelectionState {
                 selection: None,
                 session_id: None,
+                all_buffer_text: None,
+                all_buffer_text_task: None,
+                all_buffer_text_generation: 0,
                 selected_occurrence: TerminalSelectedOccurrenceState {
                     session_id: None,
                     query: None,
@@ -404,6 +411,8 @@ impl TerminalFeatureState {
             || self.selection.dragging
             || self.menus.action_link_menu.is_some()
             || self.menus.action_link_tooltip.is_some();
+        self.selection.all_buffer_text = None;
+        self.selection.all_buffer_text_task = None;
         self.selection.dragging = false;
         self.selection.drag_pointer_position = None;
         self.selection.autoscroll = None;

@@ -1,4 +1,5 @@
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use futures::channel::oneshot;
 use nyaterm_core::{
     ActionLinksMatcherSettings, TerminalBackendResize, terminal_backend_resize_changed,
 };
@@ -1697,6 +1698,15 @@ impl TerminalFramePipeline {
         });
     }
 
+    pub(crate) fn request_all_text(&self, session_id: String) -> oneshot::Receiver<Option<String>> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let _ = self.command_tx.send(TerminalFrameCommand::RequestAllText {
+            session_id,
+            response_tx,
+        });
+        response_rx
+    }
+
     pub(crate) fn request_search(
         &self,
         session_id: impl Into<String>,
@@ -1875,6 +1885,10 @@ enum TerminalFrameCommand {
         action_link_matchers: ActionLinksMatcherSettings,
         priority: bool,
         purpose: TerminalFrameSnapshotPurpose,
+    },
+    RequestAllText {
+        session_id: String,
+        response_tx: oneshot::Sender<Option<String>>,
     },
     RequestSearch {
         session_id: String,
@@ -3792,6 +3806,17 @@ fn run_terminal_frame_processor(
                             TerminalFrameEvent::Search(event),
                         );
                     }
+                }
+            }
+            TerminalFrameCommand::RequestAllText {
+                session_id,
+                response_tx,
+            } => {
+                if !response_tx.is_canceled() {
+                    let text = sessions
+                        .get(&session_id)
+                        .and_then(|session| session.screen.all_text());
+                    let _ = response_tx.send(text);
                 }
             }
             TerminalFrameCommand::CancelFindSearch { session_id } => {

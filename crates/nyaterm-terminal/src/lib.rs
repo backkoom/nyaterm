@@ -1386,6 +1386,19 @@ impl TerminalCore {
         rows
     }
 
+    /// Full buffer text, preserving hard breaks and joining soft-wrapped rows.
+    pub fn all_text(&self) -> Option<String> {
+        let mut text = String::new();
+        for (index, (line, wrapped)) in self.all_text_rows().into_iter().enumerate() {
+            if index > 0 && !wrapped {
+                text.push('\n');
+            }
+            text.push_str(line.trim_end());
+        }
+        text.truncate(text.trim_end_matches('\n').len());
+        (!text.is_empty()).then_some(text)
+    }
+
     pub fn search_grid(
         &self,
         query: &TerminalSearchQuery,

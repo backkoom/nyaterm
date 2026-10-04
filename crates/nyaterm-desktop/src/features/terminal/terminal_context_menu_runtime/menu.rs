@@ -21,13 +21,41 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    pub(in crate::features) fn terminal_context_menu_items_for_session(
+        &mut self,
+        session_id: String,
+        cx: &mut Context<Self>,
+    ) -> Vec<NyaMenuItem> {
+        let selection_session_id = self
+            .terminal
+            .selection
+            .session_id
+            .as_deref()
+            .or(self.session.active_id());
+        let selected = (selection_session_id == Some(session_id.as_str()))
+            .then(|| self.selected_terminal_text())
+            .flatten()
+            .unwrap_or_default();
+        self.terminal_context_menu_items(session_id, selected, cx)
+    }
+
     pub(in crate::features) fn terminal_context_menu_items(
         &mut self,
         session_id: String,
         selected: String,
         cx: &mut Context<Self>,
     ) -> Vec<NyaMenuItem> {
-        let has_selection = !selected.is_empty();
+        // Extraction runs on the frame worker. Even an immediate second right
+        // click should show the selection menu while that reply is pending.
+        let selection_pending = self.terminal.selection.all_buffer_text.is_none()
+            && self.terminal.selection.all_buffer_text_task.is_some()
+            && self.terminal.selection.session_id.as_deref() == Some(session_id.as_str())
+            && self
+                .terminal
+                .selection
+                .selection
+                .is_some_and(|selection| selection.all_buffer);
+        let has_selection = !selected.is_empty() || selection_pending;
         let shortcut = |id: &str, fallback: &str| self.display_shortcut_for(id, fallback);
         let copy_sc = shortcut("terminal.copy", "Ctrl+Shift+C");
         let paste_sc = shortcut("terminal.paste", "Ctrl+Shift+V");
@@ -97,6 +125,10 @@ impl NyaTermApp {
                 );
             }
 
+            if selection_pending {
+                items = items.into_iter().map(|item| item.disabled(true)).collect();
+            }
+
             let selected_for_paste = selected.clone();
             let paste_session_id = session_id.clone();
             let paste_selected_session_id = session_id.clone();
@@ -112,6 +144,7 @@ impl NyaTermApp {
                 NyaMenuItem::action(t!("terminalCtx.pasteSelectedText"))
                     .icon("icons/menu/paste-go.svg")
                     .shortcut(paste_sel_sc)
+                    .disabled(selection_pending)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_workspace_pane(paste_selected_session_id.clone(), cx);
                         this.paste_terminal_text(selected_for_paste.clone(), window, cx);
@@ -437,6 +470,7 @@ mod tests {
     use std::path::PathBuf;
 
     use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::test_support::TestTempDir;
     use nyaterm_core::{
         AiAction, AiContext, AiCustomActionConfig, AiSettings, AppRuntime, RuntimeMode,
         SearchEngineConfig, TranslationSettings, uuid,
@@ -446,6 +480,7 @@ mod tests {
 
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
+    use crate::features::test_support::app_with_visible_local_session;
     use crate::features::translation::TranslationFeatureState;
 
     use super::terminal_ai_prepared_request;
@@ -607,6 +642,69 @@ mod tests {
                 (Some("icons/settings.svg".to_string()), None),
             ]
         );
+    }
+
+    #[test]
+    fn select_all_uses_worker_scrollback_and_reopens_the_selection_menu() {
+        let root = TestTempDir::new("nyaterm-select-all-menu");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "selected-pane");
+        cx.update_entity(&app, |app, cx| {
+            let empty = app.terminal_context_menu_items_for_session("selected-pane".into(), cx);
+            assert!(!labels(&empty).contains(&"Copy"));
+            let pipeline = &app.terminal.view.frame_pipeline;
+            pipeline.seed_session("selected-pane", "", "UTF-8", 1000);
+            pipeline.resize_session("selected-pane", 5, 2);
+            pipeline.submit_decoded_output("selected-pane".into(), "abcdef\r\nghij".into());
+            // The UI-side parser stays blank, as it does for real worker frames.
+            assert_eq!(
+                app.terminal.view.views["selected-pane"].screen.all_text(),
+                None
+            );
+            app.select_all_terminal(cx);
+            let pending = app.terminal_context_menu_items_for_session("selected-pane".into(), cx);
+            assert!(labels(&pending).contains(&"Copy"));
+            assert!(item(&pending, "Copy").test_presentation().3);
+            app.terminal.view.frame_pipeline.flush_for_test();
+        });
+        cx.run_until_parked();
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(
+                app.selected_terminal_text().as_deref(),
+                Some("abcdef\nghij")
+            );
+            let selected = app.terminal_context_menu_items_for_session("selected-pane".into(), cx);
+            assert!(labels(&selected).contains(&"Copy"));
+            assert!(labels(&selected).contains(&"Save as Quick Command"));
+            assert!(!item(&selected, "Copy").test_presentation().3);
+            let other = app.terminal_context_menu_items_for_session("other-pane".into(), cx);
+            assert!(!labels(&other).contains(&"Copy"));
+            app.clear_terminal_selection(cx);
+            let cleared = app.terminal_context_menu_items_for_session("selected-pane".into(), cx);
+            assert!(!labels(&cleared).contains(&"Copy"));
+        });
+    }
+
+    #[test]
+    fn clearing_select_all_discards_an_in_flight_worker_reply() {
+        let root = TestTempDir::new("nyaterm-select-all-cancel");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "selected-pane");
+        cx.update_entity(&app, |app, cx| {
+            app.terminal
+                .view
+                .frame_pipeline
+                .seed_session("selected-pane", "text", "UTF-8", 1000);
+            app.select_all_terminal(cx);
+            app.clear_terminal_selection(cx);
+            app.terminal.view.frame_pipeline.flush_for_test();
+        });
+        cx.run_until_parked();
+        cx.update_entity(&app, |app, cx| {
+            assert!(app.terminal.selection.all_buffer_text.is_none());
+            let items = app.terminal_context_menu_items_for_session("selected-pane".into(), cx);
+            assert!(!labels(&items).contains(&"Copy"));
+        });
     }
 
     #[test]
