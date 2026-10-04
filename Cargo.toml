@@ -84,7 +84,7 @@ nyaterm-terminal-gpui = { path = "crates/nyaterm-terminal-gpui" }
 nyaterm-transport = { path = "crates/nyaterm-transport" }
 nyaterm-ui = { path = "crates/nyaterm-ui" }
 percent-encoding = "=2.3.2"
-portable-pty = { git = "https://github.com/nyakang/portable-pty", rev = "a3d41bc786d0c5941584abce105d8ecd0f035dcd" }
+portable-pty = { git = "https://github.com/nyakang/portable-pty", rev = "06515356358548ee2064f8a09c751472cbaff4ca" }
 quick-xml = "0.40"
 rand = { version = "0.10", features = ["thread_rng"] }
 redb = "4.1.0"
@@ -120,14 +120,15 @@ url = "=2.5.8"
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
 uuid = { version = "1", features = ["v4", "serde"] }
-vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "d855f22e301835cdf63a7aa1520877e3153ec66a" }
+vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "689a65166d6440946529b2696314386a70d71d86" }
 vte = "0.14"
 zeroize = "1"
-zmodem2 = { git = "https://github.com/nyakang/zmodem2", rev = "b2f669a78ad0e1108115f1c4d9558e2663943a48" }
+zmodem2 = { git = "https://github.com/nyakang/zmodem2", rev = "372662d9fef892ba36d628107bf8152ab46ba4ca" }
 zed_reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-features = false, features = [
     "blocking",
     "json",
     "rustls-tls-native-roots",
+    "socks",
 ] }
 zip = { version = "8.2.0", default-features = false, features = ["deflate"] }
 
