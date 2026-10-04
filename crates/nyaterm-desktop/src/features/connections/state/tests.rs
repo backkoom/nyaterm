@@ -524,6 +524,40 @@ fn connection_list_model_cache_ignores_unrelated_shell_state() {
 }
 
 #[test]
+fn all_folder_expansion_updates_nested_rows_and_only_invalidates_on_change() {
+    let mut cx = TestAppContext::single();
+    let app = cache_test_app(&mut cx);
+    seed_cached_connections(&mut cx, &app);
+
+    cx.update_entity(&app, |app, _| {
+        app.connection_state
+            .expand_list_group("missing-group".to_string());
+        let _ = app.connection_state.connection_list_model();
+        app.connection_state.set_all_catalog_groups_expanded(false);
+        assert!(app.connection_state.list_expanded_group_ids().is_empty());
+        assert_eq!(app.connection_state.visible_connection_ids(), vec!["root"]);
+        assert!(!app.connection_state.connection_list_model().stats.cache_hit);
+
+        app.connection_state.set_all_catalog_groups_expanded(false);
+        assert!(app.connection_state.connection_list_model().stats.cache_hit);
+
+        app.connection_state.set_all_catalog_groups_expanded(true);
+        assert_eq!(
+            app.connection_state.list_expanded_group_ids(),
+            &HashSet::from(["parent-group".to_string(), "child-group".to_string()])
+        );
+        assert_eq!(
+            app.connection_state.visible_connection_ids(),
+            vec!["child", "parent", "root"]
+        );
+        assert!(!app.connection_state.connection_list_model().stats.cache_hit);
+
+        app.connection_state.set_all_catalog_groups_expanded(true);
+        assert!(app.connection_state.connection_list_model().stats.cache_hit);
+    });
+}
+
+#[test]
 fn remove_connection_references_clears_invalid_list_state() {
     let mut selected_ids = HashSet::from(["one".to_string(), "two".to_string()]);
     let mut last_selected_id = Some("one".to_string());

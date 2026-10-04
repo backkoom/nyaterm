@@ -649,6 +649,22 @@ impl ConnectionFeatureState {
         self.list.expand_groups(group_ids);
     }
 
+    pub fn set_all_catalog_groups_expanded(&mut self, expanded: bool) {
+        let group_ids = if expanded {
+            self.catalog
+                .groups()
+                .iter()
+                .map(|group| group.id.clone())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        if self.list.expanded_group_ids != group_ids {
+            self.list.expanded_group_ids = group_ids;
+            self.list.bump_expanded_groups_revision();
+        }
+    }
+
     pub fn set_list_drop_target_if_changed(&mut self, target: ConnectionDropTarget) -> bool {
         self.list.set_drop_target_if_changed(target)
     }
@@ -1004,18 +1020,37 @@ impl ConnectionFeatureState {
         self.editor.toggle_group_select();
     }
 
-    pub fn add_editor_tag(&mut self) -> bool {
-        self.editor
+    pub fn add_editor_tag(&mut self, cx: &mut App) -> bool {
+        let changed = self.editor
             .draft
             .as_mut()
-            .is_some_and(ConnectionEditorState::add_tag)
+            .is_some_and(ConnectionEditorState::add_tag);
+        if changed {
+            self.sync_editor_tag_placeholder(cx);
+        }
+        changed
     }
 
-    pub fn remove_editor_tag(&mut self, tag: &str) -> bool {
-        self.editor
+    pub fn remove_editor_tag(&mut self, tag: &str, cx: &mut App) -> bool {
+        let changed = self.editor
             .draft
             .as_mut()
-            .is_some_and(|draft| draft.remove_tag(tag))
+            .is_some_and(|draft| draft.remove_tag(tag));
+        if changed {
+            self.sync_editor_tag_placeholder(cx);
+        }
+        changed
+    }
+
+    fn sync_editor_tag_placeholder(&self, cx: &mut App) {
+        let placeholder = if self.editor.draft.as_ref().is_some_and(|draft| draft.tags.is_empty()) {
+            t!("dialog.newTag").to_string()
+        } else {
+            String::new()
+        };
+        if let Some(field) = self.editor.fields.get(&ConnectionEditorField::NewTag) {
+            field.update(cx, |field, cx| field.set_placeholder(placeholder, cx));
+        }
     }
 
     pub fn editor_tag_field_is_focused(&self, cx: &App) -> bool {
