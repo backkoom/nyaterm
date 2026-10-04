@@ -145,8 +145,6 @@ pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) snapshot_password_prompt: Option<SnapshotPasswordPromptState>,
     pub(in crate::features) snapshot_password_prompt_active: bool,
     pub(in crate::features) config_path_prompt_active: bool,
-    pub(in crate::features) local_backup_status: String,
-    pub(in crate::features) local_backup_ready: bool,
     pub(in crate::features) terminal_theme_is_dark: bool,
     pub(in crate::features) panel_multi_open: bool,
 }
@@ -179,8 +177,6 @@ impl SettingsPresentation {
             snapshot_password_prompt: None,
             snapshot_password_prompt_active: false,
             config_path_prompt_active: false,
-            local_backup_status: String::new(),
-            local_backup_ready: true,
             terminal_theme_is_dark: true,
             panel_multi_open: false,
         }
@@ -1458,26 +1454,6 @@ impl SettingsPanel {
             app.settings.clear_keybinding_search();
             app.reset_text_input("settings.keybindings.search", "", cx);
             cx.notify();
-        });
-    }
-
-    pub(in crate::features) fn prompt_encrypted_portable_snapshot_export(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.with_app(cx, |app, cx| {
-            app.prompt_encrypted_portable_snapshot_export(window, cx)
-        });
-    }
-
-    pub(in crate::features) fn prompt_encrypted_portable_snapshot_import(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.with_app(cx, |app, cx| {
-            app.prompt_encrypted_portable_snapshot_import(window, cx)
         });
     }
 
