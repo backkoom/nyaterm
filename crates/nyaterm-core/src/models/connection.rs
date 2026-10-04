@@ -594,6 +594,8 @@ pub enum ConnectionType {
         reconnect: RdpReconnectSettings,
     },
     Vnc {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        username: String,
         host: String,
         #[serde(default = "default_vnc_port")]
         port: u16,

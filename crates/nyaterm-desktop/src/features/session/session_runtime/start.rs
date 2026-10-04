@@ -667,6 +667,7 @@ impl NyaTermApp {
                 cx.notify();
             }
             ConnectionType::Vnc {
+                username,
                 host,
                 port,
                 security,
@@ -677,6 +678,7 @@ impl NyaTermApp {
                 view_only,
             } => {
                 let config = VncSessionConfig {
+                    username: username.clone(),
                     relay: self
                         .remote_desktop
                         .prepared_routes

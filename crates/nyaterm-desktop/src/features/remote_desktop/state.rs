@@ -59,6 +59,9 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) cursor_visible: bool,
     pub(super) cursor_texture: Option<DynamicTexture>,
     pub(super) certificate_request: Option<RdpCertificatePrompt>,
+    pub(super) vnc_key_request:
+        Option<(nyaterm_remote_desktop::VncServerKeyRequest, Option<String>)>,
+    pub(super) vnc_trust_previous: Option<String>,
     pub(super) error: Option<RemoteDesktopError>,
     pub(super) capability: Option<RdpCapability>,
     pub(super) server_capabilities: Option<RdpServerCapabilities>,
@@ -91,6 +94,8 @@ impl Default for RemoteDesktopSessionState {
             cursor_visible: true,
             cursor_texture: None,
             certificate_request: None,
+            vnc_key_request: None,
+            vnc_trust_previous: None,
             error: None,
             capability: None,
             server_capabilities: None,

@@ -33,6 +33,7 @@ mod portable;
 mod remote_file_backend;
 mod session_import;
 mod vault;
+mod vnc_known_hosts;
 mod window_state;
 
 use self::command_history::replace_command_history_in_txn;
@@ -100,6 +101,7 @@ const PROXIES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("proxie
 const CREDENTIALS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("credentials");
 const OTP_ACCOUNTS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("otp_accounts");
 const KNOWN_HOSTS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("known_hosts");
+const VNC_KNOWN_HOSTS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("vnc_known_hosts");
 const RDP_KNOWN_HOSTS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("rdp_known_hosts");
 const PORTABLE_OPAQUE_ENTITIES_TABLE: TableDefinition<&str, &str> =
     TableDefinition::new("portable_snapshot_opaque_entities");
@@ -811,6 +813,7 @@ impl ConnectionStore {
         txn.open_table(OTP_ACCOUNTS_TABLE)?;
         txn.open_table(KNOWN_HOSTS_TABLE)?;
         txn.open_table(RDP_KNOWN_HOSTS_TABLE)?;
+        txn.open_table(VNC_KNOWN_HOSTS_TABLE)?;
         txn.open_table(PORTABLE_OPAQUE_ENTITIES_TABLE)?;
         txn.open_table(COMMAND_HISTORY_TABLE)?;
         txn.open_table(NOTE_FOLDERS_TABLE)?;

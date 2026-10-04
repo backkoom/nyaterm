@@ -740,7 +740,8 @@
     "vncSecurityNone": "なし",
     "vncSecurityPassword": "VNC パスワード",
     "vncPasswordLimit": "クラシック VNC 認証のパスワードは最大 8 バイトです。パスワードが自動的に切り詰められることはありません。",
-    "vncPasswordTooLong": "クラシック VNC 認証のパスワードは 8 バイト以下にしてください",
+    "vncPasswordTooLong": "VNC パスワードの上限は VNC Authentication で 8 バイト、自動（RA2_256）で 255 バイトです",
+    "vncUsernameTooLong": "VNC ユーザー名は 255 バイト以下にしてください",
     "vncUnencryptedWarning": "クラシック VNC はデスクトップ、キーボード、クリップボードの通信を暗号化しません。信頼できるネットワーク、VPN、または SSH トンネルを使用してください。",
     "vncSharedSession": "共有セッション",
     "vncSharedSessionDesc": "他のビューアーの接続を維持できるようにします。",
@@ -3292,6 +3293,8 @@
     "youdao": "Youdao"
   },
   "remoteDesktop": {
+    "vncServerKeyVerify": "Verify VNC server public key",
+    "vncTrustAndRemember": "Trust and remember server key",
     "certificateChangedTitle": "リモートデスクトップの証明書が変更されました",
     "certificateChangedWarning": "サーバー証明書が記憶された証明書と一致しなくなりました。この変更を独自に確認できない限り拒否してください。",
     "certificateTitle": "リモートデスクトップの証明書を確認",

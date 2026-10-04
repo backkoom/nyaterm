@@ -68,6 +68,9 @@ impl NyaTermApp {
             ConnectionEditorValidationError::VncReconnectAttemptsInvalid => {
                 "VNC reconnect attempts must be between 0 and 20".to_string()
             }
+            ConnectionEditorValidationError::VncUsernameTooLong => {
+                t!("dialog.vncUsernameTooLong").into()
+            }
             ConnectionEditorValidationError::VncPasswordTooLong => {
                 t!("dialog.vncPasswordTooLong").into()
             }

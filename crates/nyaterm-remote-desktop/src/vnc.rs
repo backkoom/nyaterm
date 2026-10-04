@@ -51,6 +51,14 @@ fn frame_byte_cost(frame: &RemoteFrameEvent) -> usize {
 
 fn control_byte_cost(event: &VncRuntimeEvent) -> usize {
     match event {
+        VncRuntimeEvent::ServerKeyRequest(request)
+        | VncRuntimeEvent::ServerKeyAuthenticated(request) => {
+            request.session_id.len()
+                + request.host.len()
+                + request.request_id.len()
+                + request.sha256_fingerprint.len()
+                + 128
+        }
         VncRuntimeEvent::State {
             session_id,
             message,
@@ -65,6 +73,7 @@ fn control_byte_cost(event: &VncRuntimeEvent) -> usize {
 }
 
 struct EventQueue {
+    trust: Arc<crate::vnc_trust::VncTrustState>,
     state: Mutex<EventQueueState>,
     space_available: Condvar,
     frame_item_limit: usize,
@@ -80,6 +89,7 @@ impl Default for EventQueue {
 impl EventQueue {
     fn with_limits(frame_item_limit: usize, frame_byte_limit: usize) -> Self {
         Self {
+            trust: Arc::default(),
             state: Mutex::new(EventQueueState::default()),
             space_available: Condvar::new(),
             frame_item_limit,
@@ -409,6 +419,45 @@ impl VncSessionManager {
     /// Return the static helper capabilities confirmed by `ServerHello`.
     ///
     /// VNC has no Secure Attention capability or operation by design.
+    pub fn trust_state(&self, session_id: &str) -> Option<Arc<crate::vnc_trust::VncTrustState>> {
+        Some(
+            self.sessions
+                .lock()
+                .ok()?
+                .get(session_id)?
+                .queue
+                .trust
+                .clone(),
+        )
+    }
+
+    pub fn respond_server_key(
+        &self,
+        request: &crate::VncServerKeyRequest,
+        accept: bool,
+        remember: bool,
+    ) -> Result<(), VncError> {
+        let sessions = self.sessions.lock().map_err(|_| registry_poisoned())?;
+        let record = sessions
+            .get(&request.session_id)
+            .ok_or_else(|| VncError::new(VncErrorKind::Protocol, "VNC session closed"))?;
+        if !record.queue.trust.respond(request, accept, remember) {
+            return Err(VncError::new(
+                VncErrorKind::Protocol,
+                "VNC key request expired",
+            ));
+        }
+        send_control(
+            &record.writer,
+            &VncControlMessage::ServerKeyResponse {
+                session_id: request.session_id.clone(),
+                generation: request.generation,
+                request_id: request.request_id.clone(),
+                accept,
+            },
+        )
+    }
+
     pub fn server_capabilities(&self, session_id: &str) -> Option<VncServerCapabilities> {
         let sessions = self.sessions.lock().ok()?;
         *sessions.get(session_id)?.capabilities.lock().ok()?
@@ -512,6 +561,7 @@ impl VncSessionManager {
         else {
             return Ok(());
         };
+        record.queue.trust.invalidate(true);
         set_state(&record.state, VncSessionState::Disconnecting);
         let _ = send_control(
             &record.writer,
@@ -537,6 +587,37 @@ impl VncSessionManager {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(session_id.to_string(), record);
+        Ok(())
+    }
+
+    /// Remove UI ownership immediately; reap the helper off the UI thread.
+    /// The detached record cannot replace a later session with the same id.
+    pub fn close_detached(&self, session_id: &str) -> Result<(), VncError> {
+        let Some(mut record) = self
+            .sessions
+            .lock()
+            .map_err(|_| registry_poisoned())?
+            .remove(session_id)
+        else {
+            return Ok(());
+        };
+        record.queue.trust.cancel();
+        let session_id = session_id.to_owned();
+        std::thread::spawn(move || {
+            record.queue.trust.invalidate(true);
+            let _ = send_control(
+                &record.writer,
+                &VncControlMessage::Input {
+                    session_id: session_id.clone(),
+                    events: vec![VncInputEvent::ReleaseAllInputs],
+                },
+            );
+            let _ = send_control(
+                &record.writer,
+                &VncControlMessage::Disconnect { session_id },
+            );
+            cleanup_child(&mut record);
+        });
         Ok(())
     }
 
@@ -636,13 +717,24 @@ pub fn validate_vnc_config(config: &VncSessionConfig) -> Result<(), VncError> {
             "VNC Authentication requires a password",
         ));
     }
+    if config.username.len() > 255 {
+        return Err(VncError::new(
+            VncErrorKind::Authentication,
+            "VNC username exceeds 255 bytes",
+        ));
+    }
     // Classic VNC auth keys off the first 8 bytes; str::len() is that byte count.
     if let Some(password) = config.password.as_ref()
-        && password.len() > 8
+        && password.len()
+            > if config.security.mode == VncSecurityMode::VncAuth {
+                8
+            } else {
+                255
+            }
     {
         return Err(VncError::new(
             VncErrorKind::Authentication,
-            "Classic VNC authentication passwords must be 8 bytes or fewer",
+            "VNC password exceeds the selected authentication byte limit",
         ));
     }
     Ok(())
@@ -676,6 +768,13 @@ fn spawn_reader(
     thread::Builder::new()
         .name(format!("nyaterm-vnc-reader-{session_id}"))
         .spawn(move || {
+            struct InvalidateOnExit(Arc<crate::vnc_trust::VncTrustState>);
+            impl Drop for InvalidateOnExit {
+                fn drop(&mut self) {
+                    self.0.invalidate(true);
+                }
+            }
+            let _trust_lifetime = InvalidateOnExit(queue.trust.clone());
             let mut hello_received = false;
             loop {
                 let packet = match read_packet(&mut stdout) {
@@ -820,6 +919,7 @@ fn handle_control(
             ));
         }
         VncControlMessage::ClientHello { .. }
+        | VncControlMessage::ServerKeyResponse { .. }
         | VncControlMessage::Connect { .. }
         | VncControlMessage::Input { .. }
         | VncControlMessage::RequestFullFrame { .. }
@@ -828,6 +928,32 @@ fn handle_control(
                 VncErrorKind::Protocol,
                 "VNC helper sent an application-only control message",
             ));
+        }
+        VncControlMessage::ServerKeyRequest(request) if request.session_id == session_id => {
+            if request.host.is_empty()
+                || request.host.len() > 1024
+                || request.request_id.is_empty()
+                || request.request_id.len() > 128
+                || !request
+                    .sha256_fingerprint
+                    .strip_prefix("SHA256:")
+                    .is_some_and(|hash| {
+                        hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+            {
+                return Err(VncError::new(
+                    VncErrorKind::Protocol,
+                    "Invalid VNC server key challenge",
+                ));
+            }
+            if queue.trust.request(&request) {
+                queue.push_control(VncRuntimeEvent::ServerKeyRequest(request));
+            }
+        }
+        VncControlMessage::ServerKeyAuthenticated(request) if request.session_id == session_id => {
+            if queue.trust.authenticated(&request) {
+                queue.push_control(VncRuntimeEvent::ServerKeyAuthenticated(request));
+            }
         }
         VncControlMessage::DesktopReset {
             session_id: event_session,
@@ -842,6 +968,16 @@ fn handle_control(
             state: new_state,
             message,
         } if event_session == session_id => {
+            if matches!(
+                new_state,
+                VncSessionState::Connecting
+                    | VncSessionState::Reconnecting
+                    | VncSessionState::Disconnecting
+                    | VncSessionState::Disconnected
+                    | VncSessionState::Failed
+            ) {
+                queue.trust.invalidate(false);
+            }
             set_state(state, new_state);
             queue.push_control(VncRuntimeEvent::State {
                 session_id: session_id.to_string(),
@@ -864,6 +1000,7 @@ fn handle_control(
             fatal,
         } if event_session == session_id => {
             if fatal {
+                queue.trust.invalidate(false);
                 set_state(state, VncSessionState::Failed);
             }
             queue.push_control(VncRuntimeEvent::Error {
@@ -905,6 +1042,7 @@ fn set_state(state: &Arc<Mutex<VncSessionState>>, new_state: VncSessionState) {
 }
 
 fn cleanup_child(record: &mut SessionRecord) {
+    record.queue.trust.invalidate(true);
     record.queue.close();
     helper_process::cleanup_child(&mut record.child, &mut record.reader);
     record.writer.shutdown();
@@ -1060,6 +1198,7 @@ mod tests {
 
     fn config() -> VncSessionConfig {
         VncSessionConfig {
+            username: String::new(),
             relay: None,
             name: "vnc".to_string(),
             host: "127.0.0.1".to_string(),

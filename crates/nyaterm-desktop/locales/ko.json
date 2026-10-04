@@ -740,7 +740,8 @@
     "vncSecurityNone": "없음",
     "vncSecurityPassword": "VNC 비밀번호",
     "vncPasswordLimit": "클래식 VNC 인증은 최대 8바이트 암호만 지원하며 암호를 자동으로 자르지 않습니다.",
-    "vncPasswordTooLong": "클래식 VNC 인증 암호는 8바이트 이하여야 합니다",
+    "vncPasswordTooLong": "VNC 비밀번호 제한: VNC Authentication은 8바이트, 자동(RA2_256)은 255바이트",
+    "vncUsernameTooLong": "VNC 사용자 이름은 255바이트 이하여야 합니다",
     "vncUnencryptedWarning": "클래식 VNC는 데스크톱, 키보드 또는 클립보드 트래픽을 암호화하지 않습니다. 신뢰할 수 있는 네트워크, VPN 또는 SSH 터널을 사용하세요.",
     "vncSharedSession": "공유 세션",
     "vncSharedSessionDesc": "다른 뷰어가 계속 연결할 수 있도록 허용합니다.",
@@ -3292,6 +3293,8 @@
     "youdao": "유다오"
   },
   "remoteDesktop": {
+    "vncServerKeyVerify": "Verify VNC server public key",
+    "vncTrustAndRemember": "Trust and remember server key",
     "certificateChangedTitle": "원격 데스크톱 인증서가 변경되었습니다",
     "certificateChangedWarning": "서버 인증서가 기억된 인증서와 더 이상 일치하지 않습니다. 이 변경을 직접 확인하지 않았다면 거부하세요.",
     "certificateTitle": "원격 데스크톱 인증서 확인",

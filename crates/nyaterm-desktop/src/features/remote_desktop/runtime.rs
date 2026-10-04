@@ -612,7 +612,7 @@ impl NyaTermApp {
             self.release_remote_keys(session_id);
         }
         self.remote_desktop.remove_session(session_id);
-        self.remote_desktop.vnc_manager.close(session_id)
+        self.remote_desktop.vnc_manager.close_detached(session_id)
     }
 
     pub(in crate::features) fn release_remote_keys(&mut self, session_id: &str) {
@@ -833,6 +833,36 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         match event {
+            VncRuntimeEvent::ServerKeyRequest(request) => self.handle_vnc_key_request(request, cx),
+            VncRuntimeEvent::ServerKeyAuthenticated(request) => {
+                let previous = self
+                    .remote_desktop
+                    .sessions
+                    .get(session_id)
+                    .and_then(|session| session.vnc_trust_previous.clone());
+                if let Some(trust) = self.remote_desktop.vnc_manager.trust_state(session_id) {
+                    self.submit_store_request(
+                        0,
+                        store_request(StoreDomain::Security, move |store| {
+                            trust
+                                .commit_if_current(&request, |current| {
+                                    store.remember_vnc_known_host_if_current(
+                                        &request.host,
+                                        request.port,
+                                        &request.sha256_fingerprint,
+                                        previous.as_deref(),
+                                        current,
+                                    )
+                                })
+                                .transpose()
+                                .map(|_| ())
+                        }),
+                        |_, _, _| {},
+                        cx,
+                    );
+                }
+            }
+
             VncRuntimeEvent::State { state, message, .. } => {
                 let vnc_server_capabilities = vnc_capabilities_for_state(
                     &state,
@@ -850,6 +880,9 @@ impl NyaTermApp {
                     if remote_state_clears_input(&state) {
                         session.keys = Default::default();
                         session.modifiers = Default::default();
+                    }
+                    if state != RemoteDesktopViewState::Connected {
+                        session.vnc_key_request = None;
                     }
                     session.vnc_server_capabilities = vnc_server_capabilities;
                     session.state = state;
@@ -887,6 +920,7 @@ impl NyaTermApp {
                     session.keys = Default::default();
                     session.modifiers = Default::default();
                     session.vnc_server_capabilities = None;
+                    session.vnc_key_request = None;
                     set_remote_view_error(session, error.into());
                 }
             }
@@ -1926,6 +1960,117 @@ impl NyaTermApp {
                 }
             }
         }
+    }
+
+    fn handle_vnc_key_request(
+        &mut self,
+        request: nyaterm_remote_desktop::VncServerKeyRequest,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(metadata) = self.session.metadata(&request.session_id) else {
+            return;
+        };
+        let crate::models::SessionLaunchConfig::Vnc(config) = &metadata.launch_config else {
+            return;
+        };
+        if config.host != request.host || config.port != request.port {
+            let _ = self
+                .remote_desktop
+                .vnc_manager
+                .respond_server_key(&request, false, false);
+            return;
+        }
+        let host = request.host.clone();
+        let port = request.port;
+        let rejected = request.clone();
+        let submitted = self.submit_store_request(
+            0,
+            store_request(StoreDomain::Security, move |store| {
+                store.load_vnc_known_host(&host, port)
+            }),
+            move |this, event, cx| {
+                let Some(trust) = this
+                    .remote_desktop
+                    .vnc_manager
+                    .trust_state(&request.session_id)
+                else {
+                    return;
+                };
+                if !trust.is_pending(&request)
+                    || !this
+                        .remote_desktop
+                        .sessions
+                        .contains_key(&request.session_id)
+                {
+                    return;
+                }
+                match event.outcome {
+                    Ok(record)
+                        if record.as_ref().is_some_and(|record| {
+                            record
+                                .sha256_fingerprint
+                                .eq_ignore_ascii_case(&request.sha256_fingerprint)
+                        }) =>
+                    {
+                        let _ = this
+                            .remote_desktop
+                            .vnc_manager
+                            .respond_server_key(&request, true, false);
+                    }
+                    Ok(record) => {
+                        if let Some(session) =
+                            this.remote_desktop.sessions.get_mut(&request.session_id)
+                        {
+                            session.vnc_key_request =
+                                Some((request, record.map(|record| record.sha256_fingerprint)));
+                        }
+                    }
+                    Err(_) => {
+                        let _ = this
+                            .remote_desktop
+                            .vnc_manager
+                            .respond_server_key(&request, false, false);
+                    }
+                }
+                cx.notify();
+            },
+            cx,
+        );
+        if !submitted {
+            let _ = self
+                .remote_desktop
+                .vnc_manager
+                .respond_server_key(&rejected, false, false);
+        }
+    }
+
+    pub(super) fn resolve_vnc_key_request(
+        &mut self,
+        request: &nyaterm_remote_desktop::VncServerKeyRequest,
+        accept: bool,
+        remember: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.remote_desktop.sessions.get_mut(&request.session_id) else {
+            return;
+        };
+        if !session
+            .vnc_key_request
+            .as_ref()
+            .is_some_and(|(pending, _)| pending == request)
+        {
+            return;
+        }
+        let previous = session
+            .vnc_key_request
+            .take()
+            .and_then(|(_, previous)| previous);
+        session.vnc_trust_previous = previous;
+        let _ = self
+            .remote_desktop
+            .vnc_manager
+            .respond_server_key(request, accept, remember);
+        cx.notify();
     }
 
     fn handle_rdp_certificate_request(

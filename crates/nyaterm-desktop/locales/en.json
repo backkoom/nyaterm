@@ -740,7 +740,8 @@
     "vncSecurityNone": "None",
     "vncSecurityPassword": "VNC password",
     "vncPasswordLimit": "Classic VNC authentication supports at most 8 password bytes. Passwords are never truncated.",
-    "vncPasswordTooLong": "Classic VNC authentication passwords must be 8 bytes or fewer",
+    "vncPasswordTooLong": "VNC password exceeds the limit: 8 bytes for VNC Authentication, 255 bytes for Auto (RA2_256)",
+    "vncUsernameTooLong": "VNC username must be 255 bytes or fewer",
     "vncUnencryptedWarning": "Classic VNC does not encrypt the desktop, keyboard, or clipboard traffic. Use a trusted network, VPN, or SSH tunnel.",
     "vncSharedSession": "Shared session",
     "vncSharedSessionDesc": "Allow other viewers to stay connected.",
@@ -3292,6 +3293,8 @@
     "youdao": "Youdao"
   },
   "remoteDesktop": {
+    "vncServerKeyVerify": "Verify VNC server public key",
+    "vncTrustAndRemember": "Trust and remember server key",
     "certificateChangedTitle": "Remote Desktop certificate changed",
     "certificateChangedWarning": "The server certificate no longer matches the remembered certificate. Reject unless you independently verified this change.",
     "certificateTitle": "Confirm Remote Desktop certificate",

@@ -630,6 +630,7 @@ impl NyaTermApp {
                 return true;
             }
             if let nyaterm_core::ConnectionType::Vnc {
+                username,
                 host,
                 port,
                 security,
@@ -642,6 +643,7 @@ impl NyaTermApp {
             {
                 let session_id = nyaterm_core::uuid();
                 let config = VncSessionConfig {
+                    username: username.clone(),
                     relay: None,
                     name: connection.name.clone(),
                     host: host.clone(),

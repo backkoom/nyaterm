@@ -29,6 +29,7 @@ pub(super) enum ConnectionEditorValidationError {
     RdpReconnectAttemptsInvalid,
     VncReconnectAttemptsInvalid,
     VncPasswordTooLong,
+    VncUsernameTooLong,
     PostLoginCommandRequired,
     PostLoginDelayInvalid,
     SftpShellDetectionTimeoutInvalid,
@@ -311,6 +312,7 @@ pub(super) fn connection_editor_from_saved(
             editor.rdp_reconnect = reconnect;
         }
         ConnectionType::Vnc {
+            username,
             host,
             port,
             security,
@@ -320,6 +322,7 @@ pub(super) fn connection_editor_from_saved(
             shared,
             view_only,
         } => {
+            editor.username = username;
             editor.host = host;
             editor.port = port.to_string();
             editor.vnc_security = security;
@@ -554,16 +557,25 @@ pub(super) fn build_saved_connection_from_editor(
                 return Err(ConnectionEditorValidationError::HostRequired);
             }
             let port = parse_port(&editor.port)?;
+            if editor.username.trim().len() > 255 {
+                return Err(ConnectionEditorValidationError::VncUsernameTooLong);
+            }
             if editor.vnc_reconnect.max_attempts > 20 {
                 return Err(ConnectionEditorValidationError::VncReconnectAttemptsInvalid);
             }
             if editor.auth_mode == "password"
                 && editor.password_source == ConnectionEditorPasswordSource::Direct
-                && editor.password.trim().len() > 8
+                && editor.password.trim().len()
+                    > if editor.vnc_security.mode == "vnc_auth" {
+                        8
+                    } else {
+                        255
+                    }
             {
                 return Err(ConnectionEditorValidationError::VncPasswordTooLong);
             }
             ConnectionType::Vnc {
+                username: editor.username.trim().to_owned(),
                 host,
                 port,
                 security: editor.vnc_security.clone(),
@@ -1413,6 +1425,7 @@ mod tests {
             id: "connection-vnc".to_string(),
             name: "VNC".to_string(),
             config: ConnectionType::Vnc {
+                username: String::new(),
                 host: "desktop.example.com".to_string(),
                 port: 5901,
                 security: expected_security.clone(),
@@ -1462,6 +1475,7 @@ mod tests {
 
         let mut password_boundary = editor.clone();
         password_boundary.password_source = ConnectionEditorPasswordSource::Direct;
+        password_boundary.vnc_security.mode = "vnc_auth".to_string();
         password_boundary.password = "12345678".to_string().into();
         assert!(build_saved_connection_from_editor(&password_boundary).is_ok());
         password_boundary.password = "密码密码密".to_string().into();
@@ -1472,6 +1486,7 @@ mod tests {
 
         let saved = build_saved_connection_from_editor(&editor).expect("valid connection");
         let ConnectionType::Vnc {
+            username,
             host,
             port,
             security,
@@ -1485,6 +1500,7 @@ mod tests {
             panic!("expected VNC connection");
         };
 
+        assert!(username.is_empty());
         assert_eq!(host, "desktop.example.com");
         assert_eq!(port, 5901);
         assert_eq!(security, expected_security);

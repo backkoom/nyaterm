@@ -6423,3 +6423,73 @@ fn tauri_ai_extensions_follow_account_and_model_ids_through_reorder_delete_and_b
     std::fs::remove_dir_all(dir).ok();
     std::fs::remove_dir_all(restore_dir).ok();
 }
+
+#[test]
+fn vnc_trust_cas_and_portable_roundtrip_preserve_tauri_records() {
+    let source_dir = unique_temp_dir("vnc-trust-source");
+    let target_dir = unique_temp_dir("vnc-trust-target");
+    let source = ConnectionStore::open(&source_dir).unwrap();
+    let target = ConnectionStore::open(&target_dir).unwrap();
+    let first = format!("SHA256:{}", "a1".repeat(32));
+    let next = format!("SHA256:{}", "b2".repeat(32));
+    let checks = std::cell::Cell::new(0);
+    assert!(
+        !source
+            .remember_vnc_known_host_if_current("cancelled", 5900, &first, None, &|| {
+                checks.set(checks.get() + 1);
+                checks.get() == 1
+            })
+            .unwrap()
+    );
+    assert!(
+        source
+            .load_vnc_known_host("cancelled", 5900)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        source
+            .remember_vnc_known_host(" Example.COM ", 5900, &first, None)
+            .unwrap()
+    );
+    assert!(
+        !source
+            .remember_vnc_known_host("example.com", 5900, &next, None)
+            .unwrap()
+    );
+    assert!(
+        source
+            .remember_vnc_known_host("example.com", 5900, &next, Some(&first))
+            .unwrap()
+    );
+    let record = source
+        .load_vnc_known_host("EXAMPLE.COM", 5900)
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.sha256_fingerprint, next);
+    for kind in [PortableSnapshotKind::Backup, PortableSnapshotKind::Sync] {
+        let mut snapshot = source
+            .build_raw_portable_snapshot(kind, "fixture", "2.0.0")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        target.apply_raw_portable_snapshot(&snapshot).unwrap();
+        assert_eq!(
+            target.load_vnc_known_host("example.com", 5900).unwrap(),
+            Some(record.clone())
+        );
+        snapshot.entities.remove("vnc_known_hosts");
+        snapshot.recalculate_hash().unwrap();
+        target.apply_raw_portable_snapshot(&snapshot).unwrap();
+        assert_eq!(
+            target.load_vnc_known_host("example.com", 5900).unwrap(),
+            Some(record.clone())
+        );
+        snapshot.entities.insert("vnc_known_hosts".into(), r#"[{"host":"x","port":5900,"sha256_fingerprint":"bad","created_at_ms":1,"updated_at_ms":1}]"#.into());
+        snapshot.recalculate_hash().unwrap();
+        assert!(target.apply_raw_portable_snapshot(&snapshot).is_err());
+        assert_eq!(
+            target.load_vnc_known_host("example.com", 5900).unwrap(),
+            Some(record.clone())
+        );
+    }
+}

@@ -740,7 +740,8 @@
     "vncSecurityNone": "Aucune",
     "vncSecurityPassword": "Mot de passe VNC",
     "vncPasswordLimit": "L’authentification VNC classique accepte au maximum 8 octets de mot de passe. Les mots de passe ne sont jamais tronqués.",
-    "vncPasswordTooLong": "Le mot de passe VNC classique doit contenir au maximum 8 octets",
+    "vncPasswordTooLong": "Limite du mot de passe VNC : 8 octets pour VNC Authentication, 255 octets en mode Auto (RA2_256)",
+    "vncUsernameTooLong": "Le nom d’utilisateur VNC ne doit pas dépasser 255 octets",
     "vncUnencryptedWarning": "Le VNC classique ne chiffre pas le bureau, le clavier ni le presse-papiers. Utilisez un réseau de confiance, un VPN ou un tunnel SSH.",
     "vncSharedSession": "Session partagée",
     "vncSharedSessionDesc": "Permettre aux autres visionneuses de rester connectées.",
@@ -3292,6 +3293,8 @@
     "youdao": "Youdao"
   },
   "remoteDesktop": {
+    "vncServerKeyVerify": "Verify VNC server public key",
+    "vncTrustAndRemember": "Trust and remember server key",
     "certificateChangedTitle": "Le certificat du bureau à distance a changé",
     "certificateChangedWarning": "Le certificat du serveur ne correspond plus au certificat mémorisé. Rejetez-le sauf si vous avez vérifié ce changement de façon indépendante.",
     "certificateTitle": "Confirmer le certificat du bureau à distance",

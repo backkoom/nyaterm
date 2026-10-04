@@ -740,7 +740,8 @@
     "vncSecurityNone": "无",
     "vncSecurityPassword": "VNC 密码",
     "vncPasswordLimit": "经典 VNC 身份验证最多支持 8 个密码字节，密码绝不会被静默截断。",
-    "vncPasswordTooLong": "经典 VNC 身份验证密码不得超过 8 个字节",
+    "vncPasswordTooLong": "VNC 密码超过限制：VNC Authentication 为 8 字节，自动模式（RA2_256）为 255 字节",
+    "vncUsernameTooLong": "VNC 用户名不能超过 255 字节",
     "vncUnencryptedWarning": "经典 VNC 不会加密桌面、键盘或剪贴板流量。请使用可信网络、VPN 或 SSH 隧道。",
     "vncSharedSession": "共享会话",
     "vncSharedSessionDesc": "允许其他查看器保持连接。",
@@ -3292,6 +3293,8 @@
     "youdao": "有道翻译"
   },
   "remoteDesktop": {
+    "vncServerKeyVerify": "验证 VNC 服务器公钥",
+    "vncTrustAndRemember": "信任并记住服务器公钥",
     "certificateChangedTitle": "远程桌面证书已变更",
     "certificateChangedWarning": "服务器证书与已记住的证书不再匹配。除非已通过独立渠道验证此次变更，否则请拒绝连接。",
     "certificateTitle": "确认远程桌面证书",
