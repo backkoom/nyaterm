@@ -329,6 +329,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        self.remote_ops.clear_stats_sample(&session_id);
         self.session.begin_reconnect_action(session_id.clone());
         self.session.start.clear_active_selection();
         let old_id = session_id;

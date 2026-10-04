@@ -161,7 +161,6 @@ struct ProcessDerivedCache {
 
 struct StatsPaneState {
     job: RemoteJobState<StatsJobResult>,
-    pub data: Option<RemoteStats>,
     pub status: String,
     pub cpu_expanded: bool,
     manual_job_id: Option<u64>,
@@ -171,6 +170,7 @@ struct StatsPaneState {
     revision: u64,
     active_session_id: Option<String>,
     network_history: HashMap<String, VecDeque<NetworkHistorySample>>,
+    snapshots: HashMap<String, RemoteStats>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -326,7 +326,6 @@ impl RemoteOpsFeatureState {
             },
             stats: StatsPaneState {
                 job: RemoteJobState::new(),
-                data: None,
                 status: "start an SSH session to inspect remote stats".to_string(),
                 cpu_expanded: false,
                 manual_job_id: None,
@@ -335,6 +334,7 @@ impl RemoteOpsFeatureState {
                 revision: 0,
                 active_session_id: None,
                 network_history: HashMap::new(),
+                snapshots: HashMap::new(),
             },
             stats_sampler: Arc::new(RemoteStatsSampler::default()),
             gpu: AcceleratorPaneState::new("start an SSH session to inspect NVIDIA GPU"),
@@ -359,6 +359,13 @@ impl RemoteOpsFeatureState {
     pub(in crate::features) fn clear_stats_sample(&mut self, session_id: &str) {
         self.stats_sampler.clear_session(session_id);
         self.stats.network_history.remove(session_id);
+        self.stats.snapshots.remove(session_id);
+        if self.stats.job.is_pending_for(session_id) {
+            self.stats.job.reset_for_session_switch();
+        }
+        if self.stats.active_session_id.as_deref() == Some(session_id) {
+            self.stats.clear_data();
+        }
     }
 
     pub(in crate::features) fn activate_stats_session(&mut self, session_id: &str) {
@@ -468,7 +475,12 @@ impl RemoteOpsFeatureState {
 
     pub(in crate::features) fn stats_presentation(&self) -> StatsPresentationState {
         StatsPresentationState {
-            data: self.stats.data.clone(),
+            data: self
+                .stats
+                .active_session_id
+                .as_deref()
+                .and_then(|id| self.stats.snapshots.get(id))
+                .cloned(),
             network_history: self.stats.active_network_history(),
             cpu_expanded: self.stats.cpu_expanded,
             pending: self.stats.is_pending(),
@@ -1004,6 +1016,9 @@ impl RemoteOpsFeatureState {
         if active_session_id != Some(event.session_id.as_str()) {
             if let Ok(stats) = &event.result {
                 self.stats.record_network_sample(&event.session_id, stats);
+                self.stats
+                    .snapshots
+                    .insert(event.session_id.clone(), stats.clone());
             }
             return StatsApplyOutcome::CompletedInactive;
         }
@@ -1859,7 +1874,7 @@ impl StatsPaneState {
         }
         self.activate_session(session_id);
         self.record_network_sample(session_id, &stats);
-        self.data = Some(stats);
+        self.snapshots.insert(session_id.to_string(), stats);
         self.touch();
     }
 
@@ -1903,7 +1918,9 @@ impl StatsPaneState {
     }
 
     fn clear_data(&mut self) {
-        self.data = None;
+        if let Some(session_id) = self.active_session_id.as_deref() {
+            self.snapshots.remove(session_id);
+        }
         self.touch();
     }
 
@@ -2818,15 +2835,50 @@ mod tests {
             ),
             StatsApplyOutcome::CompletedInactive
         ));
+        state.reset_for_session_switch();
         state.activate_stats_session("session-b");
+        assert_eq!(
+            state
+                .stats_presentation()
+                .data
+                .unwrap()
+                .network_summary
+                .rx_bytes_per_sec,
+            100.0
+        );
         assert_eq!(
             state.stats_presentation().network_history[0].rx_bytes_per_sec,
             100.0
         );
+        state.reset_for_session_switch();
         state.activate_stats_session("session-a");
+        assert_eq!(
+            state
+                .stats_presentation()
+                .data
+                .unwrap()
+                .network_summary
+                .rx_bytes_per_sec,
+            60.0
+        );
         assert_eq!(state.stats_presentation().network_history.len(), 60);
 
+        let stale = state.begin_stats_job("session-a".to_string(), false);
         state.clear_stats_sample("session-a");
+        assert!(state.stats_presentation().data.is_none());
+        assert!(matches!(
+            state.apply_stats_event(
+                StatsJobResult {
+                    job_id: stale.job_id,
+                    session_id: "session-a".into(),
+                    result: Ok(stats(999.0))
+                },
+                Some("session-a")
+            ),
+            StatsApplyOutcome::Ignored
+        ));
+        state.activate_stats_session("session-a");
+        assert!(state.stats_presentation().data.is_none());
         assert!(state.stats_presentation().network_history.is_empty());
     }
 
