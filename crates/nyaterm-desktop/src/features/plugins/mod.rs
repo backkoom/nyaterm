@@ -1,7 +1,7 @@
 mod draft;
 mod process;
+mod state;
 mod view;
-mod window;
 
 pub(crate) use process::PluginProcess;
-pub(in crate::features) use window::PluginFeatureState;
+pub(in crate::features) use state::PluginFeatureState;

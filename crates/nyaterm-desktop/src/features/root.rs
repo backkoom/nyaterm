@@ -500,8 +500,11 @@ impl NyaTermApp {
                                 .justify_center()
                                 .cursor_pointer()
                                 .child("×")
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
                                     this.close_floating_panel(PanelSide::Left, cx);
+                                    if panel == NavItem::Plugins {
+                                        this.focus_active_workspace_surface(window, cx);
+                                    }
                                 })),
                         ),
                 );
@@ -543,8 +546,11 @@ impl NyaTermApp {
                                 .justify_center()
                                 .cursor_pointer()
                                 .child("×")
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
                                     this.close_floating_panel(PanelSide::Right, cx);
+                                    if panel == NavItem::Plugins {
+                                        this.focus_active_workspace_surface(window, cx);
+                                    }
                                 })),
                         ),
                 );

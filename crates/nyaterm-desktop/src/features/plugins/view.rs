@@ -1,11 +1,8 @@
 use crate::features::NyaTermApp;
 use crate::features::plugins::process::PluginProcess;
-use crate::features::view_widgets::{
-    ChildWindowChrome, child_window_header, child_window_root, focus_child_window_shell_if_idle,
-};
 use gpui::{
-    AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, WeakEntity, Window, div, px, rgb,
+    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled,
+    Subscription, Task, WeakEntity, Window, div, px, rgb,
 };
 use nyaterm_core::plugins::invocation::{ActionInput, ActionResult, parse_parameter};
 use nyaterm_core::plugins::manifest::{ParameterKind, ResultKind};
@@ -14,7 +11,6 @@ use nyaterm_plugin_host::manager::{Contribution, InvocationLease, PluginSource};
 use nyaterm_plugin_host::service::{OperationReply, PluginOperation};
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaInput, NyaInputState, NyaScrollable};
 use rust_i18n::t;
-use std::rc::Rc;
 
 struct ParameterInput {
     id: String,
@@ -32,11 +28,9 @@ struct Preview {
     lease: InvocationLease,
 }
 
-pub(super) struct PluginPanel {
+pub(in crate::features) struct PluginPanel {
     app: WeakEntity<NyaTermApp>,
-    process: Entity<PluginProcess>,
-    chrome: ChildWindowChrome,
-    focus: FocusHandle,
+    pub(super) process: Entity<PluginProcess>,
     source: Entity<NyaInputState>,
     text: Entity<NyaInputState>,
     output: Entity<NyaInputState>,
@@ -54,7 +48,6 @@ impl PluginPanel {
     pub fn new(
         app: WeakEntity<NyaTermApp>,
         process: Entity<PluginProcess>,
-        chrome: ChildWindowChrome,
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.observe(&process, |this, _, cx| {
@@ -80,8 +73,6 @@ impl PluginPanel {
         Self {
             app,
             process,
-            chrome,
-            focus: cx.focus_handle(),
             source: cx.new(|cx| {
                 NyaInputState::new(cx, "")
                     .placeholder(t!("plugins.source"))
@@ -338,8 +329,7 @@ fn status_label(status: PluginStatus) -> String {
 }
 
 impl Render for PluginPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        focus_child_window_shell_if_idle(&self.focus, window, cx);
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = self
             .app
             .upgrade()
@@ -349,8 +339,9 @@ impl Render for PluginPanel {
         let mut content = div()
             .id("plugins-scroll")
             .flex_1()
+            .min_w_0()
             .min_h_0()
-            .p_4()
+            .p_2()
             .flex()
             .flex_col()
             .gap_3()
@@ -391,6 +382,8 @@ impl Render for PluginPanel {
                     )
                     .child(
                         NyaButton::new("plugins-development", t!("plugins.development"))
+                            .full_width()
+                            .tooltip(t!("plugins.development"))
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let source = this.source_path(cx);
@@ -422,6 +415,8 @@ impl Render for PluginPanel {
                 .as_ref()
                 .map_or(plugin.id.clone(), |m| format!("{} · {}", m.name, m.version));
             let mut card = div()
+                .w_full()
+                .min_w_0()
                 .flex_none()
                 .p_3()
                 .rounded_lg()
@@ -508,6 +503,8 @@ impl Render for PluginPanel {
                             format!("plugins-update-{}", plugin.id),
                             t!("plugins.update"),
                         )
+                        .full_width()
+                        .tooltip(t!("plugins.update"))
                         .disabled(self.busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let source = this.source_path(cx);
@@ -525,6 +522,8 @@ impl Render for PluginPanel {
                             format!("plugins-uninstall-{}", plugin.id),
                             t!("plugins.uninstall"),
                         )
+                        .full_width()
+                        .tooltip(t!("plugins.uninstall"))
                         .variant(NyaButtonVariant::Danger)
                         .disabled(self.busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -549,6 +548,8 @@ impl Render for PluginPanel {
                         format!("plugins-action-{}", contribution.id),
                         contribution.action.name.clone(),
                     )
+                    .full_width()
+                    .tooltip(contribution.action.name.clone())
                     .disabled(self.busy)
                     .on_click(cx.listener(move |this, _, _, cx| this.select(selected.clone(), cx))),
                 );
@@ -557,6 +558,8 @@ impl Render for PluginPanel {
         }
         if let Some(selected) = &self.selected {
             let mut form = div()
+                .w_full()
+                .min_w_0()
                 .flex_none()
                 .p_3()
                 .rounded_lg()
@@ -589,9 +592,12 @@ impl Render for PluginPanel {
                 div()
                     .flex_none()
                     .flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(
                         NyaButton::new("plugins-invoke", t!("plugins.invoke"))
+                            .full_width()
+                            .tooltip(t!("plugins.invoke"))
                             .variant(NyaButtonVariant::Primary)
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, _, cx| this.invoke(cx))),
@@ -607,6 +613,8 @@ impl Render for PluginPanel {
         if let Some(preview) = &self.preview {
             let mut result =
                 div()
+                    .w_full()
+                    .min_w_0()
                     .flex_none()
                     .p_3()
                     .rounded_lg()
@@ -638,43 +646,42 @@ impl Render for PluginPanel {
                         .gap_2()
                         .child(
                             NyaButton::new("plugins-fill", t!("plugins.fill"))
+                                .full_width()
+                                .tooltip(t!("plugins.fill"))
                                 .on_click(cx.listener(|this, _, _, cx| this.fill(false, cx))),
                         )
                         .child(
                             NyaButton::new("plugins-replace", t!("plugins.replace"))
+                                .full_width()
+                                .tooltip(t!("plugins.replace"))
                                 .on_click(cx.listener(|this, _, _, cx| this.fill(true, cx))),
                         ),
                 );
             } else {
                 result = result.child(
-                    NyaButton::new("plugins-reuse", t!("plugins.reuse")).on_click(cx.listener(
-                        |this, _, _, cx| {
+                    NyaButton::new("plugins-reuse", t!("plugins.reuse"))
+                        .full_width()
+                        .tooltip(t!("plugins.reuse"))
+                        .on_click(cx.listener(|this, _, _, cx| {
                             let value = this.output.read(cx).value(cx);
                             this.text
                                 .update(cx, |state, cx| state.set_content(&value, cx));
-                        },
-                    )),
+                        })),
                 );
             }
             content = content.child(result);
         }
-        child_window_root(
-            &self.focus,
-            false,
-            Rc::new(|window, _| window.remove_window()),
-        )
-        .bg(rgb(palette.surface))
-        .text_color(rgb(palette.text))
-        .text_sm()
-        .child(child_window_header(
-            palette,
-            t!("plugins.title"),
-            None,
-            self.chrome,
-            window,
-            |_, window, _| window.remove_window(),
-        ))
-        .child(content.overflow_y_scrollbar())
+        div()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .bg(rgb(palette.surface))
+            .text_color(rgb(palette.text))
+            .text_sm()
+            .whitespace_normal()
+            .child(content.overflow_y_scrollbar())
     }
 }
 
@@ -683,7 +690,7 @@ mod tests {
     use crate::features::plugins::process::PluginProcess;
     use crate::features::plugins::view::PluginPanel;
     use crate::features::test_support::app_with_visible_local_session;
-    use crate::features::view_widgets::ChildWindowChrome;
+    use crate::models::{ActivityBarZone, NavItem};
     use futures::executor::block_on;
     use gpui::{AppContext, TestAppContext};
     use nyaterm_core::runtime::{AppRuntime, RuntimeMode};
@@ -737,8 +744,11 @@ mod tests {
         .unwrap();
         let panel_app = app.downgrade();
         let panel_process = process.clone();
-        let (panel, vcx) = cx.add_window_view(move |_, cx| {
-            PluginPanel::new(panel_app, panel_process, ChildWindowChrome::Window, cx)
+        let (panel, vcx) =
+            cx.add_window_view(move |_, cx| PluginPanel::new(panel_app, panel_process, cx));
+        vcx.update_entity(&app, |app, cx| {
+            app.plugins.panel = panel.clone();
+            app.open_panel(NavItem::Plugins, cx);
         });
         vcx.run_until_parked();
         let contribution = service.snapshot().contributions[0].clone();
@@ -765,7 +775,17 @@ mod tests {
             });
             vcx.run_until_parked();
         }
+        let generation = vcx.read(|cx| panel.read(cx).generation);
+        vcx.update_entity(&app, |app, cx| {
+            app.hide_activity_entry("plugins".into(), cx);
+            app.show_activity_entry("plugins".into(), cx);
+            app.move_activity_entry("plugins".into(), ActivityBarZone::RightBottom, None, cx);
+            app.open_panel(NavItem::Plugins, cx);
+            assert_eq!(app.plugins.panel.entity_id(), panel.entity_id());
+        });
         vcx.update_entity(&panel, |panel, cx| {
+            assert_eq!(panel.generation, generation);
+            assert!(panel.selected.is_some());
             assert!(panel.preview.is_some(), "{}", panel.status);
             assert_eq!(
                 panel.output.read(cx).value(cx),

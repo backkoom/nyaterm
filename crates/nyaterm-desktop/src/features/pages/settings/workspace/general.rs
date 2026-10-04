@@ -35,17 +35,6 @@ impl SettingsPanel {
             .gap_3()
             .child(settings_form_section(
                 palette,
-                Some(t!("plugins.title")),
-                Some(t!("plugins.boundary")),
-                small_button(
-                    palette,
-                    "settings-plugin-manager",
-                    t!("plugins.manage"),
-                    cx.listener(|this, _, window, cx| this.open_plugin_manager(window, cx)),
-                ),
-            ))
-            .child(settings_form_section(
-                palette,
                 None,
                 None,
                 div()

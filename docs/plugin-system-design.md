@@ -16,9 +16,10 @@ their GPL implementation is not copied or linked.
 * `nyaterm-store::plugin_preferences` persists an isolated versioned document
   under AppRuntime's plugin directory. Existing redb, sync and backup contracts
   are untouched. Corrupt preferences fail closed and are never overwritten.
-* DesktopController owns one process service. GPUI windows own input entities,
+* DesktopController owns one process service. Each workspace's side-panel Entity owns input entities,
   action selection and previews; immutable snapshots are presentation only.
-  A settings entry opens the manager/action surface. All host work runs off UI.
+  The activity-bar extension entry opens the manager/action surface, at the bottom
+  left by default. All host work runs off UI.
 
 ## Interface and execution
 

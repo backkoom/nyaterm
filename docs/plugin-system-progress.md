@@ -18,7 +18,9 @@ Do not mark complete until the documented acceptance checks have passed.
   lifecycle registry, per-component serial worker, bounded queues, fuel and
   epoch hard cancellation/deadlines, resource limits and generation leases.
 * Added process-owned service to DesktopController and orderly shutdown paths.
-  Manager UI is reachable from Settings > General and the quick-command toolbar.
+  Manager UI is a workspace side panel reached from the bottom-left extension icon,
+  between Sync / Backup and Settings by default. It follows panel placement and
+  docked/floating preferences; hidden panels retain their editing state.
   It uses NyaInput/NyaButton/NyaScrollable and all six locale catalogs.
 * SDK guests actually build for wasm32-unknown-unknown. Build script componentizes,
   validates and packages examples; checked SDK-generated binary fixtures support

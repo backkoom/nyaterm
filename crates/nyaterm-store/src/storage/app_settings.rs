@@ -1783,7 +1783,11 @@ impl ConnectionStore {
 }
 
 fn default_activity_left_bottom() -> Vec<String> {
-    vec!["syncBackupHistory".to_string(), "settings".to_string()]
+    vec![
+        "syncBackupHistory".to_string(),
+        "plugins".to_string(),
+        "settings".to_string(),
+    ]
 }
 
 fn default_activity_left_top() -> Vec<String> {

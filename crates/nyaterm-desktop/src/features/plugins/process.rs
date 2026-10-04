@@ -67,6 +67,7 @@ impl PluginProcess {
 #[cfg(test)]
 mod tests {
     use crate::app_shell::{AppShellStartup, DesktopController};
+    use crate::features::plugins::state::PluginFeatureState;
     use crate::features::test_support::app_with_visible_local_session;
     use futures::executor::block_on;
     use gpui::AppContext;
@@ -97,10 +98,36 @@ mod tests {
         let first = app_with_visible_local_session(&mut cx, first_root.path(), "first");
         let second = app_with_visible_local_session(&mut cx, second_root.path(), "second");
         for app in [&first, &second] {
-            cx.update_entity(app, |app, _| app.plugins.process = process.clone());
+            cx.update_entity(app, |app, cx| {
+                app.plugins = PluginFeatureState::new(cx.entity().downgrade(), process.clone(), cx);
+            });
         }
-        let one = cx.read(|cx| first.read(cx).plugins.process.read(cx).service().unwrap());
-        let two = cx.read(|cx| second.read(cx).plugins.process.read(cx).service().unwrap());
+        assert_ne!(
+            cx.read(|cx| first.read(cx).plugins.panel.entity_id()),
+            cx.read(|cx| second.read(cx).plugins.panel.entity_id()),
+        );
+        let one = cx.read(|cx| {
+            first
+                .read(cx)
+                .plugins
+                .panel
+                .read(cx)
+                .process
+                .read(cx)
+                .service()
+                .unwrap()
+        });
+        let two = cx.read(|cx| {
+            second
+                .read(cx)
+                .plugins
+                .panel
+                .read(cx)
+                .process
+                .read(cx)
+                .service()
+                .unwrap()
+        });
         assert!(Arc::ptr_eq(&one, &two));
         let source =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../nyaterm-plugin-host/tests/fixtures");

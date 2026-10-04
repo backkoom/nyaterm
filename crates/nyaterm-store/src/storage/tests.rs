@@ -2378,8 +2378,67 @@ fn legacy_settings_default_hidden_items_and_docked_panel_mode() {
     assert!(summary.ui_activity_bar_hidden_items.is_empty());
     assert_eq!(summary.ui_panel_open_mode, "docked");
     assert!(!summary.ui_panel_multi_open);
+    assert_eq!(
+        summary.ui_activity_bar_left_bottom,
+        ["syncBackupHistory", "plugins", "settings"]
+    );
 
     std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn plugin_layout_roundtrips_without_losing_legacy_or_unknown_settings() {
+    let dir = unique_temp_dir("settings-plugin-layout-compatibility");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let legacy = serde_json::json!({
+        "ui": {
+            "activity_bar_layout": {
+                "left_bottom": ["futureEntry", "syncBackupHistory", "settings"],
+                "right_top": ["savedConnections"],
+                "hidden_items": ["futureEntry"],
+                "futureLayoutOption": { "enabled": true }
+            },
+            "futureUiOption": "preserve"
+        },
+        "futureRootOption": [1, 2]
+    });
+    store
+        .save_settings_value(&legacy)
+        .expect("save legacy document");
+    let mut summary = store
+        .load_app_settings_summary()
+        .expect("load legacy document");
+    assert_eq!(
+        summary.ui_activity_bar_left_bottom,
+        ["futureEntry", "syncBackupHistory", "settings"]
+    );
+    assert_eq!(store.load_settings_value().expect("raw"), legacy);
+
+    // The desktop can add and later move the entry using the existing layout contract.
+    summary.ui_activity_bar_right_top.push("plugins".into());
+    summary.ui_activity_bar_hidden_items.push("plugins".into());
+    let saved = store
+        .save_ui_layout_settings(&summary)
+        .expect("save plugin placement");
+    assert_eq!(
+        saved.ui_activity_bar_left_bottom,
+        summary.ui_activity_bar_left_bottom
+    );
+    assert_eq!(
+        saved.ui_activity_bar_right_top,
+        ["savedConnections", "plugins"]
+    );
+    assert_eq!(
+        saved.ui_activity_bar_hidden_items,
+        ["futureEntry", "plugins"]
+    );
+    let raw = store.load_settings_value().expect("raw");
+    assert_eq!(
+        raw["ui"]["activity_bar_layout"]["futureLayoutOption"],
+        legacy["ui"]["activity_bar_layout"]["futureLayoutOption"]
+    );
+    assert_eq!(raw["ui"]["futureUiOption"], legacy["ui"]["futureUiOption"]);
+    assert_eq!(raw["futureRootOption"], legacy["futureRootOption"]);
 }
 
 #[test]

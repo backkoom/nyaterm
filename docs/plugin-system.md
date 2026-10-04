@@ -8,8 +8,10 @@ read-only architectural reference.
 
 ## Install and use
 
-Open **Settings → General → Manage plugins and actions**, or **Plugins** in the
-quick-command toolbar. Choose a directory containing `plugin.toml`, or a ZIP with
+Open **Plugins** using the extension icon in the bottom-left activity bar,
+between **Sync / Backup** and **Settings** by default. The side panel follows the
+workspace's docked/floating mode and can be moved or hidden like other panels.
+Choose a directory containing `plugin.toml`, or a ZIP with
 that file at its root, then select **Install**. Installation copies and validates
 a managed snapshot; later edits to the source do not affect it.
 

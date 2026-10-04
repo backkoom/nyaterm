@@ -153,7 +153,7 @@ impl NyaTermApp {
         let transfer_panel_height = settings.ui_transfer_height as f32;
         let quick_cmd_height = settings.ui_quick_cmd_height as f32;
         let serial_send_height = settings.ui_serial_send_height as f32;
-        let activity_bar_layout = ActivityBarLayoutState {
+        let mut activity_bar_layout = ActivityBarLayoutState {
             left_top: settings.ui_activity_bar_left_top.clone(),
             left_bottom: settings.ui_activity_bar_left_bottom.clone(),
             right_top: settings.ui_activity_bar_right_top.clone(),
@@ -161,6 +161,8 @@ impl NyaTermApp {
             hidden_items: settings.ui_activity_bar_hidden_items.clone(),
             show_labels: settings.ui_activity_bar_show_labels,
         };
+        activity_bar_layout.ensure_plugin_entry();
+        settings.ui_activity_bar_left_bottom = activity_bar_layout.left_bottom.clone();
         let mut active_left_panel = settings
             .ui_active_left_panel
             .as_deref()
@@ -245,7 +247,11 @@ impl NyaTermApp {
 
         let blocking_jobs = crate::blocking_jobs::BlockingJobScheduler::new();
         let mut app = Self {
-            plugins: crate::features::plugins::PluginFeatureState::new(plugins),
+            plugins: crate::features::plugins::PluginFeatureState::new(
+                app_entity.downgrade(),
+                plugins,
+                cx,
+            ),
             workspace_id,
             workspace_revision: 0,
             desktop_controller: None,

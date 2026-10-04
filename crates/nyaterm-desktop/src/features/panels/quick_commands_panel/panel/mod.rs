@@ -326,12 +326,6 @@ impl NyaTermApp {
                         )
                     })
                     .child(div().flex_1())
-                    .child(small_button(
-                        palette,
-                        "quick-command-plugins",
-                        t!("plugins.title"),
-                        cx.listener(|this, _, window, cx| this.open_plugin_manager(window, cx)),
-                    ))
                     .child(
                         div()
                             .w(px(144.))

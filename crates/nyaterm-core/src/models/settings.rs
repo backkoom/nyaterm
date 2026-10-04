@@ -631,7 +631,11 @@ fn default_activity_left_top() -> Vec<String> {
 }
 
 fn default_activity_left_bottom() -> Vec<String> {
-    vec!["syncBackupHistory".to_string(), "settings".to_string()]
+    vec![
+        "syncBackupHistory".to_string(),
+        "plugins".to_string(),
+        "settings".to_string(),
+    ]
 }
 
 fn default_activity_right_top() -> Vec<String> {
@@ -932,6 +936,20 @@ mod tests {
         assert_eq!(summary.ui_start_workspace_mode, "workbench");
         assert!(summary.ui_asset_sort_key.is_none());
         assert!(summary.ui_asset_sort_direction.is_none());
+    }
+
+    #[test]
+    fn missing_activity_layout_defaults_to_plugins_before_settings() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).expect("serializes");
+        value
+            .as_object_mut()
+            .expect("object")
+            .remove("ui_activity_bar_left_bottom");
+        let summary: AppSettingsSummary = serde_json::from_value(value).expect("legacy settings");
+        assert_eq!(
+            summary.ui_activity_bar_left_bottom,
+            ["syncBackupHistory", "plugins", "settings"]
+        );
     }
 
     #[test]

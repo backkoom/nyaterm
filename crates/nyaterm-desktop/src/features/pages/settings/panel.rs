@@ -1888,16 +1888,6 @@ macro_rules! forward_app_action {
     };
 }
 
-impl SettingsPanel {
-    pub(in crate::features) fn open_plugin_manager(
-        &mut self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.with_app(cx, |app, cx| app.open_plugin_manager(window, cx));
-    }
-}
-
 forward_app_action!(
     add_search_engine,
     cancel_github_gist_auth,
