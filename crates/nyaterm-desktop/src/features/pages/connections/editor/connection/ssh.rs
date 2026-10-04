@@ -23,7 +23,7 @@ use crate::models::{
 use super::super::super::list::{
     ConnectionEditorChoice, ConnectionEditorRenderContext, EDITOR_CONTROL_HEIGHT_PX,
     EditorSecretFieldOptions, connection_editor_select, editor_field, editor_secret_field,
-    editor_stepper_field, forwarding_endpoint_editor_field, required, toggle_chip,
+    editor_stepper_field, editor_switch_row, forwarding_endpoint_editor_field, required,
 };
 
 use super::{ConnectionEditorSectionContext, recording::connection_editor_recording_section};
@@ -745,8 +745,9 @@ pub(super) fn connection_editor_ssh_section(
                                         t!("dialog.selectOtp"),
                                         ConnectionEditorSelect::Otp,
                                     ))
-                                    .child(toggle_chip(
+                                    .child(editor_switch_row(
                                         palette,
+                                        "connection-editor-otp-auto-fill",
                                         t!("dialog.autoFillOtp"),
                                         editor.auto_fill_otp,
                                         cx.listener(|this, _, _, cx| {
@@ -1190,8 +1191,9 @@ pub(super) fn connection_editor_ssh_section(
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .child(toggle_chip(
+                                    .child(editor_switch_row(
                                         palette,
+                                        "connection-editor-post-login",
                                         t!("dialog.enabled"),
                                         editor.post_login_enabled,
                                         cx.listener(|this, _, _, cx| {
@@ -1292,8 +1294,9 @@ pub(super) fn connection_editor_ssh_section(
                                             )
                                         },
                                     )
-                                    .child(toggle_chip(
+                                    .child(editor_switch_row(
                                         palette,
+                                        "connection-editor-dynamic-tab-title",
                                         t!("dialog.dynamicTabTitle"),
                                         editor.dynamic_tab_title,
                                         cx.listener(|this, _, _, cx| {
@@ -1318,8 +1321,9 @@ pub(super) fn connection_editor_ssh_section(
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .child(toggle_chip(
+                                    .child(editor_switch_row(
                                         palette,
+                                        "connection-editor-sftp-enabled",
                                         t!("dialog.enabled"),
                                         editor.sftp_enabled,
                                         cx.listener(|this, _, _, cx| {
@@ -1329,8 +1333,9 @@ pub(super) fn connection_editor_ssh_section(
                                             );
                                         }),
                                     ))
-                                    .child(toggle_chip(
+                                    .child(editor_switch_row(
                                         palette,
+                                        "connection-editor-sftp-compatibility",
                                         t!("dialog.sftpCompatibilityMode"),
                                         editor.sftp_compatibility_mode,
                                         cx.listener(|this, _, _, cx| {
@@ -1383,8 +1388,9 @@ pub(super) fn connection_editor_ssh_section(
                                 palette,
                                 t!("dialog.x11Forwarding"),
                                 t!("dialog.x11ForwardingDesc"),
-                                toggle_chip(
+                                editor_switch_row(
                                     palette,
+                                    "connection-editor-x11-forwarding",
                                     t!("dialog.enabled"),
                                     editor.x11_forwarding,
                                     cx.listener(|this, _, _, cx| {
