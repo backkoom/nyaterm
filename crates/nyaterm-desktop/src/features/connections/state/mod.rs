@@ -325,6 +325,13 @@ impl ConnectionFeatureState {
         self.catalog.groups()
     }
 
+    pub(in crate::features) fn catalog_revisions(&self) -> (u64, u64) {
+        (
+            self.catalog.connections_revision(),
+            self.catalog.groups_revision(),
+        )
+    }
+
     /// The current flat-row key, for the panel snapshot.
     ///
     /// Cheap: revisions and the filter text, no model build. Read it *after*

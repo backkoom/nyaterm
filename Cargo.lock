@@ -6646,6 +6646,7 @@ name = "nyaterm-terminal-gpui"
 version = "2.0.0-preview.4"
 dependencies = [
  "aho-corasick",
+ "futures",
  "gpui",
  "image",
  "nyaterm-core",

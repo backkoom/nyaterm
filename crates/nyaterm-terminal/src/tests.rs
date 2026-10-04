@@ -680,6 +680,19 @@ fn all_text_rows_preserve_wraps_across_scrollback_boundary() {
 }
 
 #[test]
+fn all_text_joins_soft_wraps_across_scrollback_and_keeps_hard_breaks() {
+    let mut screen = TerminalScreen::new(5, 2);
+    screen.advance("ab好ef\r\nghij\r\n\r\n".as_bytes());
+    assert_eq!(screen.all_text().as_deref(), Some("ab好ef\nghij"));
+}
+
+#[test]
+fn all_text_is_absent_for_a_blank_buffer() {
+    let screen = TerminalScreen::new(5, 2);
+    assert_eq!(screen.all_text(), None);
+}
+
+#[test]
 fn all_text_rows_match_snapshot_text_for_wide_and_combining_cells() {
     let mut screen = TerminalScreen::new(5, 2);
     screen.advance("ab好e\u{301}f\r\ng".as_bytes());

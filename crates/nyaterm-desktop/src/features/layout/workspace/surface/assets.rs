@@ -286,22 +286,23 @@ impl NyaTermApp {
 
     fn asset_workspace_state(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let palette = self.theme_palette();
-        let groups = self.connection_state.groups().to_vec();
-        self.start_workspace.sync_group_options(&groups, cx);
+        self.start_workspace.sync_group_options_for_catalog(
+            self.connection_state.catalog_revisions().1,
+            self.connection_state.groups(),
+            cx,
+        );
         let labels = AssetDisplayLabels {
             none: t!("assets.none").to_string(),
             not_applicable: t!("assets.notApplicable").to_string(),
             local_machine: t!("assets.localMachine").to_string(),
         };
-        let records: Arc<[AssetRecord]> = self
-            .start_workspace
-            .records(
-                self.connection_state.connections(),
-                self.connection_state.groups(),
-                &labels,
-                &t!("assets.title"),
-            )
-            .into();
+        let records: Arc<[AssetRecord]> = self.start_workspace.records(
+            self.connection_state.catalog_revisions(),
+            self.connection_state.connections(),
+            self.connection_state.groups(),
+            &labels,
+            &t!("assets.title"),
+        );
         let search = self.start_workspace.search_field();
         let group_select = self.start_workspace.group_select();
         let list_mode = self.start_workspace.view_mode() == AssetViewMode::List;

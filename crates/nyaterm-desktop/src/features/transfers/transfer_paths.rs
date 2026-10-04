@@ -157,27 +157,26 @@ impl NyaTermApp {
             return;
         };
 
-        if path.exists() && !path.is_dir() {
-            self.shell.set_status(format!(
-                "configured download path is not a directory: {}",
-                path.display()
-            ));
-            cx.notify();
-            return;
-        }
-
-        match std::fs::create_dir_all(&path) {
-            Ok(()) => {
-                cx.reveal_path(&path);
-                self.shell
-                    .set_status(format!("opened download directory {}", path.display()));
-            }
-            Err(error) => {
-                self.shell
-                    .set_status(format!("failed to prepare download directory: {error}"));
-            }
-        }
-        cx.notify();
+        let prepare = cx
+            .background_executor()
+            .spawn(async move { std::fs::create_dir_all(&path).map(|()| path) });
+        cx.spawn(async move |this, cx| {
+            let result = prepare.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(path) => {
+                        cx.reveal_path(&path);
+                        this.shell
+                            .set_status(format!("opened download directory {}", path.display()));
+                    }
+                    Err(error) => this
+                        .shell
+                        .set_status(format!("failed to prepare download directory: {error}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Resolve targets for both download entry points; an explicit directory bypasses

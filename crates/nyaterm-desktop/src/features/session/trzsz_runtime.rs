@@ -833,21 +833,6 @@ impl NyaTermApp {
             cx.notify();
             return None;
         };
-        if directory.exists() && !directory.is_dir() {
-            self.shell.set_status(format!(
-                "trzsz download path is not a directory: {}",
-                directory.display()
-            ));
-            cx.notify();
-            return None;
-        }
-        if let Err(error) = std::fs::create_dir_all(&directory) {
-            self.shell.set_status(format!(
-                "failed to prepare trzsz download directory: {error}"
-            ));
-            cx.notify();
-            return None;
-        }
         Some(directory)
     }
 
@@ -1594,6 +1579,15 @@ fn run_trzsz_download_worker(
     command_rx: mpsc::Receiver<TrzszDownloadWorkerCommand>,
     event_tx: mpsc::SyncSender<TrzszDownloadWorkerEvent>,
 ) {
+    if let Err(error) = std::fs::create_dir_all(&download.directory) {
+        let message = format!("failed to prepare trzsz download directory: {error}");
+        let _ = event_tx.send(TrzszDownloadWorkerEvent {
+            responses: vec![trzsz_fail_response(&message, remote_is_windows)],
+            failed: Some(message),
+            ..TrzszDownloadWorkerEvent::default()
+        });
+        return;
+    }
     let mut protocol = TrzszProtocolStream::new();
     let mut transfer = TrzszTransferState::new();
     transfer.remote_is_windows = remote_is_windows;
@@ -2405,11 +2399,45 @@ mod tests {
     };
 
     use super::{
-        TrzszDownloadRuntime, TrzszDownloadWorkerEvent, TrzszUploadPrepareWorker,
-        TrzszUploadRuntime, process_trzsz_download_worker_frame, process_trzsz_upload_worker_begin,
+        TrzszDownloadRuntime, TrzszDownloadWorker, TrzszDownloadWorkerEvent,
+        TrzszUploadPrepareWorker, TrzszUploadRuntime, process_trzsz_download_worker_frame,
+        process_trzsz_upload_worker_begin,
     };
     use crate::features::test_support::app_with_visible_local_session;
     use crate::test_support::TestConfigDir;
+
+    #[test]
+    fn download_worker_reports_directory_preparation_failure_through_protocol() {
+        let root = unique_test_dir("trzsz-invalid-directory");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let directory = root.path().join("file");
+        std::fs::write(&directory, b"existing file").unwrap();
+        let mut worker = TrzszDownloadWorker::spawn(
+            TrzszDownloadRuntime {
+                engine: TrzszDownloadEngine::new(false),
+                directory,
+                directory_roots: HashMap::new(),
+                pending_path: None,
+                current_file: None,
+            },
+            false,
+        );
+        let event = worker
+            .event_rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert!(
+            event
+                .failed
+                .unwrap()
+                .contains("prepare trzsz download directory")
+        );
+        assert_eq!(event.responses.len(), 1);
+        assert!(event.responses[0].starts_with(b"#fail:"));
+        worker.shutdown();
+    }
 
     #[test]
     fn idle_trzsz_prefix_reaches_terminal_without_a_second_output_event() {

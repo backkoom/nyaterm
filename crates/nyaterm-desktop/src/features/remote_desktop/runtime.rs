@@ -596,7 +596,7 @@ impl NyaTermApp {
             self.release_remote_keys(session_id);
         }
         self.remote_desktop.remove_session(session_id);
-        self.remote_desktop.manager.close(session_id)
+        self.remote_desktop.manager.close_detached(session_id)
     }
 
     pub(in crate::features) fn close_vnc_runtime(
@@ -658,8 +658,8 @@ impl NyaTermApp {
     /// interval, but that still left 50ms idle / 16ms under pressure, so a helper
     /// delivering 60fps was sampled at 20-60fps.
     ///
-    /// The session queues keep only the newest frame, so they stay queues and
-    /// only the signal is a channel; see `models::event_wake`. `update_in` rather
+    /// Frame deltas stay ordered in bounded queues; only the wake signal is a
+    /// channel (see `models::event_wake`). `update_in` rather
     /// than `update` because applying a frame needs the `Window` for its dynamic
     /// texture.
     pub(in crate::features) fn start_remote_desktop_event_drain(&mut self, cx: &mut Context<Self>) {
@@ -675,16 +675,18 @@ impl NyaTermApp {
                     // Any event means a session exists; the periodic clock is scoped
                     // to that, and every reconnect is scheduled from an event handler.
                     this.ensure_remote_desktop_periodic_clock(cx);
-                    let dirty = this.drain_remote_desktop_queues(window, cx);
-                    if dirty {
-                        cx.notify();
-                    }
-                    dirty
+                    this.drain_remote_desktop_queues(window, cx)
                 });
                 match drained {
                     Err(_) => break,
                     // A frame can arrive while the previous one is being applied.
-                    Ok(true) => continue,
+                    Ok(true) => {
+                        // Bound consecutive UI updates even with continuously full queues.
+                        cx.background_executor()
+                            .timer(Duration::from_millis(1))
+                            .await;
+                        continue;
+                    }
                     Ok(false) => {}
                 }
                 if wake_rx.next().await.is_none() {
@@ -700,16 +702,24 @@ impl NyaTermApp {
         for texture in self.remote_desktop.pending_texture_removals.drain(..) {
             window.remove_dynamic_texture(texture);
         }
-        let ids = self
+        let mut ids = self
             .remote_desktop
             .sessions
             .keys()
             .cloned()
             .collect::<Vec<_>>();
+        ids.sort_unstable();
+        if !ids.is_empty() {
+            let offset = self.remote_desktop.drain_cursor % ids.len();
+            ids.rotate_left(offset);
+        }
+        let started = Instant::now();
         let mut dirty = false;
+        let mut root_dirty = false;
         for session_id in ids {
-            let drain = self.remote_desktop.manager.drain(&session_id);
-            let vnc_drain = self.remote_desktop.vnc_manager.drain(&session_id);
+            self.remote_desktop.drain_cursor = self.remote_desktop.drain_cursor.wrapping_add(1);
+            let drain = self.remote_desktop.manager.drain_batch(&session_id);
+            let vnc_drain = self.remote_desktop.vnc_manager.drain_batch(&session_id);
             if drain.control.is_empty()
                 && drain.frames.is_empty()
                 && drain.cursors.is_empty()
@@ -727,6 +737,12 @@ impl NyaTermApp {
                 self.remote_desktop.metrics_frame_updates += vnc_drain.frames.len();
             }
             dirty = true;
+            root_dirty |= !drain.control.is_empty() || !vnc_drain.control.is_empty();
+            let previous_state = self
+                .remote_desktop
+                .sessions
+                .get(&session_id)
+                .map(|session| session.state);
             for event in drain.control {
                 self.apply_rdp_control_event(&session_id, event, window, cx);
             }
@@ -737,6 +753,17 @@ impl NyaTermApp {
             }
             self.apply_remote_cursor_batch(&session_id, vnc_drain.cursors, window);
             self.apply_rdp_frame_batch(&session_id, vnc_drain.frames, window);
+            root_dirty |= previous_state
+                != self
+                    .remote_desktop
+                    .sessions
+                    .get(&session_id)
+                    .map(|session| session.state);
+            if self.session.active_id() == Some(session_id.as_str())
+                && let Some(surface) = self.remote_desktop.surfaces.get(&session_id)
+            {
+                surface.update(cx, |_, cx| cx.notify());
+            }
             if self
                 .remote_desktop
                 .sessions
@@ -750,8 +777,14 @@ impl NyaTermApp {
             {
                 self.remote_desktop.routes.remove(&session_id);
             }
+            if started.elapsed() >= Duration::from_millis(4) {
+                break;
+            }
         }
         self.settle_remote_desktop_restore(cx);
+        if root_dirty {
+            cx.notify();
+        }
         dirty
     }
 
@@ -1818,6 +1851,7 @@ impl NyaTermApp {
         limits: FramebufferLimits,
         window: &mut Window,
     ) {
+        let visible = self.session.active_id() == Some(session_id);
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -1829,11 +1863,20 @@ impl NyaTermApp {
         }
         match Framebuffer::new(epoch, width, height, limits) {
             Ok(framebuffer) => {
+                if !visible {
+                    session.framebuffer = Some(framebuffer);
+                    session.texture_dirty = true;
+                    session.cursor_shape = None;
+                    session.cursor_position = Default::default();
+                    session.cursor_visible = true;
+                    return;
+                }
                 let texture_size = size(DevicePixels(width as i32), DevicePixels(height as i32));
                 match window.create_dynamic_texture(texture_size, framebuffer.pixels(), width * 4) {
                     Ok(texture) => {
                         session.framebuffer = Some(framebuffer);
                         session.texture = Some(texture);
+                        session.texture_dirty = false;
                         session.cursor_shape = None;
                         session.cursor_position = Default::default();
                         session.cursor_visible = true;
@@ -1884,6 +1927,14 @@ impl NyaTermApp {
         if !dirty_rects.is_empty() {
             clear_rdp_reconnect_after_frame(session);
         }
+        if self.session.active_id() != Some(session_id) {
+            session.texture_dirty |= !dirty_rects.is_empty();
+            return;
+        }
+        if session.texture_dirty {
+            self.prepare_remote_desktop_textures(session_id, window);
+            return;
+        }
         let (Some(framebuffer), Some(texture)) = (session.framebuffer.as_ref(), session.texture)
         else {
             return;
@@ -1920,6 +1971,7 @@ impl NyaTermApp {
         cursors: Vec<RemoteCursorEvent>,
         window: &mut Window,
     ) {
+        let visible = self.session.active_id() == Some(session_id);
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -1937,7 +1989,8 @@ impl NyaTermApp {
                     if let Some(texture) = session.cursor_texture.take() {
                         window.remove_dynamic_texture(texture);
                     }
-                    if shape.width > 0
+                    if visible
+                        && shape.width > 0
                         && shape.height > 0
                         && let Ok(texture) = window.create_dynamic_texture(
                             size(
@@ -1959,6 +2012,68 @@ impl NyaTermApp {
                     session.cursor_visible = visibility.visible;
                 }
             }
+        }
+    }
+
+    pub(super) fn prepare_remote_desktop_textures(
+        &mut self,
+        session_id: &str,
+        window: &mut Window,
+    ) {
+        let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
+            return;
+        };
+        if let Some(framebuffer) = session.framebuffer.as_ref() {
+            let dimensions = size(
+                DevicePixels(framebuffer.width() as i32),
+                DevicePixels(framebuffer.height() as i32),
+            );
+            let result = if let Some(texture) = session.texture {
+                if session.texture_dirty {
+                    window.update_dynamic_texture(
+                        texture,
+                        Bounds::new(Point::new(DevicePixels(0), DevicePixels(0)), dimensions),
+                        framebuffer.pixels(),
+                        framebuffer.width() * 4,
+                    )
+                } else {
+                    Ok(())
+                }
+            } else {
+                window
+                    .create_dynamic_texture(
+                        dimensions,
+                        framebuffer.pixels(),
+                        framebuffer.width() * 4,
+                    )
+                    .map(|texture| {
+                        session.texture = Some(texture);
+                    })
+            };
+            match result {
+                Ok(()) => session.texture_dirty = false,
+                Err(error) => set_rdp_view_error(
+                    session,
+                    RdpErrorKind::Protocol,
+                    format!("failed to upload remote desktop texture: {error}"),
+                ),
+            }
+        }
+        if session.cursor_texture.is_none()
+            && let Some(shape) = session.cursor_shape.as_ref()
+            && shape.width > 0
+            && shape.height > 0
+        {
+            session.cursor_texture = window
+                .create_dynamic_texture(
+                    size(
+                        DevicePixels(shape.width as i32),
+                        DevicePixels(shape.height as i32),
+                    ),
+                    &shape.pixels,
+                    shape.width * 4,
+                )
+                .ok();
         }
     }
 

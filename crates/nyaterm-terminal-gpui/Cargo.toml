@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 aho-corasick = "1"
 gpui.workspace = true
+futures.workspace = true
 nyaterm-core.workspace = true
 nyaterm-terminal.workspace = true
 nyaterm-ui.workspace = true

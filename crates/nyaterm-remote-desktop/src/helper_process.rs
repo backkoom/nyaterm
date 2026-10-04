@@ -50,6 +50,17 @@ pub(crate) struct IpcWriter {
 }
 
 impl IpcWriter {
+    #[cfg(test)]
+    pub(crate) fn test_mailbox() -> Self {
+        Self {
+            inner: Arc::new(WriterInner {
+                state: Mutex::new(WriterState::default()),
+                changed: Condvar::new(),
+            }),
+            worker: None,
+        }
+    }
+
     pub(crate) fn spawn(stdin: ChildStdin, thread_name: String) -> io::Result<Self> {
         let inner = Arc::new(WriterInner {
             state: Mutex::new(WriterState::default()),

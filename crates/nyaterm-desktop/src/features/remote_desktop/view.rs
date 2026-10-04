@@ -26,6 +26,22 @@ impl NyaTermApp {
         session_id: String,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let app = cx.weak_entity();
+        self.remote_desktop
+            .surfaces
+            .entry(session_id.clone())
+            .or_insert_with(|| {
+                cx.new(|cx| super::surface::RemoteDesktopSurface::new(app, session_id, cx))
+            })
+            .clone()
+            .into_any_element()
+    }
+
+    pub(super) fn remote_desktop_view_content(
+        &mut self,
+        session_id: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let palette = self.theme_palette();
         let Some(session) = self.remote_desktop.sessions.get(&session_id) else {
             return self

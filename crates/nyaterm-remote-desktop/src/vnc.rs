@@ -231,6 +231,10 @@ impl EventQueue {
     }
 
     fn drain(&self) -> VncSessionDrain {
+        self.drain_with_limit(false)
+    }
+
+    fn drain_with_limit(&self, bounded: bool) -> VncSessionDrain {
         let mut state = self
             .state
             .lock()
@@ -243,13 +247,21 @@ impl EventQueue {
         .into_iter()
         .flatten()
         .collect();
+        let count = if bounded {
+            crate::frame::frame_batch_len(&state.frames)
+        } else {
+            state.frames.len()
+        };
+        let frames: Vec<_> = state.frames.drain(..count).collect();
+        state.frame_bytes = state
+            .frame_bytes
+            .saturating_sub(frames.iter().map(frame_byte_cost).sum());
         let drain = VncSessionDrain {
             control: state.control.drain(..).collect(),
-            frames: state.frames.drain(..).collect(),
+            frames,
             cursors,
         };
         state.control_bytes = 0;
-        state.frame_bytes = 0;
         drop(state);
         self.space_available.notify_all();
         drain
@@ -261,6 +273,13 @@ impl EventQueue {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.closed = true;
+        state.control.clear();
+        state.control_bytes = 0;
+        state.frames.clear();
+        state.frame_bytes = 0;
+        state.cursor_shape = None;
+        state.cursor_position = None;
+        state.cursor_visibility = None;
         drop(state);
         self.space_available.notify_all();
     }
@@ -547,6 +566,17 @@ impl VncSessionManager {
         record.queue.drain()
     }
 
+    /// Drain control state and a bounded, ordered prefix of frame deltas.
+    pub fn drain_batch(&self, session_id: &str) -> VncSessionDrain {
+        let Ok(sessions) = self.sessions.lock() else {
+            return VncSessionDrain::default();
+        };
+        sessions
+            .get(session_id)
+            .map(|record| record.queue.drain_with_limit(true))
+            .unwrap_or_default()
+    }
+
     /// Close a session, keeping its record so [`Self::state`] still answers.
     ///
     /// This matches `RdpSessionManager::close`: the record stays in the map with
@@ -602,6 +632,7 @@ impl VncSessionManager {
             return Ok(());
         };
         record.queue.trust.cancel();
+        record.queue.close();
         let session_id = session_id.to_owned();
         std::thread::spawn(move || {
             record.queue.trust.invalidate(true);
@@ -1347,5 +1378,28 @@ mod tests {
         std::thread::yield_now();
         queue.close();
         assert!(!producer.join().unwrap());
+        let drain = queue.drain();
+        assert!(drain.control.is_empty());
+        assert!(drain.frames.is_empty());
+        assert!(drain.cursors.is_empty());
+        assert_eq!(queue.state.lock().unwrap().frame_bytes, 0);
+    }
+
+    #[test]
+    fn bounded_drain_preserves_delta_order_and_accounting() {
+        let queue = EventQueue::default();
+        queue.push_reset("s", 1, 32, 1);
+        for x in 0..20 {
+            assert!(queue.push_frame(frame(1, x, false)));
+        }
+        assert_eq!(queue.drain_with_limit(true).frames.len(), 8);
+        assert_eq!(queue.state.lock().unwrap().frame_bytes, 12 * 4);
+        let second = queue.drain_with_limit(true);
+        assert!(matches!(
+            second.frames[0],
+            RemoteFrameEvent::Bitmap { x: 8, .. }
+        ));
+        assert_eq!(queue.drain_with_limit(true).frames.len(), 4);
+        assert_eq!(queue.state.lock().unwrap().frame_bytes, 0);
     }
 }

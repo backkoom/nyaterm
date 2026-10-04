@@ -1821,6 +1821,75 @@ fn cache_test_app(cx: &mut TestAppContext) -> gpui::Entity<NyaTermApp> {
     cx.new(|cx| NyaTermApp::new(runtime, stores, cx))
 }
 
+#[test]
+fn asset_snapshots_reuse_records_and_invalidate_for_catalog_and_view_changes() {
+    use nyaterm_core::assets::{AssetDisplayLabels, AssetFilterKey, AssetRecord, AssetSortKey};
+    use std::sync::Arc;
+
+    fn records(
+        app: &mut NyaTermApp,
+        labels: &AssetDisplayLabels,
+        root: &str,
+    ) -> Arc<[AssetRecord]> {
+        app.start_workspace.records(
+            app.connection_state.catalog_revisions(),
+            app.connection_state.connections(),
+            app.connection_state.groups(),
+            labels,
+            root,
+        )
+    }
+
+    let mut cx = TestAppContext::single();
+    let app = cache_test_app(&mut cx);
+    seed_cached_connections(&mut cx, &app);
+    cx.update_entity(&app, |app, cx| {
+        let labels = AssetDisplayLabels::default();
+        let first = records(app, &labels, "Assets");
+        assert_eq!(first.len(), 3);
+        assert!(Arc::ptr_eq(&first, &records(app, &labels, "Assets")));
+        app.start_workspace.cycle_sort(AssetSortKey::Name);
+        let sorted = records(app, &labels, "Assets");
+        assert!(!Arc::ptr_eq(&first, &sorted));
+        assert_eq!(sorted[0].connection.name, "Child");
+        app.start_workspace.search_field().update(cx, |_, cx| {
+            cx.emit(nyaterm_ui::NyaInputEvent::Changed("Child".to_string()));
+        });
+    });
+    cx.update_entity(&app, |app, _| {
+        let labels = AssetDisplayLabels::default();
+        let searched = records(app, &labels, "Assets");
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].connection.id, "child");
+        app.start_workspace
+            .toggle_filter(AssetFilterKey::Tag("missing".to_string()));
+        assert!(records(app, &labels, "Assets").is_empty());
+        app.start_workspace.clear_filters();
+        let before = records(app, &labels, "Assets");
+        let mut connections = app.connection_state.connections().to_vec();
+        connections
+            .iter_mut()
+            .find(|connection| connection.id == "child")
+            .unwrap()
+            .name = "Child updated".to_string();
+        let mut groups = app.connection_state.groups().to_vec();
+        groups[0].name = "Renamed".to_string();
+        app.connection_state.replace_loaded(connections, groups);
+        let after = records(app, &labels, "Assets");
+        assert!(!Arc::ptr_eq(&before, &after));
+        assert_eq!(after[0].connection.name, "Child updated");
+        assert!(after[0].group_path.contains("Renamed"));
+        let localized = records(app, &labels, "Localized root");
+        assert!(localized[0].group_path.starts_with("Localized root"));
+        let mut translated = labels.clone();
+        translated.none = "Nothing".to_string();
+        assert!(!Arc::ptr_eq(
+            &localized,
+            &records(app, &translated, "Localized root")
+        ));
+    });
+}
+
 fn seed_cached_connections(cx: &mut TestAppContext, app: &gpui::Entity<NyaTermApp>) {
     let connections = vec![
         saved_connection("root", "Root", None, 0),

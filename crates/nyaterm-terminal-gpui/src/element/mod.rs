@@ -180,6 +180,7 @@ impl NyaTerminalLayoutCacheStats {
 
 #[derive(Debug, Default)]
 pub struct NyaTerminalLayoutCache {
+    image_residents: HashMap<u64, Arc<()>>,
     rows: HashMap<u64, Arc<CachedTerminalPaintRow>>,
     row_order: VecDeque<u64>,
     cursor_glyphs: HashMap<u64, Arc<ShapedLine>>,
@@ -211,6 +212,7 @@ impl NyaTerminalLayoutCache {
     }
 
     pub fn clear(&mut self) {
+        self.image_residents.clear();
         self.rows.clear();
         self.row_order.clear();
         self.cursor_glyphs.clear();
@@ -1314,7 +1316,7 @@ impl Element for NyaTerminalElement {
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Self::PrepaintState {
         let started_at = Instant::now();
         let visible_bounds = window.content_mask().bounds.intersect(&bounds);
@@ -1720,7 +1722,37 @@ impl Element for NyaTerminalElement {
                 plan.prefetched_row_count = plan.prefetched_row_count.saturating_add(1);
             }
         }
+        let visible_images = self
+            .snapshot
+            .images
+            .iter()
+            .filter(|image| {
+                image.width_cells > 0
+                    && image.height_cells > 0
+                    && image.row.saturating_add(image.height_cells) > visible_row_start
+                    && image.row < visible_row_end
+            })
+            .map(|image| image.content_id)
+            .collect::<HashSet<_>>();
+        let mut image_residents = HashMap::new();
+        if let Some(cache) = layout_cache.as_mut() {
+            cache
+                .image_residents
+                .retain(|key, _| visible_images.contains(key));
+            for key in &visible_images {
+                cache
+                    .image_residents
+                    .entry(*key)
+                    .or_insert_with(|| Arc::new(()));
+            }
+            image_residents.clone_from(&cache.image_residents);
+        } else {
+            image_residents.extend(visible_images.into_iter().map(|key| (key, Arc::new(()))));
+        }
         drop(layout_cache);
+        if !image_residents.is_empty() {
+            crate::images::protect_visible_images(&image_residents);
+        }
 
         // Graphics protocol placements (Kitty / iTerm2 / Sixel).
         // Kitty z>0 places above text; everything else stays under the glyph layer.
@@ -1740,10 +1772,13 @@ impl Element for NyaTerminalElement {
             let w = px(image.image_width_cells as f32 * cell_w);
             let h = px(image.image_height_cells as f32 * cell_h);
             let rect = Bounds::new(point(x, y), size(w, h));
-            match crate::images::cached_render_image(
+            match crate::images::cached_render_image_in_window(
                 image.id,
                 image.content_id,
                 Arc::clone(&image.data),
+                &image_residents[&image.content_id],
+                window,
+                cx,
             ) {
                 crate::images::CachedRenderImage::Ready(decoded) => {
                     let paint = TerminalImagePaint {
@@ -1757,7 +1792,6 @@ impl Element for NyaTerminalElement {
                     }
                 }
                 crate::images::CachedRenderImage::Pending => {
-                    window.refresh();
                     push_terminal_image_placeholder(
                         rect,
                         x,
