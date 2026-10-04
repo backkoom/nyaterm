@@ -73,6 +73,94 @@ impl SettingsPanel {
                 None,
                 self.existing_number_input_box("ai.number.timeout-ms"),
             ));
+        use nyaterm_core::ai::proxy::{AiProxyMode, AiProxyProtocol};
+        let proxy_mode = self.form_select_control(
+            "ai-proxy-mode",
+            [
+                ("system", "ai.proxySystem"),
+                ("direct", "ai.proxyDirect"),
+                ("custom", "ai.proxyCustom"),
+            ]
+            .into_iter()
+            .map(|(value, label)| NyaSelectOption::new(value, t!(label)))
+            .collect(),
+            Some(
+                match settings.proxy.mode {
+                    AiProxyMode::System => "system",
+                    AiProxyMode::Direct => "direct",
+                    AiProxyMode::Custom => "custom",
+                }
+                .into(),
+            ),
+            false,
+            cx,
+        );
+        let proxy_protocol = self.form_select_control(
+            "ai-proxy-protocol",
+            vec![
+                NyaSelectOption::new("http", "HTTP"),
+                NyaSelectOption::new("socks5", "SOCKS5"),
+            ],
+            Some(
+                if settings.proxy.protocol == AiProxyProtocol::Http {
+                    "http"
+                } else {
+                    "socks5"
+                }
+                .into(),
+            ),
+            false,
+            cx,
+        );
+        let proxy_fields = div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(ai_field(
+                palette,
+                t!("ai.proxyMode"),
+                Some(t!("ai.proxyDescription").into()),
+                proxy_mode,
+            ))
+            .when(settings.proxy.mode == AiProxyMode::Custom, |fields| {
+                fields
+                    .child(ai_field(
+                        palette,
+                        t!("ai.proxyProtocol"),
+                        None,
+                        proxy_protocol,
+                    ))
+                    .child(ai_field(
+                        palette,
+                        t!("ai.proxyHost"),
+                        None,
+                        self.existing_text_input_box("ai.input.proxy-host", false),
+                    ))
+                    .child(ai_field(
+                        palette,
+                        t!("ai.proxyPort"),
+                        None,
+                        self.existing_text_input_box("ai.input.proxy-port", false),
+                    ))
+                    .child(ai_field(
+                        palette,
+                        t!("ai.proxyUsername"),
+                        None,
+                        self.existing_text_input_box("ai.input.proxy-username", false),
+                    ))
+                    .child(ai_field(
+                        palette,
+                        t!("ai.proxyPassword"),
+                        Some(t!("ai.proxyPasswordDescription").into()),
+                        self.existing_text_input_box("ai.input.proxy-password", true),
+                    ))
+                    .child(ai_field(
+                        palette,
+                        t!("ai.proxyBypass"),
+                        Some(t!("ai.proxyBypassDescription").into()),
+                        self.existing_text_input_box("ai.input.proxy-bypass", false),
+                    ))
+            });
         let general = div()
             .flex()
             .flex_col()
@@ -84,7 +172,8 @@ impl SettingsPanel {
                 Some(t!("ai.requestUserAgentDesc").into()),
                 self.existing_text_input_box("ai.input.request-user-agent", false),
             ))
-            .child(fields);
+            .child(fields)
+            .child(proxy_fields);
         let risk = match settings.agent_smart_auto_execute_max_risk {
             nyaterm_core::RiskLevel::Low => "low",
             nyaterm_core::RiskLevel::Medium => "medium",

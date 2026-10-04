@@ -1,4 +1,5 @@
 mod provider;
+mod proxy;
 use nyaterm_core::ai::{AiProviderApiProtocol, provider_settings::effective_protocol};
 pub(crate) use provider::discover_provider_models_cancellable;
 pub use provider::{discover_provider_models, test_model_connection};
@@ -36,7 +37,7 @@ pub fn complete_native_chat(
         .credential
         .as_ref()
         .ok_or_else(|| "AI chat requires a provider credential".to_string())?;
-    let client = zed_reqwest::blocking::Client::builder()
+    let client = proxy::apply_proxy(zed_reqwest::blocking::Client::builder(), &settings.proxy)?
         .timeout(Duration::from_millis(settings.timeout_ms))
         .user_agent(effective_ai_request_user_agent(settings))
         .build()
@@ -103,7 +104,7 @@ pub fn stream_native_chat(
         .credential
         .as_ref()
         .ok_or_else(|| "AI chat requires a provider credential".to_string())?;
-    let client = zed_reqwest::blocking::Client::builder()
+    let client = proxy::apply_proxy(zed_reqwest::blocking::Client::builder(), &settings.proxy)?
         .timeout(Duration::from_millis(settings.timeout_ms))
         .user_agent(effective_ai_request_user_agent(settings))
         .build()

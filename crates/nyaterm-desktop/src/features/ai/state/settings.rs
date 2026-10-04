@@ -83,6 +83,27 @@ pub(super) fn seed_builtin_ai_models_for_provider(
 }
 
 impl AiFeatureState {
+    pub(in crate::features) fn set_proxy_selection(&mut self, id: &str, value: &str) {
+        use nyaterm_core::ai::proxy::{AiProxyMode, AiProxyProtocol};
+        match id {
+            "ai-proxy-mode" => {
+                self.settings.config.proxy.mode = match value {
+                    "direct" => AiProxyMode::Direct,
+                    "custom" => AiProxyMode::Custom,
+                    _ => AiProxyMode::System,
+                }
+            }
+            "ai-proxy-protocol" => {
+                self.settings.config.proxy.protocol = if value == "socks5" {
+                    AiProxyProtocol::Socks5
+                } else {
+                    AiProxyProtocol::Http
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(in crate::features) fn settings_config(&self) -> &AiSettings {
         &self.settings.config
     }

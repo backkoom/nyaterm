@@ -113,11 +113,7 @@ pub fn build_openai_compatible_chat_request_body_with_stream(
         "content": request_system_prompt(request),
     }));
 
-    if let Some(session_id) = request
-        .session_id
-        .as_deref()
-        .filter(|_| request.options.agent_context.is_none())
-    {
+    if let Some(session_id) = request.session_id.as_deref() {
         let max_turns = request.options.history_turns as usize;
         if max_turns > 0 {
             let session_messages = history
@@ -220,16 +216,7 @@ pub fn build_anthropic_chat_request_body_with_stream(
     history: &[AiMessage],
     stream: bool,
 ) -> serde_json::Value {
-    let mut messages = chat_history_for_request(
-        request,
-        settings,
-        if request.options.agent_context.is_some() {
-            &[]
-        } else {
-            history
-        },
-        "assistant",
-    );
+    let mut messages = chat_history_for_request(request, settings, history, "assistant");
     if let Some(context) = &request.options.agent_context {
         super::harness::transcript::append_anthropic(
             &mut messages,
@@ -273,26 +260,17 @@ pub fn build_gemini_chat_request_body(
     settings: &AiSettings,
     history: &[AiMessage],
 ) -> serde_json::Value {
-    let mut contents = chat_history_for_request(
-        request,
-        settings,
-        if request.options.agent_context.is_some() {
-            &[]
-        } else {
-            history
-        },
-        "model",
-    )
-    .into_iter()
-    .map(|message| {
-        serde_json::json!({
-            "role": message["role"].clone(),
-            "parts": [{
-                "text": message["content"].clone(),
-            }],
+    let mut contents = chat_history_for_request(request, settings, history, "model")
+        .into_iter()
+        .map(|message| {
+            serde_json::json!({
+                "role": message["role"].clone(),
+                "parts": [{
+                    "text": message["content"].clone(),
+                }],
+            })
         })
-    })
-    .collect::<Vec<_>>();
+        .collect::<Vec<_>>();
     if let Some(context) = &request.options.agent_context {
         super::harness::transcript::append_gemini(
             &mut contents,
@@ -1109,6 +1087,46 @@ mod tests {
                 .unwrap()
                 .contains("show disk usage")
         );
+    }
+
+    #[test]
+    fn native_agent_preserves_initial_history_before_task_for_every_provider() {
+        let settings = AiSettings::default();
+        let mut request = sample_ai_request("en");
+        request.mode = AiMode::Agent;
+        request.options.agent_context = Some(crate::ai::harness::AgentRequestContext {
+            run_id: "run".into(),
+            calls: vec![],
+            remaining_steps: 3,
+        });
+        let history = sample_ai_history();
+        let resolved = ResolvedAiModel {
+            backend: Default::default(),
+            api_format: Default::default(),
+            model_name: "fixture".into(),
+            provider_kind: AiProviderKind::Openai,
+            credential: None,
+        };
+        let openai =
+            build_openai_compatible_chat_request_body(&resolved, &request, &settings, &history);
+        let anthropic = build_anthropic_chat_request_body(&resolved, &request, &settings, &history);
+        let gemini = build_gemini_chat_request_body(&request, &settings, &history);
+        for messages in [
+            openai["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|message| message["role"] != "system")
+                .cloned()
+                .collect::<Vec<_>>(),
+            anthropic["messages"].as_array().unwrap().clone(),
+            gemini["contents"].as_array().unwrap().clone(),
+        ] {
+            assert_eq!(messages.len(), 3);
+            assert!(messages[0].to_string().contains("previous question"));
+            assert!(messages[1].to_string().contains("previous answer"));
+            assert!(messages[2].to_string().contains("show disk usage"));
+        }
     }
 
     #[test]

@@ -1,3 +1,4 @@
+pub mod proxy;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -485,6 +486,8 @@ pub struct AiCustomActionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiSettings {
+    #[serde(default)]
+    pub proxy: proxy::AiProxySettings,
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     #[serde(default)]

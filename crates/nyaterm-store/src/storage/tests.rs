@@ -4387,6 +4387,7 @@ fn ai_settings_encrypt_and_merge_masked_provider_secrets() {
         default_mode: nyaterm_core::AiMode::Agent,
         ..AiSettings::default()
     };
+    settings.proxy.password = Some("proxy-fixture-key".into());
     settings.provider_profiles[0].enabled = true;
     settings.provider_profiles[0].api_key = Some("profile-key".to_string().into());
     settings.provider_credentials[0].enabled = true;
@@ -4415,6 +4416,10 @@ fn ai_settings_encrypt_and_merge_masked_provider_secrets() {
         .expect("raw settings");
     let raw_ai = raw.get("ai").expect("ai field");
     assert_ne!(
+        raw_ai["proxy"]["password"].as_str(),
+        Some("proxy-fixture-key")
+    );
+    assert_ne!(
         raw_ai["provider_profiles"][0]["api_key"].as_str(),
         Some("profile-key")
     );
@@ -4426,7 +4431,20 @@ fn ai_settings_encrypt_and_merge_masked_provider_secrets() {
     let loaded = store.load_ai_settings().expect("load ai");
     assert_eq!(loaded, saved);
 
+    assert_eq!(loaded.proxy.password.as_deref(), Some("proxy-fixture-key"));
+    let restore_dir = unique_temp_dir("ai-proxy-portable-roundtrip");
+    let restore = ConnectionStore::open(&restore_dir).unwrap();
+    for kind in [PortableSnapshotKind::Backup, PortableSnapshotKind::Sync] {
+        let mut snapshot = store
+            .build_raw_portable_snapshot(kind, "fixture", "2.0.0")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        assert!(!snapshot.entities["settings"].contains("proxy-fixture-key"));
+        restore.apply_raw_portable_snapshot(&snapshot).unwrap();
+        assert_eq!(restore.load_ai_settings().unwrap().proxy, loaded.proxy);
+    }
     let mut masked_update = loaded.clone();
+    masked_update.proxy.password = Some(nyaterm_core::MASKED_SECRET_VALUE.into());
     masked_update.provider_profiles[0].api_key =
         Some(nyaterm_core::MASKED_SECRET_VALUE.to_string().into());
     masked_update.provider_credentials[0].api_key = Some("replacement-key".to_string().into());
@@ -4441,7 +4459,18 @@ fn ai_settings_encrypt_and_merge_masked_provider_secrets() {
         merged.provider_credentials[0].api_key.as_deref(),
         Some("replacement-key")
     );
+    assert_eq!(merged.proxy.password.as_deref(), Some("proxy-fixture-key"));
     assert_eq!(store.load_ai_settings().expect("reload ai"), merged);
+    let mut cleared = merged;
+    cleared.proxy.password = Some("".into());
+    assert!(
+        store
+            .save_ai_settings(cleared)
+            .unwrap()
+            .proxy
+            .password
+            .is_none()
+    );
 
     std::fs::remove_dir_all(dir).ok();
 }

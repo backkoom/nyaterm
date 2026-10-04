@@ -2226,6 +2226,11 @@ impl AiFeatureState {
             AiInputField::BaseUrl => self.settings.base_url_draft = text,
             AiInputField::ApiKey => self.settings.secret_draft = text.into(),
             AiInputField::RequestUserAgent => self.settings.config.request_user_agent = text,
+            AiInputField::ProxyHost => self.settings.config.proxy.host = text,
+            AiInputField::ProxyPort => self.settings.config.proxy.port = text.parse().unwrap_or(0),
+            AiInputField::ProxyUsername => self.settings.config.proxy.username = non_empty(text),
+            AiInputField::ProxyPassword => self.settings.config.proxy.password = Some(text.into()),
+            AiInputField::ProxyBypass => self.settings.config.proxy.no_proxy = text,
             AiInputField::CodexExecutable => {
                 self.settings.config.codex.executable_path = non_empty(text)
             }

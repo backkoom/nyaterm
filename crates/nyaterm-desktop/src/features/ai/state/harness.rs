@@ -17,6 +17,7 @@ use super::{AiChatLaunch, AiFeatureState};
 pub(super) struct NativeRunState {
     pub run: AgentRun,
     pub request: AiChatRequest,
+    initial_history: Vec<AiMessage>,
     pub cancellation: CancellationToken,
     pub terminal_reply: Option<oneshot::Sender<Result<Value, RpcError>>>,
     answers: HashMap<String, String>,
@@ -51,15 +52,48 @@ impl AiFeatureState {
             CapabilityScope::explicit(target_ids, default),
             self.settings_max_agent_steps(),
         );
+        let mut initial_history = self
+            .chat
+            .messages
+            .iter()
+            .filter(|message| Some(message.session_id.as_str()) == request.session_id.as_deref())
+            .filter_map(|message| {
+                let mut message = message.as_ref().clone();
+                if message.role == AiMessageRole::Assistant {
+                    message.content =
+                        nyaterm_core::ai::extract_text_from_assistant(&message.content);
+                }
+                (message.role != AiMessageRole::System && !message.content.trim().is_empty())
+                    .then_some(message)
+            })
+            .collect::<Vec<_>>();
+        // begin_chat_request already appended this task and an empty assistant slot.
+        if initial_history.last().is_some_and(|message| {
+            message.role == AiMessageRole::User && message.content == request.user_input
+        }) {
+            initial_history.pop();
+        }
+        let skip = initial_history
+            .len()
+            .saturating_sub(request.options.history_turns as usize);
+        initial_history.drain(..skip);
         self.agent.task_prompt = Some(request.user_input.clone());
         self.agent.native = Some(NativeRunState {
             run,
             request,
+            initial_history,
             cancellation: CancellationToken::new(),
             terminal_reply: None,
             answers: HashMap::new(),
             call_started_at: None,
         });
+    }
+
+    pub(in crate::features) fn native_initial_history(&self) -> Option<Vec<AiMessage>> {
+        self.agent
+            .native
+            .as_ref()
+            .map(|native| native.initial_history.clone())
     }
 
     pub(in crate::features) fn native_request_context(&self) -> Option<AgentRequestContext> {

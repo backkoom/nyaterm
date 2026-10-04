@@ -403,6 +403,10 @@ impl NyaTermApp {
                 self.apply_temporary_serial_port_name(value.to_string(), cx);
             }
             "cloud-provider-select" => self.update_cloud_sync_provider(value, cx),
+            "ai-proxy-mode" | "ai-proxy-protocol" => {
+                self.ai.set_proxy_selection(id, value);
+                cx.notify();
+            }
             "ai-smart-risk" => {
                 let risk = match value {
                     "low" => Some(RiskLevel::Low),

@@ -309,6 +309,7 @@ impl NyaTermApp {
         let Some((launch, request)) = self.ai.begin_native_continuation() else {
             return;
         };
+        let agent_history = self.ai.native_initial_history();
         let store = self.store_blocking_client();
         let settings = self.ai.settings_config_cloned();
         let job_id = launch.job_id;
@@ -331,7 +332,8 @@ impl NyaTermApp {
                             stream_tx: Some(tx.clone()),
                             cancel: launch.cancel,
                             job_id,
-                            agent_history: Some(Vec::new()),
+                            agent_history,
+                            persist_user_message: false,
                         },
                     )
                 };

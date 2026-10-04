@@ -36,6 +36,22 @@ impl NyaTermApp {
         let config = self.ai.settings_config().clone();
         for (field, value) in [
             (AiInputField::RequestUserAgent, config.request_user_agent),
+            (AiInputField::ProxyHost, config.proxy.host.clone()),
+            (AiInputField::ProxyPort, config.proxy.port.to_string()),
+            (
+                AiInputField::ProxyUsername,
+                config.proxy.username.clone().unwrap_or_default(),
+            ),
+            (
+                AiInputField::ProxyPassword,
+                config
+                    .proxy
+                    .password
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_owned(),
+            ),
+            (AiInputField::ProxyBypass, config.proxy.no_proxy.clone()),
             (
                 AiInputField::CodexExecutable,
                 config.codex.executable_path.unwrap_or_default(),
@@ -529,6 +545,32 @@ impl NyaTermApp {
             cx,
         );
         let config = self.ai.settings_config().clone();
+        for (field, value) in [
+            (AiInputField::ProxyHost, config.proxy.host.clone()),
+            (AiInputField::ProxyPort, config.proxy.port.to_string()),
+            (
+                AiInputField::ProxyUsername,
+                config.proxy.username.clone().unwrap_or_default(),
+            ),
+            (
+                AiInputField::ProxyPassword,
+                config
+                    .proxy
+                    .password
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_owned(),
+            ),
+            (AiInputField::ProxyBypass, config.proxy.no_proxy.clone()),
+        ] {
+            self.ensure_text_input(
+                format!("ai.input.{}", field.input_key()),
+                &value,
+                secret_input_setup(field == AiInputField::ProxyPassword),
+                cx,
+            );
+        }
+
         for (id, value, min, max, step) in [
             (
                 "ai.number.context-line-limit",

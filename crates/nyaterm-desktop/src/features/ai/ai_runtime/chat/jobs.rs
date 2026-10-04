@@ -190,9 +190,11 @@ impl NyaTermApp {
             self.ai
                 .begin_chat_request(request_prompt, mode.clone(), source_label.as_deref());
         self.reset_text_input("ai.chat.prompt", "", cx);
+        let mut agent_history = None;
         if request.mode == AiMode::Agent && request.agent_kind == AiAgentKind::Nyaterm {
             self.ai.begin_native_run(request.clone());
             request.options.agent_context = self.ai.native_request_context();
+            agent_history = self.ai.native_initial_history();
         }
         let job_id = launch.job_id;
         let cancel = launch.cancel;
@@ -214,7 +216,8 @@ impl NyaTermApp {
                             stream_tx: Some(tx.clone()),
                             cancel,
                             job_id,
-                            agent_history: None,
+                            agent_history,
+                            persist_user_message: true,
                         },
                     )
                 };

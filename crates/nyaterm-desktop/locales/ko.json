@@ -111,6 +111,22 @@
     "showLabel": "레이블 표시"
   },
   "ai": {
+    "proxyBypass": "프록시 우회",
+    "proxyBypassDescription": "호스트, 도메인 또는 IP 주소를 쉼표로 구분하세요. 로컬 AI 서비스는 기본적으로 직접 연결됩니다. 목록을 비우면 모든 요청에 프록시를 사용합니다.",
+    "proxyClearPassword": "비밀번호 지우기",
+    "proxyCustom": "사용자 지정 프록시",
+    "proxyDescription": "내장 AI 채팅, 에이전트, 모델 검색 및 연결 테스트에 적용됩니다. 외부 Codex와 Claude Code는 자체 프록시 설정을 사용합니다.",
+    "proxyDirect": "직접 연결",
+    "proxyMode": "연결 모드",
+    "proxyPassword": "프록시 비밀번호 (선택 사항)",
+    "proxyPasswordDescription": "저장된 비밀번호는 교체하거나 지울 때까지 유지됩니다.",
+    "proxySystem": "시스템 설정 사용",
+    "proxyTestHint": "AI 모델 설정에서 공급자 또는 모델 연결 테스트로 이 설정을 확인하세요.",
+    "proxyTitle": "AI 프록시",
+    "proxyUsername": "프록시 사용자 이름 (선택 사항)",
+    "proxyHost": "Proxy host",
+    "proxyPort": "Proxy port",
+    "proxyProtocol": "Proxy protocol",
     "harness": {
       "plan": "작업 계획",
       "waitingForUser": "사용자 응답 대기 중",

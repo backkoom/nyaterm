@@ -1087,6 +1087,8 @@ impl ConnectionStore {
         let crypto = self.credential_crypto()?;
         let master_key_token = self.load_master_key_token()?;
         let master_key_token = master_key_token.as_deref();
+        settings.proxy.password =
+            decrypt_optional_secret(&crypto, master_key_token, &settings.proxy.password)?;
         for profile in &mut settings.provider_profiles {
             profile.api_key = decrypt_optional_secret(&crypto, master_key_token, &profile.api_key)?;
         }
@@ -1246,6 +1248,8 @@ fn encrypt_ai_settings_secrets(
     crypto: &CredentialCrypto,
     master_key_token: Option<&str>,
 ) -> Result<(), StorageError> {
+    settings.proxy.password =
+        encrypt_optional_secret(crypto, master_key_token, &settings.proxy.password)?;
     for profile in &mut settings.provider_profiles {
         profile.api_key = encrypt_optional_secret(crypto, master_key_token, &profile.api_key)?;
     }

@@ -1894,3 +1894,43 @@ fn mismatched_background_card_does_not_clear_current_cancellation_or_update_outp
     );
     assert!(state.agent_steps().is_empty());
 }
+
+#[test]
+fn native_run_freezes_only_its_session_history_before_the_current_task() {
+    use nyaterm_core::ai::{AiChatRequest, AiMessage, AiMessageRole};
+    use std::sync::Arc;
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let session = state.chat.session_id.clone();
+    let message = |owner: &str, role, content: &str| {
+        Arc::new(AiMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            session_id: owner.into(),
+            role,
+            content: content.into(),
+            created_at: String::new(),
+            reasoning_content: None,
+            command_cards: vec![],
+        })
+    };
+    state.chat.messages = vec![
+        message(&session, AiMessageRole::User, "old"),
+        message("other-session", AiMessageRole::User, "unrelated"),
+        message(&session, AiMessageRole::Assistant, "previous answer"),
+        message(&session, AiMessageRole::User, "follow up"),
+        message(&session, AiMessageRole::Assistant, ""),
+    ];
+    let request: AiChatRequest = serde_json::from_value(serde_json::json!({
+        "mode":"agent", "action":"generate_command", "sessionId":session,
+        "userInput":"follow up", "options":{"historyTurns":1}
+    }))
+    .unwrap();
+    state.begin_native_run(request);
+    let initial = state.native_initial_history().unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].content, "previous answer");
+    state.chat.messages.clear();
+    assert_eq!(state.native_initial_history().unwrap(), initial);
+    state.switch_scope("terminal:other");
+    assert!(state.native_initial_history().is_none());
+}

@@ -37,11 +37,12 @@ pub(crate) fn discover_provider_models_cancellable(
     };
     let url =
         nyaterm_core::ai::ollama::ollama_url(base, path).map_err(|error| error.to_string())?;
-    let client = zed_reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent(nyaterm_core::effective_ai_request_user_agent(settings))
-        .build()
-        .map_err(|error| error.to_string())?;
+    let client =
+        super::proxy::apply_proxy(zed_reqwest::blocking::Client::builder(), &settings.proxy)?
+            .timeout(Duration::from_secs(15))
+            .user_agent(nyaterm_core::effective_ai_request_user_agent(settings))
+            .build()
+            .map_err(|error| error.to_string())?;
     let mut names = Vec::new();
     let mut cursor: Option<ProviderModelCursor> = None;
     let mut seen = std::collections::HashSet::new();

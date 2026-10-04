@@ -40,6 +40,7 @@ pub(in crate::features) struct AiJobRunOptions {
     pub cancel: Arc<AtomicBool>,
     pub job_id: u64,
     pub agent_history: Option<Vec<AiMessage>>,
+    pub persist_user_message: bool,
 }
 
 pub(in crate::features) fn run_ai_ask_job(
@@ -54,6 +55,7 @@ pub(in crate::features) fn run_ai_ask_job(
         cancel,
         job_id,
         agent_history,
+        persist_user_message,
     } = run;
     if ai_job_cancelled(&cancel) {
         return Err("AI request cancelled".to_string());
@@ -72,10 +74,14 @@ pub(in crate::features) fn run_ai_ask_job(
         .unwrap_or_else(|| format!("ai-session-{}", uuid()));
     request.session_id = Some(session_id.clone());
 
-    let history = store
-        .request_fn(StoreDomain::Ai, |database| database.load_ai_history())
-        .map_err(|error| error.to_string())?;
-    if settings.record_history && agent_history.is_none() {
+    let history = if agent_history.is_none() {
+        store
+            .request_fn(StoreDomain::Ai, |database| database.load_ai_history())
+            .map_err(|error| error.to_string())?
+    } else {
+        Default::default()
+    };
+    if settings.record_history && persist_user_message {
         let user_session_id = session_id.clone();
         let connection_id = request.connection_id.clone();
         let user_input = request.user_input.clone();

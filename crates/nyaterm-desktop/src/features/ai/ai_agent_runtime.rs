@@ -707,6 +707,7 @@ impl NyaTermApp {
                                 cancel,
                                 job_id,
                                 agent_history: Some(conversation),
+                                persist_user_message: false,
                             },
                         )
                     };
