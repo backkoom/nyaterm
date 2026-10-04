@@ -5,7 +5,9 @@ use gpui::{
     AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, Render, TestAppContext,
     Window, div, point, prelude::*, px,
 };
-use nyaterm_core::{AppRuntime, RuntimeMode, WorkspaceId, test_support::TestTempDir};
+use nyaterm_core::{
+    AppRuntime, RuntimeMode, StartWorkspaceMode, WorkspaceId, test_support::TestTempDir,
+};
 
 use crate::app_shell::{AppShellStartup, DesktopController};
 use crate::features::{
@@ -239,4 +241,114 @@ fn tab_drag_target_drop_observes_release_candidate_then_prevents_detach() {
         assert!(controller.read(cx).tab_drag_source().is_none());
     });
     let _ = source_window;
+}
+
+struct WorkspaceDragFixture {
+    app: Entity<NyaTermApp>,
+}
+
+impl Render for WorkspaceDragFixture {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.app.update(cx, |app, cx| {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(app.session_tab_drag_listener_layer(cx))
+                .child(app.workspace_view(cx).into_any_element())
+        })
+    }
+}
+
+#[test]
+fn tab_drag_into_empty_workspace_moves_session_without_opening_another_window() {
+    for mode in [StartWorkspaceMode::Workbench, StartWorkspaceMode::Assets] {
+        let root = TestTempDir::new("nyaterm-empty-workspace-tab-drop");
+        let source_root = TestTempDir::new("nyaterm-empty-workspace-tab-source");
+        let target_root = TestTempDir::new("nyaterm-empty-workspace-tab-target");
+        let mut cx = TestAppContext::single();
+        let controller = controller(&root, &mut cx);
+        let source = app_with_visible_local_session(&mut cx, source_root.path(), "tab");
+        let target = app_with_visible_local_session(&mut cx, target_root.path(), "placeholder");
+        target.update(&mut cx, |app, _| {
+            app.session.remove_session_catalog("placeholder");
+            app.workspace_id = WorkspaceId::new();
+            app.start_workspace.set_mode(mode);
+            assert!(!app.has_live_sessions());
+        });
+        source.update(&mut cx, |app, _| {
+            app.terminal
+                .seed_session_view("tab".into(), "retained contents".into(), "UTF-8");
+        });
+        // Keep the shells alive as the controller's authoritative app lookup;
+        // the fixture windows render only the real workspace and drag listeners.
+        let mut shells = Vec::new();
+        let mut windows = Vec::new();
+        for app in [&source, &target] {
+            app.update(&mut cx, |app, cx| {
+                app.desktop_controller = Some(controller.downgrade());
+                app.sync_component_theme(cx);
+            });
+            let workspace_id = app.read_with(&cx, |app, _| app.workspace_id);
+            let fixture_app = app.clone();
+            let (_, visual_cx) = cx.add_window_view(move |_, cx| {
+                cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+                WorkspaceDragFixture { app: fixture_app }
+            });
+            let (shell, handle) = visual_cx.update(|window, cx| {
+                let handle = window.window_handle();
+                let shell = controller.update(cx, |controller, cx| {
+                    controller.register_tab_drag_test_workspace(
+                        workspace_id,
+                        app.clone(),
+                        handle,
+                        cx,
+                    )
+                });
+                (shell, handle)
+            });
+            visual_cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            shells.push(shell);
+            windows.push(gpui::VisualTestContext::from_window(handle, &visual_cx.cx));
+        }
+        let source_cx = &mut windows[0];
+        source_cx.simulate_mouse_down(
+            point(px(40.), px(16.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        source_cx.simulate_mouse_move(
+            point(px(80.), px(16.)),
+            Some(MouseButton::Left),
+            Default::default(),
+        );
+        source_cx.read(|cx| assert!(controller.read(cx).tab_drag_source().is_some()));
+        let target_cx = &mut windows[1];
+        target_cx.simulate_mouse_move(
+            point(px(200.), px(100.)),
+            Some(MouseButton::Left),
+            Default::default(),
+        );
+        target_cx.simulate_mouse_up(
+            point(px(200.), px(100.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        target_cx.run_until_parked();
+        target_cx.read(|cx| {
+            assert!(controller.read(cx).tab_drag_source().is_none());
+            assert_eq!(controller.read(cx).workspace_count(), 2);
+            assert_eq!(cx.windows().len(), 2);
+            assert!(!source.read(cx).has_live_sessions());
+            let target = target.read(cx);
+            assert_eq!(target.live_session_count(), 1);
+            assert_eq!(target.session.active_id(), Some("tab"));
+            assert_eq!(
+                target.terminal.session_output("tab"),
+                Some("retained contents")
+            );
+        });
+    }
 }

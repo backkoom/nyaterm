@@ -6,6 +6,38 @@ use crate::app_shell::{AppShell, AppShellStartup};
 use crate::features::NyaTermApp;
 use crate::features::test_support::app_with_visible_local_session;
 
+impl DesktopController {
+    pub(crate) fn register_tab_drag_test_workspace(
+        &mut self,
+        workspace_id: WorkspaceId,
+        app: Entity<NyaTermApp>,
+        handle: gpui::AnyWindowHandle,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<AppShell> {
+        let controller = cx.entity();
+        let shell = cx.new(|cx| {
+            AppShell::new(
+                self.runtime.clone(),
+                None,
+                self.startup.for_workspace(workspace_id),
+                workspace_id,
+                controller,
+                self.session_hub.clone(),
+                cx,
+            )
+        });
+        shell.update(cx, |shell, _| shell.app = Some(app));
+        self.windows.insert(
+            workspace_id,
+            WorkspaceWindow {
+                handle,
+                shell: shell.downgrade(),
+            },
+        );
+        shell
+    }
+}
+
 fn with_source(
     test: impl FnOnce(&Entity<DesktopController>, WorkspaceId, &Entity<NyaTermApp>, &mut TestAppContext),
 ) {
