@@ -403,7 +403,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn add_connection_editor_tag(&mut self, cx: &mut Context<Self>) {
-        if self.connection_state.add_editor_tag() {
+        if self.connection_state.add_editor_tag(cx) {
             self.connection_state
                 .reset_editor_field(ConnectionEditorField::NewTag, "", cx);
             cx.notify();
@@ -415,7 +415,7 @@ impl NyaTermApp {
         tag: &str,
         cx: &mut Context<Self>,
     ) {
-        if self.connection_state.remove_editor_tag(tag) {
+        if self.connection_state.remove_editor_tag(tag, cx) {
             cx.notify();
         }
     }

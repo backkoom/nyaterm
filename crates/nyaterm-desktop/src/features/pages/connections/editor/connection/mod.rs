@@ -1558,13 +1558,13 @@ impl NyaTermApp {
                     .when(editor.kind == ConnectionKindTab::Vnc, |this| {
                         this.child(connection_editor_vnc_section(section_context, cx))
                     })
+                    .child(tags::connection_tags_field(palette, &editor, &fields, cx))
                     .child(connection_description_field(
                         palette,
                         description_label,
                         &fields,
                         cx,
                     ))
-                    .child(tags::connection_tags_field(palette, &editor, &fields, cx))
                     .when_some(editor.error.clone(), |this, error| {
                         this.child(
                             div()
@@ -2763,6 +2763,7 @@ fn connection_description_field(
         .child(
             div()
                 .id("connection-editor-description")
+                .debug_selector(|| "connection-editor-description".to_string())
                 // Fixed: in a flex column the box would otherwise shrink to
                 // whatever space the form had left, cutting a row in half.
                 .h(px(56.))
@@ -2777,7 +2778,8 @@ fn connection_description_field(
                 })
                 .bg(rgb(palette.input))
                 .px(px(ORDINARY_INPUT_SHELL_PADDING_X_PX))
-                .py_2()
+                // Textarea supplies its own top padding; adding shell padding
+                // here pushes the first line toward the center of this short box.
                 .cursor_text()
                 .when_some(handle, |this, handle| {
                     this.on_click(move |_, window, cx| {
@@ -3194,6 +3196,68 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(selected, vec![Some("child".to_string())]);
+    }
+
+    #[gpui::test]
+    fn connection_editor_enter_creates_inline_tags_and_keeps_input_focus(cx: &mut TestAppContext) {
+        let test_dir = TestConfigDir::new("nyaterm-connection-inline-tags");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
+
+        for id in [None, Some("saved-local")] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    let mut draft = editor(None, None);
+                    draft.id = id.map(ToOwned::to_owned);
+                    draft.kind = ConnectionKindTab::Local;
+                    app.connection_state.begin_editor(draft);
+                    app.connection_state.build_editor_fields(cx);
+                    cx.notify();
+                });
+            });
+            draw_editor(&app, vcx);
+            let tags = vcx
+                .debug_bounds("connection-editor-tags")
+                .expect("tag field");
+            let description = vcx
+                .debug_bounds("connection-editor-description")
+                .expect("description field");
+            assert!(tags.bottom() < description.top());
+            vcx.update(|window, cx| {
+                let input =
+                    &app.read(cx).connection_state.editor_fields()[&ConnectionEditorField::NewTag];
+                window.focus(&input.read(cx).component_focus_handle(cx), cx);
+            });
+            draw_editor(&app, vcx);
+            vcx.simulate_keystrokes("d o c k e r enter");
+            draw_editor(&app, vcx);
+            vcx.update(|window, cx| {
+                let state = &app.read(cx).connection_state;
+                let draft = state
+                    .active_editor_draft()
+                    .expect("Enter keeps the editor open");
+                assert_eq!(draft.tags, ["docker"]);
+                assert!(draft.new_tag.is_empty());
+                let input = &state.editor_fields()[&ConnectionEditorField::NewTag];
+                assert_eq!(input.read(cx).value(cx), "");
+                assert!(input.read(cx).component_focus_handle(cx).is_focused(window));
+            });
+            vcx.simulate_keystrokes("g p u enter");
+            draw_editor(&app, vcx);
+            let tags_after = vcx
+                .debug_bounds("connection-editor-tags")
+                .expect("inline tags");
+            assert_eq!(tags.size.height, tags_after.size.height);
+            vcx.update(|_, cx| {
+                assert_eq!(
+                    app.read(cx)
+                        .connection_state
+                        .active_editor_draft()
+                        .unwrap()
+                        .tags,
+                    ["docker", "gpu"]
+                );
+            });
+        }
     }
 
     #[gpui::test]

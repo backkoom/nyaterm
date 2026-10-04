@@ -599,6 +599,7 @@
     "serialFlowControlHardware": "Hardware (RTS/CTS)",
     "tags": "Étiquettes",
     "newTag": "Nouvelle étiquette",
+    "tagsPlaceholder": "Saisissez une étiquette et appuyez sur Entrée pour l'ajouter",
     "addTag": "Ajouter une étiquette",
     "removeTag": "Retirer l’étiquette : %{tag}",
     "importCustomIcon": "Importer une icône",

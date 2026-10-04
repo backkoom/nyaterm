@@ -599,6 +599,7 @@
     "serialFlowControlHardware": "Hardware (RTS/CTS)",
     "tags": "タグ",
     "newTag": "新しいタグ",
+    "tagsPlaceholder": "タグを入力し、Enter キーで追加",
     "addTag": "タグを追加",
     "removeTag": "タグを削除：%{tag}",
     "importCustomIcon": "アイコンをインポート",

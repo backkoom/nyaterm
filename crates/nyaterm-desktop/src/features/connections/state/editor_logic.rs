@@ -935,7 +935,11 @@ pub(super) fn editor_field_seeds(
             ConnectionEditorField::NewTag,
             draft.new_tag.clone(),
             false,
-            I18n("dialog.newTag"),
+            if draft.tags.is_empty() {
+                I18n("dialog.tagsPlaceholder")
+            } else {
+                Empty
+            },
         ),
         (
             ConnectionEditorField::Description,

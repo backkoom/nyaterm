@@ -599,6 +599,7 @@
     "serialFlowControlHardware": "하드웨어 (RTS/CTS)",
     "tags": "태그",
     "newTag": "새 태그",
+    "tagsPlaceholder": "태그를 입력한 후 Enter 키를 눌러 추가",
     "addTag": "태그 추가",
     "removeTag": "태그 삭제: %{tag}",
     "importCustomIcon": "아이콘 가져오기",

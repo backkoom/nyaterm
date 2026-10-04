@@ -599,6 +599,7 @@
     "serialFlowControlHardware": "硬體 (RTS/CTS)",
     "tags": "標籤",
     "newTag": "新標籤",
+    "tagsPlaceholder": "輸入標籤後按 Enter 新增",
     "addTag": "新增標籤",
     "removeTag": "刪除標籤：%{tag}",
     "importCustomIcon": "匯入圖示",

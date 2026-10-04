@@ -762,6 +762,9 @@ impl ConnectionFeatureState {
                 cx.subscribe(
                     &entity,
                     move |app: &mut NyaTermApp, _, event, cx| match event {
+                        // The ancestor Enter handler already consumed and cleared
+                        // this draft. The submitted snapshot can arrive afterwards.
+                        NyaInputEvent::Submitted(_) if field == ConnectionEditorField::NewTag => {}
                         NyaInputEvent::Changed(text) | NyaInputEvent::Submitted(text) => {
                             app.apply_connection_editor_field_text(field, text.clone(), cx);
                         }
@@ -1021,7 +1024,8 @@ impl ConnectionFeatureState {
     }
 
     pub fn add_editor_tag(&mut self, cx: &mut App) -> bool {
-        let changed = self.editor
+        let changed = self
+            .editor
             .draft
             .as_mut()
             .is_some_and(ConnectionEditorState::add_tag);
@@ -1032,7 +1036,8 @@ impl ConnectionFeatureState {
     }
 
     pub fn remove_editor_tag(&mut self, tag: &str, cx: &mut App) -> bool {
-        let changed = self.editor
+        let changed = self
+            .editor
             .draft
             .as_mut()
             .is_some_and(|draft| draft.remove_tag(tag));
@@ -1043,8 +1048,13 @@ impl ConnectionFeatureState {
     }
 
     fn sync_editor_tag_placeholder(&self, cx: &mut App) {
-        let placeholder = if self.editor.draft.as_ref().is_some_and(|draft| draft.tags.is_empty()) {
-            t!("dialog.newTag").to_string()
+        let placeholder = if self
+            .editor
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.tags.is_empty())
+        {
+            t!("dialog.tagsPlaceholder").to_string()
         } else {
             String::new()
         };

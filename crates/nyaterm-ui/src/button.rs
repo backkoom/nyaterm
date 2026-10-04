@@ -162,6 +162,7 @@ pub struct NyaIconButton {
     id: SharedString,
     icon_path: SharedString,
     icon_size: Option<Pixels>,
+    size: Option<Pixels>,
     disabled: bool,
     tooltip: Option<SharedString>,
     on_click: Option<NyaButtonClickHandler>,
@@ -173,6 +174,7 @@ impl NyaIconButton {
             id: id.into(),
             icon_path: icon_path.into(),
             icon_size: None,
+            size: None,
             disabled: false,
             tooltip: None,
             on_click: None,
@@ -181,6 +183,11 @@ impl NyaIconButton {
 
     pub fn icon_size(mut self, size: Pixels) -> Self {
         self.icon_size = Some(size);
+        self
+    }
+
+    pub fn size(mut self, size: Pixels) -> Self {
+        self.size = Some(size);
         self
     }
 
@@ -209,6 +216,9 @@ impl RenderOnce for NyaIconButton {
             .path(self.icon_path)
             .when_some(self.icon_size, |icon, size| icon.with_size(size));
         let mut button = Button::new(self.id).icon(icon).ghost().small();
+        if let Some(size) = self.size {
+            button = button.size(size);
+        }
         if let Some(tooltip) = self.tooltip {
             button = button.tooltip(tooltip);
         }
