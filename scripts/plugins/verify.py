@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -12,8 +13,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", action="store_true")
     options = parser.parse_args()
-    subprocess.run([sys.executable, "scripts/plugins/build.py", "--fixtures"], cwd=ROOT, check=True)
     checks = [
+        ["cargo", "fmt", "--manifest-path", "examples/plugins/guests/Cargo.toml", "--all", "--", "--check"],
+        [sys.executable, "scripts/plugins/build.py", "--fixtures"],
+        ["cargo", "package", "--locked", "-p", "nyaterm-plugin-api", "--allow-dirty"],
         ["cargo", "test", "--locked", "-p", "nyaterm-core", "--test", "plugins"],
         ["cargo", "test", "--locked", "-p", "nyaterm-store", "plugin_preferences"],
         ["cargo", "test", "--locked", "-p", "nyaterm-plugin-host"],
@@ -26,8 +29,11 @@ def main():
             ["cargo", "test", "--locked", "--workspace"],
             ["cargo", "fmt", "--all", "--", "--check"],
             ["cargo", "clippy", "--locked", "--workspace", "--all-targets"],
+            [sys.executable, "scripts/ci/check_architecture.py"],
         ]
-    logs = ROOT / "target/plugin-verification"
+    # Each invocation owns its logs, including guest build/packaging failures.
+    # Reruns must not erase the evidence from a previous failed check.
+    logs = ROOT / "target/plugin-verification" / f"run-{uuid.uuid4().hex}"
     logs.mkdir(parents=True, exist_ok=True)
     results = []
     for index, command in enumerate(checks):

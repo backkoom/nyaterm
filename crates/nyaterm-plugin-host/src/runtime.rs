@@ -22,12 +22,17 @@ mod bindings {
 }
 use bindings::nyaterm::plugin::types as wit;
 
+#[cfg(test)]
+type CallEpochHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct RuntimeLimits {
     pub memory_bytes: usize,
     pub fuel: u64,
     pub timeout: Duration,
     pub queue_capacity: usize,
+    #[cfg(test)]
+    pub(crate) on_call_epoch: Option<CallEpochHook>,
 }
 
 impl Default for RuntimeLimits {
@@ -37,6 +42,8 @@ impl Default for RuntimeLimits {
             fuel: 20_000_000,
             timeout: Duration::from_secs(2),
             queue_capacity: 8,
+            #[cfg(test)]
+            on_call_epoch: None,
         }
     }
 }
@@ -166,6 +173,8 @@ struct GuestState {
     stop: Arc<RuntimeToken>,
     cancelled: Arc<AtomicBool>,
     deadline: Instant,
+    #[cfg(test)]
+    on_call_epoch: Option<(String, CallEpochHook)>,
 }
 
 struct GuestLimits {
@@ -332,10 +341,18 @@ impl RuntimeInstance {
                         stop: token_for_worker.clone(),
                         cancelled: Arc::new(AtomicBool::new(false)),
                         deadline: Instant::now() + limits.timeout,
+                        #[cfg(test)]
+                        on_call_epoch: None,
                     };
                     let mut store = Store::new(&engine.engine, state);
                     store.limiter(|state| &mut state.limits);
                     store.epoch_deadline_callback(|context| {
+                        #[cfg(test)]
+                        let mut context = context;
+                        #[cfg(test)]
+                        if let Some((action, hook)) = context.data_mut().on_call_epoch.take() {
+                            hook(&action);
+                        }
                         let state = context.data();
                         if !state.stop.active() || state.cancelled.load(Ordering::Acquire) {
                             return Err(wasmtime::Error::msg("plugin cancelled"));
@@ -416,6 +433,13 @@ impl RuntimeInstance {
                                 .collect(),
                             text: request.input.text,
                         };
+                        #[cfg(test)]
+                        {
+                            store.data_mut().on_call_epoch = limits
+                                .on_call_epoch
+                                .clone()
+                                .map(|hook| (input.action.clone(), hook));
+                        }
                         let result = match plugin.call_invoke(&mut store, &input) {
                             Ok(Ok(wit::ActionResult::Command(v))) => Ok(ActionResult::Command {
                                 title: v.title,

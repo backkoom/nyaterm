@@ -211,3 +211,86 @@ No live visual/keyboard acceptance is claimed. GPUI tests remain available.
 No source copied from GPL reference, no temp/vendor edits, no real user data
 changes, no commits or pushes. Native visual/keyboard acceptance remains
 outstanding; Goal is not marked complete.
+
+## Lifecycle closeout follow-up (2026-10-04)
+
+Current implementation work separates non-cancellable management transactions
+from cancellable action calls, checks selected revisions before guest dispatch,
+and linearizes submission/dispatch/shutdown. Closing a workspace cancels its
+action waiter; accepted management operations remain owned by the process actor.
+Startup failure and normal shutdown both publish stopped state and close events.
+Compilation remains in-process and may delay shutdown; it has no hard timeout.
+
+Seven new service tests use dispatch barriers and a real SDK guest epoch hook,
+with no fixed sleeps to infer request state. All seven and the existing thirteen
+host lifecycle tests passed. The first run failed because the new test manifest
+omitted required action descriptions; corrected the fixture and reran. One test
+was stopped after that fixture error left its event wait pending; the corrected
+test synchronizes through an ordered real service operation.
+
+Added a required SDK CI job rebuilding guest components, packaged SDK validation,
+guest formatting checks and alias-aware plugin dependency guards. Verification
+invocations now have unique log directories and record build/package failures.
+Desktop regressions and broad verification completed as recorded below.
+
+The supported computer-use native connection now discovers windows successfully.
+The earlier native-pipe blocker is historical. This follow-up used the recovered
+connection for an isolated portable walkthrough; prior evidence remains intact.
+
+### Automated and native closeout evidence
+
+`python scripts/plugins/verify.py --workspace` recorded its thirteen commands in
+`target/plugin-verification/run-32ce1f26b0754b64bdf730518b4fd92d/results.json`.
+Guest fmt, SDK source generation, SDK package verification, core plugins (4),
+store preferences (3), host (7 service + 13 lifecycle), desktop plugins (5),
+native default build and workspace check/test/fmt/Clippy passed. Default-parallel
+workspace tests: 3305 passed, 0 failed, 13 existing ignored; Clippy: no warnings.
+No precise or serial rerun was needed for this run. Earlier default-parallel
+failures, exact reruns and serial passes above are retained, not overwritten.
+
+Architecture returned exit 1 solely for the existing raw scroll container in
+`crates/nyaterm-desktop/src/features/pages/transfers/path_bar.rs:522`.
+No transfer code or allowlist was changed. The new plugin dependency boundaries
+passed, along with three architecture guard unit tests. Workflow syntax passed
+actionlint 1.7.7; its downloaded archive was checked against release checksums,
+and results are in `target/plugin-verification/actionlint-1.7.7/check.log`.
+
+Final review added coverage for catalog notifications delivered after management
+completion as well as before it. Management feedback now survives both orders
+until explicit new work or action selection. All five desktop plugin tests
+passed after this addition. A fresh full verification invocation follows this
+last code change; its exact result is recorded separately below.
+
+Windows native walkthrough used only
+`target/plugin-verification/native-closeout-b840f092/` and its own portable data.
+The source-built executable SHA256 was
+`A5F899D3941ECF3A2F95C13415BE51872E267CA3338AAC1E6183D27F3250120B`.
+Installed diagnostic/templates ZIPs, registered the text example development
+copy, invoked all three, edited/filled/appended/replaced drafts, copied/reused
+text, observed shared-window disable/enable/uninstall, failed update/reload
+feedback and retained SDK calls, CPU-budget fault/action revocation and healthy
+text execution, enabled/disabled restart restoration and normal application exit.
+Zero isolated processes remained; exclusive opens succeeded for both redb files
+and retained Wasm files. This binary preceded only the final feedback-order fix;
+that ordering is covered by the deterministic GPUI regression and final follow-up.
+No session was created or draft sent. Real user data and unrelated sidebar edits
+were preserved. The acceptance table now reflects the actual native evidence,
+and keeps the repository architecture failure separate.
+
+Final-source rerun:
+`target/plugin-verification/run-4731ebbc699a4c3a924b1c7e8d8b3127/results.json`.
+Twelve checks returned exit 0; architecture again returned exit 1 for the same
+transfer path-bar violation. Default-parallel workspace tests again passed 3305
+with 13 existing ignored, and Clippy emitted no warnings. The full Python CI
+helper suite passed all 48 tests. No final precise/serial retry was needed.
+
+The final source-built executable SHA256 was
+`0B7B478CEE9788CEAA26C457ACC29F7A6851CADC2C989308B007446F00BB44C6`.
+Launched it against the same isolated portable data, confirmed preferences,
+executed SDK text output, copied it and pasted the exact result back into the
+plugin input with Ctrl+V. Disabling the selected plugin cleared its form/preview
+while preserving `Plugin operation completed`. Normal exit again left zero
+isolated processes and allowed exclusive database/Wasm opens. The planned
+Windows x64 functional walkthrough is complete; other platforms remain untested,
+and the unrelated repository architecture gate remains failed. No claim of an
+all-green repository gate or remote CI run is made.

@@ -17,7 +17,7 @@ use crate::models::{
     SecurityAuthTab, SettingsTab,
 };
 use crate::theme::ThemePalette;
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaTooltip};
+use nyaterm_ui::NyaTooltip;
 
 const EXCLUSIVE_PANEL_IDS: &[&str] = &["aiAssistant"];
 const NON_PANEL_IDS: &[&str] = &["settings", "lock", "quickCmdBar", "serialSend"];
@@ -770,19 +770,6 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         match panel {
-            NavItem::Plugins if !self.shell.panel_is_floating() => Some(
-                NyaButton::new("plugins-panel-close", "")
-                    .icon("icons/window/close.svg")
-                    .variant(NyaButtonVariant::Ghost)
-                    .small()
-                    .compact()
-                    .tooltip(t!("common.close"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_panel(NavItem::Plugins, cx);
-                        this.focus_active_workspace_surface(window, cx);
-                    }))
-                    .into_any_element(),
-            ),
             NavItem::Connections if !self.connection_state.connections().is_empty() => Some(
                 div()
                     .text_size(px(11.))

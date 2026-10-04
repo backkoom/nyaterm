@@ -88,6 +88,35 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
 
+  plugin-sdk:
+    name: Plugin SDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt
+          targets: wasm32-unknown-unknown
+          cache-key: plugin-sdk
+
+      - name: Install Linux system dependencies
+        uses: ./.github/actions/install-linux-deps
+
+      - name: Check guest formatting
+        run: cargo fmt --manifest-path examples/plugins/guests/Cargo.toml --all -- --check
+
+      - name: Build SDK guests and test regenerated components
+        run: python scripts/plugins/build.py --fixtures --check
+
+      - name: Verify packaged SDK
+        run: cargo package --locked -p nyaterm-plugin-api --allow-dirty
+
   python:
     name: Release helpers
     runs-on: ubuntu-24.04
@@ -112,6 +141,7 @@ jobs:
           scripts.tests.test_package_native
           scripts.tests.test_verify_native_package
           scripts.tests.test_generate_release_metadata
+          scripts.tests.test_check_architecture
 
   workflows:
     name: Workflow syntax
@@ -135,7 +165,7 @@ jobs:
   gate:
     name: Rust gate
     runs-on: ubuntu-24.04
-    needs: [lint, test, python, workflows]
+    needs: [lint, test, plugin-sdk, python, workflows]
     if: always()
     timeout-minutes: 5
     steps:

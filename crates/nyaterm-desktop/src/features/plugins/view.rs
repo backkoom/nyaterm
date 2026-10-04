@@ -28,6 +28,17 @@ struct Preview {
     lease: InvocationLease,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingKind {
+    Management,
+    Invocation,
+}
+
+struct PendingOperation {
+    kind: PendingKind,
+    task: Task<()>,
+}
+
 pub(in crate::features) struct PluginPanel {
     app: WeakEntity<NyaTermApp>,
     pub(super) process: Entity<PluginProcess>,
@@ -38,9 +49,13 @@ pub(in crate::features) struct PluginPanel {
     selected: Option<Contribution>,
     preview: Option<Preview>,
     status: String,
-    pending: Option<Task<()>>,
+    // Catalog notifications may arrive after an operation's reply. Keep its
+    // management feedback until the user selects an action or starts new work.
+    status_kind: Option<PendingKind>,
+    pending: Option<PendingOperation>,
     generation: u64,
-    busy: bool,
+    #[cfg(test)]
+    completion_gate: Option<futures::channel::oneshot::Receiver<()>>,
     _subscription: Subscription,
 }
 
@@ -59,14 +74,17 @@ impl PluginPanel {
                     .any(|c| c.id == selected.id && c.revision == selected.revision)
             });
             if !valid {
-                this.pending.take();
-                this.busy = false;
-                this.generation += 1;
+                if this.can_cancel() {
+                    this.pending.take();
+                    this.generation += 1;
+                }
                 this.selected = None;
                 this.preview = None;
                 this.parameters.clear();
                 this.output.update(cx, |state, cx| state.clear(cx));
-                this.status = t!("plugins.actionChanged").to_string();
+                if !this.busy() && this.status_kind != Some(PendingKind::Management) {
+                    this.status = t!("plugins.actionChanged").to_string();
+                }
             }
             cx.notify();
         });
@@ -92,17 +110,20 @@ impl PluginPanel {
             selected: None,
             preview: None,
             status: String::new(),
+            status_kind: None,
             pending: None,
             generation: 0,
-            busy: false,
+            #[cfg(test)]
+            completion_gate: None,
             _subscription: subscription,
         }
     }
 
     fn select(&mut self, contribution: Contribution, cx: &mut Context<Self>) {
-        self.pending.take();
+        if self.busy() {
+            return;
+        }
         self.generation += 1;
-        self.busy = false;
         self.preview = None;
         self.output.update(cx, |state, cx| state.clear(cx));
         self.parameters = contribution
@@ -122,6 +143,7 @@ impl PluginPanel {
             .collect();
         self.selected = Some(contribution);
         self.status.clear();
+        self.status_kind = None;
         cx.notify();
     }
 
@@ -130,9 +152,15 @@ impl PluginPanel {
     }
 
     fn operation(&mut self, operation: PluginOperation, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.busy() {
             return;
         }
+        let kind = if matches!(&operation, PluginOperation::Invoke { .. }) {
+            PendingKind::Invocation
+        } else {
+            PendingKind::Management
+        };
+        self.status_kind = Some(kind);
         let Some(service) = self.process.read(cx).service.clone() else {
             self.status = t!("plugins.unavailable").to_string();
             cx.notify();
@@ -146,11 +174,12 @@ impl PluginPanel {
                 return;
             }
         };
-        self.busy = true;
         self.generation += 1;
         let generation = self.generation;
         self.status = t!("plugins.working").to_string();
-        self.pending = Some(cx.spawn(async move |this, cx| {
+        #[cfg(test)]
+        let completion_gate = self.completion_gate.take();
+        let task = cx.spawn(async move |this, cx| {
             let result = match task.await {
                 Ok(Ok(OperationReply::Changed)) => Ok(None),
                 Ok(Ok(OperationReply::Invocation(invocation))) => {
@@ -171,11 +200,17 @@ impl PluginPanel {
                     "Plugin operation was interrupted",
                 )),
             };
+            #[cfg(test)]
+            if let Some(gate) = completion_gate {
+                let _ = gate.await;
+            }
             let _ = this.update(cx, |this, cx| {
                 if this.generation != generation {
                     return;
                 }
-                this.busy = false;
+                if let Some(pending) = this.pending.take() {
+                    pending.task.detach();
+                }
                 match result {
                     Ok(Some(((plugin_id, contribution_id, revision, lease), result))) => {
                         let current = service.snapshot();
@@ -217,14 +252,19 @@ impl PluginPanel {
                 }
                 cx.notify();
             });
-        }));
+        });
+        self.pending = Some(PendingOperation { kind, task });
         cx.notify();
     }
 
     fn invoke(&mut self, cx: &mut Context<Self>) {
+        if self.busy() {
+            return;
+        }
         let Some(selected) = self.selected.clone() else {
             return;
         };
+        self.status_kind = Some(PendingKind::Invocation);
         let mut input = ActionInput::default();
         for parameter in &self.parameters {
             let value = parameter.input.read(cx).value(cx);
@@ -249,18 +289,31 @@ impl PluginPanel {
         self.operation(
             PluginOperation::Invoke {
                 contribution_id: selected.id,
+                expected_revision: selected.revision,
                 input,
             },
             cx,
         );
     }
 
-    fn cancel(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
+        if !self.can_cancel() {
+            return;
+        }
         self.pending.take();
         self.generation += 1;
-        self.busy = false;
         self.status = t!("plugins.cancelled").to_string();
         cx.notify();
+    }
+
+    fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn can_cancel(&self) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| pending.kind == PendingKind::Invocation)
     }
 
     fn fill(&mut self, replace: bool, cx: &mut Context<Self>) {
@@ -368,7 +421,7 @@ impl Render for PluginPanel {
                     )
                     .child(
                         NyaButton::new("plugins-install", t!("plugins.install"))
-                            .disabled(self.busy)
+                            .disabled(self.busy())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let source = this.source_path(cx);
                                 this.operation(
@@ -384,7 +437,7 @@ impl Render for PluginPanel {
                         NyaButton::new("plugins-development", t!("plugins.development"))
                             .full_width()
                             .tooltip(t!("plugins.development"))
-                            .disabled(self.busy)
+                            .disabled(self.busy())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let source = this.source_path(cx);
                                 this.operation(
@@ -472,7 +525,7 @@ impl Render for PluginPanel {
                                 t!("plugins.enable")
                             },
                         )
-                        .disabled(self.busy)
+                        .disabled(self.busy())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.operation(
                                 PluginOperation::Enable {
@@ -488,7 +541,7 @@ impl Render for PluginPanel {
                             format!("plugins-reload-{}", plugin.id),
                             t!("plugins.reload"),
                         )
-                        .disabled(self.busy)
+                        .disabled(self.busy())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.operation(
                                 PluginOperation::Reload {
@@ -505,7 +558,7 @@ impl Render for PluginPanel {
                         )
                         .full_width()
                         .tooltip(t!("plugins.update"))
-                        .disabled(self.busy)
+                        .disabled(self.busy())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let source = this.source_path(cx);
                             this.operation(
@@ -525,7 +578,7 @@ impl Render for PluginPanel {
                         .full_width()
                         .tooltip(t!("plugins.uninstall"))
                         .variant(NyaButtonVariant::Danger)
-                        .disabled(self.busy)
+                        .disabled(self.busy())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.operation(
                                 PluginOperation::Uninstall {
@@ -550,7 +603,7 @@ impl Render for PluginPanel {
                     )
                     .full_width()
                     .tooltip(contribution.action.name.clone())
-                    .disabled(self.busy)
+                    .disabled(self.busy())
                     .on_click(cx.listener(move |this, _, _, cx| this.select(selected.clone(), cx))),
                 );
             }
@@ -599,12 +652,12 @@ impl Render for PluginPanel {
                             .full_width()
                             .tooltip(t!("plugins.invoke"))
                             .variant(NyaButtonVariant::Primary)
-                            .disabled(self.busy)
+                            .disabled(self.busy())
                             .on_click(cx.listener(|this, _, _, cx| this.invoke(cx))),
                     )
                     .child(
                         NyaButton::new("plugins-cancel", t!("plugins.cancel"))
-                            .disabled(!self.busy)
+                            .disabled(!self.can_cancel())
                             .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                     ),
             );
@@ -695,9 +748,198 @@ mod tests {
     use gpui::{AppContext, TestAppContext};
     use nyaterm_core::runtime::{AppRuntime, RuntimeMode};
     use nyaterm_core::test_support::TestTempDir;
-    use nyaterm_plugin_host::service::PluginOperation;
+    use nyaterm_plugin_host::service::{PluginOperation, PluginService};
+    use rust_i18n::t;
     use std::path::Path;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn catalog_changes_preserve_management_waiter_and_success_or_error_feedback() {
+        for (succeed, catalog_first) in [(true, true), (false, true), (true, false), (false, false)]
+        {
+            let root = TestTempDir::new("nyaterm-plugin-panel-management");
+            let mut cx = TestAppContext::single();
+            let app = app_with_visible_local_session(&mut cx, root.path(), "management-session");
+            let runtime = AppRuntime::from_parts_for_test(
+                RuntimeMode::Portable,
+                root.path().into(),
+                root.join("config"),
+                root.join("logs"),
+                root.join("cache"),
+                None,
+            );
+            let (service, _events) = PluginService::start(runtime).unwrap();
+            // Deliver the real service snapshot explicitly to cover both event /
+            // reply orderings without depending on GPUI executor scheduling.
+            let process = cx.new(|_| PluginProcess::empty());
+            cx.update_entity(&process, |process, _| {
+                process.service = Some(service.clone())
+            });
+            let source = root.join("source");
+            std::fs::create_dir_all(&source).unwrap();
+            let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+            std::fs::copy(
+                crate_root.join("../../examples/plugins/diagnostic-command/plugin.toml"),
+                source.join("plugin.toml"),
+            )
+            .unwrap();
+            std::fs::copy(
+                crate_root.join("../nyaterm-plugin-host/tests/fixtures/diagnostic-command.wasm"),
+                source.join("plugin.wasm"),
+            )
+            .unwrap();
+            block_on(
+                service
+                    .submit(PluginOperation::Install {
+                        source,
+                        development: false,
+                    })
+                    .unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+            cx.update_entity(&process, |process, cx| {
+                process.snapshot = service.snapshot();
+                cx.notify();
+            });
+            let panel = cx.new(|cx| PluginPanel::new(app.downgrade(), process.clone(), cx));
+            cx.update_entity(&app, |app, _| app.plugins.panel = panel.clone());
+            cx.run_until_parked();
+            let contribution = service.snapshot().contributions[0].clone();
+            let (release, gate) = futures::channel::oneshot::channel();
+            cx.update_entity(&panel, |panel, cx| {
+                panel.select(contribution, cx);
+                panel.completion_gate = Some(gate);
+                panel.operation(
+                    if succeed {
+                        PluginOperation::Enable {
+                            id: "diagnostic-command".into(),
+                            enabled: false,
+                        }
+                    } else {
+                        PluginOperation::Update {
+                            id: "diagnostic-command".into(),
+                            source: root.join("missing"),
+                        }
+                    },
+                    cx,
+                );
+                assert!(panel.busy());
+                assert!(!panel.can_cancel());
+                let generation = panel.generation;
+                let selected = panel.selected.as_ref().unwrap().id.clone();
+                panel.output.update(cx, |input, cx| {
+                    input.set_content("keep pending preview", cx)
+                });
+                panel.invoke(cx); // Programmatic invocation cannot bypass disabled controls.
+                panel.cancel(cx);
+                assert_eq!(panel.generation, generation);
+                assert_eq!(panel.selected.as_ref().unwrap().id, selected);
+                assert_eq!(panel.output.read(cx).value(cx), "keep pending preview");
+                assert_eq!(panel.status, t!("plugins.working").to_string());
+            });
+            cx.update_entity(&app, |app, cx| app.plugins.shutdown(cx));
+            assert!(cx.read(|cx| panel.read(cx).busy()));
+            // This ordered real service operation makes the selection stale, while
+            // the barrier keeps the first operation's UI completion pending.
+            block_on(
+                service
+                    .submit(PluginOperation::Enable {
+                        id: "diagnostic-command".into(),
+                        enabled: false,
+                    })
+                    .unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+            if catalog_first {
+                cx.update_entity(&process, |process, cx| {
+                    process.snapshot = service.snapshot();
+                    cx.notify();
+                });
+            }
+            cx.run_until_parked();
+            cx.update_entity(&panel, |panel, cx| {
+                assert!(panel.busy());
+                assert!(!panel.can_cancel());
+                if catalog_first {
+                    assert!(panel.selected.is_none());
+                    assert!(panel.parameters.is_empty());
+                    assert_eq!(panel.output.read(cx).value(cx), "");
+                }
+                assert_eq!(panel.status, t!("plugins.working").to_string());
+            });
+            release.send(()).unwrap();
+            cx.run_until_parked();
+            if !catalog_first {
+                cx.update_entity(&process, |process, cx| {
+                    process.snapshot = service.snapshot();
+                    cx.notify();
+                });
+                cx.run_until_parked();
+            }
+            cx.update_entity(&panel, |panel, _| {
+                assert!(!panel.busy());
+                assert!(panel.selected.is_none());
+                assert_eq!(
+                    panel.status,
+                    if succeed {
+                        t!("plugins.done").to_string()
+                    } else {
+                        "Cannot access plugin files; check the source and directory permissions"
+                            .into()
+                    }
+                );
+            });
+            if succeed {
+                block_on(
+                    service
+                        .submit(PluginOperation::Enable {
+                            id: "diagnostic-command".into(),
+                            enabled: true,
+                        })
+                        .unwrap(),
+                )
+                .unwrap()
+                .unwrap();
+                cx.update_entity(&process, |process, cx| {
+                    process.snapshot = service.snapshot();
+                    cx.notify();
+                });
+                cx.run_until_parked();
+                let contribution = service.snapshot().contributions[0].clone();
+                let (release, gate) = futures::channel::oneshot::channel();
+                cx.update_entity(&panel, |panel, cx| {
+                    panel.select(contribution.clone(), cx);
+                    panel.completion_gate = Some(gate);
+                    panel.invoke(cx);
+                    assert!(panel.can_cancel());
+                });
+                // An ordered invocation lets the real first guest call finish;
+                // the completion barrier still prevents publishing its preview.
+                block_on(
+                    service
+                        .submit(PluginOperation::Invoke {
+                            contribution_id: contribution.id,
+                            expected_revision: contribution.revision,
+                            input: nyaterm_core::plugins::invocation::ActionInput::default(),
+                        })
+                        .unwrap(),
+                )
+                .unwrap()
+                .unwrap();
+                cx.run_until_parked();
+                cx.update_entity(&app, |app, cx| app.plugins.shutdown(cx));
+                cx.run_until_parked();
+                assert!(release.send(()).is_err());
+                cx.update_entity(&panel, |panel, _| {
+                    assert!(!panel.busy());
+                    assert!(panel.preview.is_none());
+                });
+            }
+            service.shutdown();
+        }
+    }
 
     #[test]
     fn manager_renders_and_real_guest_results_require_explicit_fill_and_valid_revision() {
@@ -759,7 +1001,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             vcx.run_until_parked();
-            if vcx.read(|cx| !panel.read(cx).busy) {
+            if vcx.read(|cx| !panel.read(cx).busy()) {
                 break;
             }
             assert!(

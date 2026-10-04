@@ -2,7 +2,84 @@
 
 This records evidence for the attached V1 requirements. Automated GPUI rendering
 and state tests are separate from native Windows visual/keyboard acceptance.
-The latter remains outstanding; the goal is not complete.
+The lifecycle closeout below records current Windows x64 functional acceptance.
+The repository architecture gate still reports the separately tracked transfer
+path-bar violation; it is not hidden or counted as a passing check.
+The planned Windows x64 functional walkthrough is complete; other platforms and
+the unrelated repository gate are not declared accepted.
+
+## Lifecycle closeout acceptance (2026-10-04)
+
+`python scripts/plugins/verify.py --workspace` preserved every result under
+`target/plugin-verification/run-32ce1f26b0754b64bdf730518b4fd92d/`.
+Guest formatting, SDK source builds/component generation, SDK package verification,
+core plugin tests (4), store preference tests (3), host tests (7 service + 13
+lifecycle), desktop plugin tests (5), native default build, workspace check,
+default-parallel workspace tests (3305 passed, 13 existing ignored), formatting
+and all-targets Clippy (no warnings) passed. Architecture failed only at the
+existing `features/pages/transfers/path_bar.rs` raw scroll container; the plugin
+crate checks passed. Architecture guard unit tests (3) and actionlint 1.7.7 passed.
+There was no default-parallel failure in this run; historical precise reruns and
+serial results below remain separate evidence.
+
+Service tests use temporary portable data and real SDK components. Dispatch
+barriers cover abandoned queued calls, stale revisions after reload, management
+completion after receiver close, shutdown queue draining and transaction commit,
+16-slot capacity, startup failure, repeated/concurrent shutdown and Windows
+handle cleanup. A real guest epoch checkpoint controls running cancellation.
+GPUI tests cover management cancellation guards, programmatic invocation guards,
+success/error feedback across contribution invalidation, window cancellation
+preventing preview publication, and service restart after aborted update shutdown.
+The final feedback regression also delivers catalog notifications before and
+after completion explicitly, so neither ordering can overwrite management feedback.
+The final-source full rerun, after this additional fix, is preserved in
+`target/plugin-verification/run-4731ebbc699a4c3a924b1c7e8d8b3127/`: the same twelve
+checks passed (3305 workspace tests, 13 ignored, Clippy without warnings), and the
+same existing architecture violation was the sole failure. All 48 Python CI
+helper tests also passed, including the three new dependency-guard tests.
+
+Native computer-use recovered after the historical pipe failure below. The
+walkthrough used `target/plugin-verification/native-closeout-b840f092/`, its own
+portable marker/data, and source-built application/helpers and SDK components.
+No real user configuration was opened or modified, and no terminal session was
+created or draft sent. Observed Windows behavior:
+
+* Installed the diagnostic command and declarative template ZIPs, and registered
+  an isolated copy of the text SDK example as a development directory. All three
+  generated their expected results (`nslookup`/`ping`, `ls -lah`, formatted JSON).
+* Edited a command preview, explicitly filled the send box, appended to an existing
+  draft and replaced it. Generating results left the existing draft unchanged.
+  The text result copy control worked and reuse replaced the action's text input;
+  text results offered no command-fill controls.
+* Invalid command update and invalid development Wasm reload showed failure
+  feedback, kept version 1.0.0/actions, and the retained SDK instances still ran.
+* Opened another workspace through File / New Window. Disable, enable and uninstall
+  in that window removed/restored/removed the command contribution in both windows.
+  Closing the second workspace left the first usable.
+* A real infinite-loop SDK fixture reached Runtime fault with the CPU-budget
+  message, revoked its actions and cleared its form. The text plugin still ran,
+  and scrolling, management controls and application close remained responsive.
+* Normal close exited the isolated process. Restart restored the enabled template,
+  disabled development plugin and command-plugin uninstall. The final normal close
+  left zero isolated processes; exclusive opens of both redb databases and retained
+  Wasm files succeeded. Precise in-flight close/exit races are covered by barriers
+  in automated tests, not inferred from the fast native operations.
+
+In-process compilation and filesystem work have no hard timeout; application exit
+may wait for compilation and an already-started management transaction to finish
+or roll back. Management has no user cancellation. Queued requests not dispatched
+when shutdown begins return `Shutdown`; dropped invocation waiters are skipped.
+The WIT, SDK ABI, manifest schema and persistence formats are unchanged.
+
+The final binary, including the feedback-order fix, was also launched against
+the same isolated data (SHA256
+`0B7B478CEE9788CEAA26C457ACC29F7A6851CADC2C989308B007446F00BB44C6`).
+It restored preferences, executed a real SDK text result, copied it and pasted
+the exact value back into the action input using Ctrl+V. Disabling that selected
+plugin cleared the form/preview while retaining `Plugin operation completed`.
+Normal exit again left zero isolated processes and released all database/Wasm
+handles. The detailed first walkthrough and final smoke check are separate;
+deterministic event-order verification is the GPUI test described above.
 
 ## Side-panel change acceptance (2026-10-04)
 
@@ -20,8 +97,9 @@ instance, using the repository's declarative template example:
 * Moving the entry to the right opens the panel on the right. Docked/floating
   switches and panel close/reopen retain parameters and result previews.
 
-These checks cover this UI change; the remaining broader V1 walkthroughs in the
-table below are separate.
+These earlier checks cover this UI change. The current broader walkthrough is
+recorded above; historical close/reopen observations precede removal of the panel
+close buttons, which this closeout deliberately preserves.
 
 Validation also passed `cargo check --workspace`, `cargo fmt --all -- --check`,
 `cargo clippy --workspace --all-targets` (no warnings), and
@@ -32,18 +110,19 @@ rerun and the final serial workspace run passed. No transport code was changed.
 
 ## Completion criteria
 
-| Requirement | Implementation and evidence | Remaining native acceptance |
+| Requirement | Implementation and evidence | Current Windows x64 native acceptance |
 | --- | --- | --- |
 | Build application and SDK examples from a clean checkout | Isolated HEAD archive with only plugin changes passed native default build and all workspace checks. SDK guests built independently; examples were componentized, initialized and ZIP packaged. Packaged SDK WIT also compiled. | None for Windows x64 compilation. |
-| Start application and open manager | Isolated portable startup created application and plugin databases. The bottom-left extension entry opens a workspace side panel; GPUI tests cover shared service, editing-state retention, placement and docked/floating navigation. | Inspect native layout, keyboard focus, scrolling and close/focus restoration from the extension entry. |
-| Install declarative and Wasm examples | Actual manager lifecycle tests install managed directory snapshots and ZIPs; SDK command/text example exports execute. Build script validates all three installable packages. | Install the three examples through the native manager. |
-| Invoke, inspect and explicitly fill draft | Actual SDK component runs through the desktop service/panel. GPUI test verifies preview, explicit append, sending remains false, and revoked preview cannot fill. Adapter test preserves session, target, history and saved QuickCommands. | Edit preview, append/replace an existing draft, inspect resulting send box; copy/reuse text. |
-| Disable removes actions; enable restores them | Lifecycle test verifies contribution revocation, rejection of disabled calls and fresh instance on re-enable. Shared snapshot drives all windows. | Observe action removal/restoration in both windows. |
-| Failed update/reload preserves previous version | Tests execute invalid replacements and actual promoted-directory/preference rollback, then call the retained guest. Windows occupied-file test preserves the old package. | Trigger invalid local update/development reload and invoke the old action. |
-| Uninstall leaves no contributions | Lifecycle tests assert package removal, contribution removal, staging cleanup and retained plugin data. UI explicitly says uninstall keeps data. | Uninstall through manager and observe removal in all windows. |
-| Restart restores preferences | Real redb round trip/fixture and manager drop/reopen tests preserve enabled/disabled preferences. Corrupt/future preferences are rejected without rewrite. | Restart the isolated portable app and inspect restored states. |
-| Fault isolation keeps application/other plugins usable | Real adversarial SDK guest tests hard deadline, fuel, memory, trap, oversized/control results, queue saturation and cancellation; other guest still executes. GPUI only awaits background work. | Observe native responsiveness during a fault and normal close. |
-| Repository checks pass | Fresh isolated sources passed build/check/test/fmt/Clippy (3280 passed, 13 existing ignored). Current-source check/fmt/Clippy passed; serial workspace tests passed 3290 with 13 existing ignored. Two default-parallel timing failures and exact passing reruns are recorded in progress. | Native checks above remain separate from Cargo checks. |
+| Start application and open manager | Isolated portable startup created application and plugin databases. GPUI tests cover shared service and editing-state retention. | Passed; opened bottom-left entry, scrolled and widened the panel. Earlier keyboard/layout checks retained above. |
+| Install declarative and Wasm examples | Manager lifecycle tests and SDK source build validate all three packages. | Passed; two ZIP installations and text example development registration. |
+| Invoke, inspect and explicitly fill draft | Actual SDK components, GPUI preview/draft/revocation tests and composer-only adapter regression. | Passed; all three results, preview edits, append/replace, text copy/reuse, no automatic send. |
+| Disable removes actions; enable restores them | Contribution revocation and fresh-instance tests; shared process snapshots. | Passed in both windows. |
+| Failed update/reload preserves previous version | Invalid replacement, transaction/preference rollback and Windows occupied-file tests. | Passed; failure feedback and retained SDK calls. |
+| Uninstall leaves no contributions | Package/contribution removal, staging cleanup and retained-data tests. | Passed in both windows and after restart. |
+| Restart restores preferences | Real redb compatibility tests and service restart regression. | Passed; enabled template and disabled development plugin restored. |
+| Fault isolation keeps application/other plugins usable | Real SDK deadlines, fuel, memory, trap, queue and cancellation tests. | Passed; CPU-budget fault, action revocation, healthy text call and normal exit. |
+| Management, call and shutdown lifecycle | Seven service regressions and GPUI feedback/cancellation/restart tests described above. | Normal workspace close and application exit passed; deterministic race evidence is automated. |
+| Repository checks pass | Current default-parallel workspace tests: 3305 passed / 13 ignored. Build/check/fmt/Clippy/actionlint passed; historical runs retained below/in progress. | Architecture gate remains failed on the pre-existing transfer path bar; no plugin boundary violation. |
 
 ## Requirement coverage
 
@@ -85,7 +164,7 @@ rerun and the final serial workspace run passed. No transport code was changed.
   verification scripts, design and user/developer documentation. No third-party
   fork changes, commits, pushes or real user configuration changes were made.
 
-## Native verification blocker
+## Historical native verification blocker (resolved in lifecycle closeout)
 
 The supported computer-use connection fails before window discovery with:
 
@@ -99,9 +178,7 @@ It has failed in three consecutive continuation turns, including another
 Kernel reinitialization did not restore the connection. Indirect startup and
 GPUI tests do not establish that the native walkthrough above passed.
 
-When the native connection is restored, use a separate portable copy and the
-packages produced by `scripts/plugins/build.py --fixtures`; keep real user
-configuration untouched. Follow the installation/use steps in
-[plugin-system.md](plugin-system.md), then execute the remaining checks in the
-table and record their actual outcomes. macOS/Linux and Windows ARM64 runtime
-behavior remain unverified; ARM64 host cross-compilation alone passed.
+The connection later recovered and the isolated walkthrough above replaced this
+blocker as current evidence. macOS/Linux and Windows ARM64 runtime behavior remain
+unverified; ARM64 host cross-compilation alone passed. The unrelated architecture
+gate failure prevents describing all repository gates as green.

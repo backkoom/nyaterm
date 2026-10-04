@@ -37,6 +37,19 @@ All inputs/results/queues/packages are bounded. Cancellation invalidates a
 generation before stopping its worker. Old results cannot revive contributions.
 Trap/timeout/invalid results retire that instance. Shutdown joins workers off UI.
 
+The service serializes submission, dispatch start and shutdown through a short
+lock never held during filesystem work, compilation or joining. Invoke requests
+include the selected revision, checked before guest dispatch. Abandoned queued
+calls are skipped; dropping a dispatched call cancels its ticket. Management
+transactions run to completion or roll back even when their receiver closes.
+Shutdown rejects requests not yet dispatched and finishes a started transaction.
+Startup-error shutdown also preserves its diagnostic, publishes stopped state
+and closes events. Concurrent shutdown callers all await resource reclamation.
+
+Compilation stays in-process on the management thread, bounded by package size.
+Fuel/epoch deadlines cover guest execution, not compilation or filesystem I/O;
+orderly shutdown may wait for these stages and has no hard compilation timeout.
+
 ## Installation and persistence
 
 Directories and ZIP packages are copied into staging, rejecting links, reparse
@@ -63,6 +76,14 @@ Command results are editable previews. Filling the send box is explicit and
 preserves an existing draft using append or an explicit replacement action.
 No plugin operation selects sessions, writes terminal bytes or presses Enter.
 
+Window pending state distinguishes management transactions from invocations.
+Only invocations expose cancellation. Catalog invalidation clears retired forms
+and previews without cancelling management waiters or losing their feedback.
+Management feedback survives catalog notifications delivered after completion
+as well as before it, until action selection or new work replaces that feedback.
+Workspace shutdown cancels its action waiter; accepted management remains owned
+by the process service. Hidden/moved panels preserve their editing state.
+
 ## Verification
 
 Core/store contract tests, actual SDK-built components and host lifecycle tests
@@ -74,6 +95,18 @@ the current platform; other platforms must be listed as unverified until tested.
 The isolated Windows x64 source snapshot passed the default build and all four
 workspace checks with a fresh target cache: 3280 tests passed with 13 pre-existing
 ignored tests. SDK packaging and Windows ARM64 host cross-compilation passed.
-Native startup was smoke-tested using isolated portable data; computer-use's
-native pipe was unavailable, so visual/keyboard interaction remains unverified.
+At that initial stage, native startup was smoke-tested using isolated portable
+data; the unavailable computer-use pipe left visual/keyboard interaction unverified.
 ARM64 execution and Linux/macOS behavior are also unverified.
+
+These counts and the pipe failure describe the initial implementation. The
+connection was restored during lifecycle closeout and the planned Windows x64
+functional walkthrough completed in isolated portable data. Final workspace tests
+passed 3305 with 13 existing ignored; build/check/fmt/Clippy and actionlint passed.
+Architecture still fails only on the existing transfer path bar, with no allowlist
+change. Current results are recorded
+in plugin-system-progress.md and plugin-system-acceptance.md. The required SDK CI
+job rebuilds guest components, checks guest formatting, runs host tests against
+rebuilt fixtures and verifies the SDK package including WIT. Plugin dependency
+guards resolve aliases and target-specific dependency tables. No schema, ABI or
+persistence contract changed in closeout.

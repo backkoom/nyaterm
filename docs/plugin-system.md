@@ -11,6 +11,8 @@ read-only architectural reference.
 Open **Plugins** using the extension icon in the bottom-left activity bar,
 between **Sync / Backup** and **Settings** by default. The side panel follows the
 workspace's docked/floating mode and can be moved or hidden like other panels.
+Click its activity-bar icon again to hide it; the plugin panel has no top-right
+close button.
 Choose a directory containing `plugin.toml`, or a ZIP with
 that file at its root, then select **Install**. Installation copies and validates
 a managed snapshot; later edits to the source do not affect it.
@@ -34,6 +36,12 @@ reload it to retry. Failed replacement leaves the old plugin available.
   access, so the SDK itself currently writes no persistent plugin data.
 
 Select an action, fill its typed parameters, and choose **Generate / transform**.
+**Cancel** applies only to action calls. Cancelling an executing guest retires its
+instance; reload it before invoking it again. An abandoned queued call does not
+execute. Installation, update, enable/disable, reload and uninstall run to
+completion or roll back and cannot be cancelled from the panel. Hiding the panel
+retains its state; closing a workspace cancels its action call while accepted
+management continues in the shared process service.
 Text actions receive only text entered/pasted into their input box. The user must
 explicitly copy terminal selection and paste it there; plugins never subscribe to
 selection, terminal output or the clipboard. Results appear as ordinary editable
@@ -277,6 +285,13 @@ receive no inherited stdin/stdout/stderr or WASI environment. No guest logging
 import is exposed. CPU execution can be interrupted; compilation is bounded by
 package size and runs on the manager thread, rather than in a render/update path.
 
+Orderly application exit rejects new and queued operations, finishes any started
+management transaction, then joins plugin workers and the epoch clock. Execution
+timeouts do not cover Wasmtime compilation or filesystem I/O. These remain
+in-process background work, so shutdown may wait for them; V1 does not promise a
+hard compilation timeout. Selected revisions are checked before guest dispatch,
+preventing stale form inputs from reaching replacement instances.
+
 ## Verification and current limits
 
 Run the complete repository checks with:
@@ -288,6 +303,9 @@ python scripts/plugins/verify.py --workspace
 This builds the application and runtime helpers, checks the workspace, runs all
 tests, verifies formatting, and runs Clippy. Actual command results and any
 baseline failures are maintained in `plugin-system-progress.md`.
+The script also checks guest formatting, rebuilds SDK components, verifies the
+packaged SDK and checks architecture boundaries. Each invocation owns a fresh
+`target/plugin-verification/run-<id>/` directory, preserving previous failures.
 
 Windows x64 verification used a HEAD source snapshot with only plugin changes,
 and a fresh build cache: default native build, workspace check, all tests (3280
@@ -302,16 +320,26 @@ Default-parallel reruns encountered an unchanged ConPTY close timeout and an
 unchanged HTTP test socket timeout; each exact rerun passed. Their failures and
 the serial result remain recorded in the progress document. The detailed
 [acceptance table](plugin-system-acceptance.md) separates automated evidence from
-the outstanding native walkthrough.
+the current Windows native walkthrough and historical results.
 
 Windows x64 host tests exercise real SDK component initialization/calls, state
 isolation, archive/path safety, junction rejection, file occupation, transactional
 rollback, enable persistence, cancellation, stale-result rejection, resource
 failures and shutdown handle release. GPUI tests cover shared process ownership
-and composer-only adaptation. Native UI automation is currently unavailable
-because the computer-use native pipe cannot connect, so manual visual/keyboard
-interaction is not claimed as verified. macOS/Linux and Windows ARM64 execution
-are not claimed as tested. Native platform acceptance remains an explicit check.
+and composer-only adaptation. The lifecycle closeout passed SDK source builds,
+SDK packaging, plugin regressions and the default-parallel workspace suite
+(3305 passed, 13 existing ignored), build/check/fmt/Clippy and workflow syntax.
+The architecture gate still reports the existing transfer path-bar violation;
+plugin crate boundaries pass and no allowlist was expanded.
+
+The recovered native computer-use connection exercised all three examples in
+an isolated Windows x64 portable instance: result editing and explicit draft
+append/replace, text copy/reuse, shared-window enable/disable/uninstall, failed
+update/development reload, guest fault isolation, restart preferences and normal
+exit with released database/Wasm handles. No command was sent and real user data
+was untouched. Precise lifecycle races use automated barriers. macOS/Linux and
+Windows ARM64 execution are not claimed as tested. The
+[acceptance record](plugin-system-acceptance.md) lists the evidence and limits.
 
 V1 has no marketplace, automatic updates, plugin sync/backup, arbitrary UI,
 protocol decoders, KV or host capabilities. Add a capability only with a narrow

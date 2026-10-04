@@ -158,6 +158,7 @@ mod tests {
                 service
                     .submit(PluginOperation::Invoke {
                         contribution_id: "diagnostic-command:diagnose".into(),
+                        expected_revision: service.snapshot().contributions[0].revision,
                         input: ActionInput::default(),
                     })
                     .unwrap(),
@@ -172,12 +173,68 @@ mod tests {
         assert!(
             matches!(invoke(&one), ActionResult::Command { title, .. } if title == "Diagnostic draft 1")
         );
+        let other_package = root.join("other-example");
+        std::fs::create_dir_all(&other_package).unwrap();
+        let manifest = std::fs::read_to_string(root.join("example/plugin.toml")).unwrap();
+        std::fs::write(
+            other_package.join("plugin.toml"),
+            manifest.replace("diagnostic-command", "other-plugin"),
+        )
+        .unwrap();
+        std::fs::copy(
+            root.join("example/plugin.wasm"),
+            other_package.join("plugin.wasm"),
+        )
+        .unwrap();
+        let accepted = one
+            .submit(PluginOperation::Install {
+                source: other_package,
+                development: false,
+            })
+            .unwrap();
         drop(first);
+        drop(accepted);
         assert!(
             matches!(invoke(&two), ActionResult::Command { title, .. } if title == "Diagnostic draft 2")
         );
+        assert!(
+            two.snapshot()
+                .contributions
+                .iter()
+                .any(|c| c.plugin_id == "other-plugin")
+        );
         one.shutdown();
         assert!(two.snapshot().stopped);
+        // The same controller path restores the service after an application
+        // update aborts shutdown. Existing windows keep observing the same Entity.
+        cx.update_entity(&controller, |controller, cx| controller.restart_plugins(cx));
+        let restarted = cx.read(|cx| process.read(cx).service().unwrap());
+        assert!(!Arc::ptr_eq(&one, &restarted));
+        block_on(
+            restarted
+                .submit(PluginOperation::Reload {
+                    id: "diagnostic-command".into(),
+                })
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        cx.run_until_parked();
+        assert!(
+            matches!(invoke(&restarted), ActionResult::Command { title, .. } if title == "Diagnostic draft 1")
+        );
+        assert!(!cx.read(|cx| {
+            second
+                .read(cx)
+                .plugins
+                .panel
+                .read(cx)
+                .process
+                .read(cx)
+                .snapshot
+                .stopped
+        }));
+        restarted.shutdown();
         drop(second);
         drop(two);
         drop(one);

@@ -147,6 +147,7 @@ impl NyaTermApp {
     }
 
     pub(crate) fn shutdown_blocking_jobs(&mut self, cx: &mut Context<Self>) -> Task<()> {
+        self.plugins.shutdown(cx);
         self.ai.invalidate_provider_jobs();
         self.ai.cancel_chat_and_agent();
         let agent_worker = self.ai.shutdown_agent_management_worker();

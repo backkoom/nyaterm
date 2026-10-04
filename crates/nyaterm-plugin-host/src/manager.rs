@@ -508,6 +508,25 @@ impl PluginManager {
     }
 
     pub fn invoke(&self, contribution_id: &str, input: ActionInput) -> PluginResult<Invocation> {
+        self.invoke_checked(contribution_id, None, input)
+    }
+
+    /// Check the caller's selected contribution before any input reaches a guest.
+    pub fn invoke_at_revision(
+        &self,
+        contribution_id: &str,
+        expected_revision: u64,
+        input: ActionInput,
+    ) -> PluginResult<Invocation> {
+        self.invoke_checked(contribution_id, Some(expected_revision), input)
+    }
+
+    fn invoke_checked(
+        &self,
+        contribution_id: &str,
+        expected_revision: Option<u64>,
+        input: ActionInput,
+    ) -> PluginResult<Invocation> {
         self.ensure_active()?;
         let (id, action_id) = contribution_id
             .split_once(':')
@@ -516,6 +535,12 @@ impl PluginManager {
             .entries
             .get(id)
             .ok_or_else(|| PluginError::new(ErrorCode::NotFound, "Plugin is not installed"))?;
+        if expected_revision.is_some_and(|revision| revision != entry.revision) {
+            return Err(PluginError::new(
+                ErrorCode::Cancelled,
+                "Plugin action changed; select it again before invoking",
+            ));
+        }
         if !entry.usable() {
             return Err(PluginError::new(
                 ErrorCode::Disabled,

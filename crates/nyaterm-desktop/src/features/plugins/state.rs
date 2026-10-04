@@ -17,4 +17,8 @@ impl PluginFeatureState {
         let panel = cx.new(|cx| PluginPanel::new(app, process, cx));
         Self { panel }
     }
+
+    pub fn shutdown(&mut self, cx: &mut Context<NyaTermApp>) {
+        self.panel.update(cx, |panel, cx| panel.cancel(cx));
+    }
 }
