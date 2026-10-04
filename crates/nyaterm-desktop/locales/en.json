@@ -576,6 +576,11 @@
     "usernameRegexPlaceholder": "Regular expression for username prompts"
   },
   "dialog": {
+    "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
+    "serialFlowControl": "Flow control",
+    "serialFlowControlNone": "None",
+    "serialFlowControlSoftware": "Software (XON/XOFF)",
+    "serialFlowControlHardware": "Hardware (RTS/CTS)",
     "tags": "Tags",
     "newTag": "New tag",
     "addTag": "Add tag",

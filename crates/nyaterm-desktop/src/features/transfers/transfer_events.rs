@@ -311,7 +311,7 @@ impl NyaTermApp {
         let mut external_sync_to_start: Option<ExternalEditorSyncStart> = None;
         let mut external_watch_to_start: Option<ExternalEditorWatchStart> = None;
         let mut external_sync_prompt_to_open: Option<String> = None;
-        let mut zmodem_upload_after_probe: Option<(String, Vec<PathBuf>)> = None;
+        let mut zmodem_upload_after_probe: Option<(String, Vec<PathBuf>, bool)> = None;
         let mut open_after_create: Option<SftpFileEntry> = None;
         let mut browser_navigation_rollback = None;
         let mut browser_listing_completed = false;
@@ -1100,6 +1100,7 @@ impl NyaTermApp {
                 session_id,
                 files,
                 probe_skipped,
+                overwrite,
             })) => {
                 job.status = TransferJobStatus::Completed;
                 job.detail = if probe_skipped {
@@ -1117,7 +1118,7 @@ impl NyaTermApp {
                         "ZMODEM upload cancelled — all conflicting files skipped".to_string(),
                     );
                 } else {
-                    zmodem_upload_after_probe = Some((session_id, files));
+                    zmodem_upload_after_probe = Some((session_id, files, overwrite));
                 }
             }
             TransferJobEvent::Finished(Err(error)) => {
@@ -1257,8 +1258,8 @@ impl NyaTermApp {
         {
             self.shell.set_status(error);
         }
-        if let Some((session_id, files)) = zmodem_upload_after_probe {
-            self.begin_zmodem_upload_after_probe(session_id, files, cx);
+        if let Some((session_id, files, overwrite)) = zmodem_upload_after_probe {
+            self.begin_zmodem_upload_after_probe(session_id, files, overwrite, cx);
         }
         if let Some(entry) = open_after_create
             && inactive_browser_snapshot.is_none()

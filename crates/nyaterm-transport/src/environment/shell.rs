@@ -624,6 +624,10 @@ pub(super) fn build_shell_command(shell_path: &Path, script: &str) -> Command {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
         let mut command = Command::new(shell_path);
+        // Use the same refreshed registry environment as PTY creation. Otherwise
+        // the probe's inherited process snapshot can overwrite newly installed PATH entries.
+        let environment = portable_pty::CommandBuilder::new(shell_path);
+        command.env_clear().envs(environment.iter_full_env());
         if is_powershell_shell(shell_path) {
             command.args(["-NoLogo", "-Command", script]);
         } else {

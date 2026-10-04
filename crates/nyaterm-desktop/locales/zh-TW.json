@@ -576,6 +576,11 @@
     "usernameRegexPlaceholder": "符合使用者名稱提示的正規表示式"
   },
   "dialog": {
+    "serialSoftwareFlowControlModemDisabled": "軟體流控下停用 XMODEM/YMODEM/ZMODEM 檔案傳輸，因為 XON/XOFF 可能吞掉二進位資料。",
+    "serialFlowControl": "流量控制",
+    "serialFlowControlNone": "無",
+    "serialFlowControlSoftware": "軟體 (XON/XOFF)",
+    "serialFlowControlHardware": "硬體 (RTS/CTS)",
     "tags": "標籤",
     "newTag": "新標籤",
     "addTag": "新增標籤",

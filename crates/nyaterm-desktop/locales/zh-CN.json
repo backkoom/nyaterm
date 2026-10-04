@@ -576,6 +576,11 @@
     "usernameRegexPlaceholder": "匹配用户名提示的正则表达式"
   },
   "dialog": {
+    "serialSoftwareFlowControlModemDisabled": "软件流控下禁用 XMODEM/YMODEM/ZMODEM 文件传输，因为 XON/XOFF 可能吞掉二进制数据。",
+    "serialFlowControl": "流控制",
+    "serialFlowControlNone": "无",
+    "serialFlowControlSoftware": "软件 (XON/XOFF)",
+    "serialFlowControlHardware": "硬件 (RTS/CTS)",
     "tags": "标签",
     "newTag": "新标签",
     "addTag": "添加标签",

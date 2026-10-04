@@ -576,6 +576,11 @@
     "usernameRegexPlaceholder": "ユーザー名プロンプト用の正規表現"
   },
   "dialog": {
+    "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
+    "serialFlowControl": "Flow control",
+    "serialFlowControlNone": "None",
+    "serialFlowControlSoftware": "Software (XON/XOFF)",
+    "serialFlowControlHardware": "Hardware (RTS/CTS)",
     "tags": "タグ",
     "newTag": "新しいタグ",
     "addTag": "タグを追加",

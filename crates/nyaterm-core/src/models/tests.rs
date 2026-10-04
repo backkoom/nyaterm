@@ -1255,3 +1255,36 @@ fn sftp_pipeline_depth_preserves_legacy_range_and_unknown_settings() {
         }
     }
 }
+
+#[test]
+fn serial_flow_control_preserves_legacy_and_round_trips_supported_values() {
+    use crate::models::connection::{ConnectionType, SerialFlowControl};
+    let legacy = serde_json::json!({"type":"serial", "port_name":"COM3"});
+    let connection: ConnectionType = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(matches!(
+        connection,
+        ConnectionType::Serial {
+            flow_control: SerialFlowControl::None,
+            ..
+        }
+    ));
+    assert!(
+        serde_json::to_value(connection)
+            .unwrap()
+            .get("flow_control")
+            .is_none()
+    );
+    for value in ["none", "software", "hardware"] {
+        let mut input = legacy.clone();
+        input["flow_control"] = value.into();
+        let decoded: ConnectionType = serde_json::from_value(input).unwrap();
+        let encoded = serde_json::to_value(&decoded).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ConnectionType>(encoded).unwrap(),
+            decoded
+        );
+    }
+    let mut invalid = legacy;
+    invalid["flow_control"] = "rtscts".into();
+    assert!(serde_json::from_value::<ConnectionType>(invalid).is_err());
+}

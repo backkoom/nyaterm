@@ -576,6 +576,11 @@
     "usernameRegexPlaceholder": "Expression régulière pour les invites de nom d'utilisateur"
   },
   "dialog": {
+    "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
+    "serialFlowControl": "Flow control",
+    "serialFlowControlNone": "None",
+    "serialFlowControlSoftware": "Software (XON/XOFF)",
+    "serialFlowControlHardware": "Hardware (RTS/CTS)",
     "tags": "Étiquettes",
     "newTag": "Nouvelle étiquette",
     "addTag": "Ajouter une étiquette",

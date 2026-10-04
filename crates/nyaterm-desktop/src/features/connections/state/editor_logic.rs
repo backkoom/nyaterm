@@ -255,6 +255,14 @@ pub(super) fn set_connection_editor_select_value(
         ConnectionEditorSelect::Parity => {
             editor.parity = value.unwrap_or_else(|| "none".to_string());
         }
+        ConnectionEditorSelect::FlowControl => {
+            use nyaterm_core::models::connection::SerialFlowControl;
+            editor.flow_control = match value.as_deref() {
+                Some("software") => SerialFlowControl::Software,
+                Some("hardware") => SerialFlowControl::Hardware,
+                _ => SerialFlowControl::None,
+            };
+        }
         ConnectionEditorSelect::StopBits => {
             editor.stop_bits = value.unwrap_or_else(|| "1".to_string());
         }

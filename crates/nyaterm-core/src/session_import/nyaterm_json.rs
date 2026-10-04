@@ -140,6 +140,8 @@ enum NyatermJsonSession {
         data_bits: u8,
         #[serde(default = "default_serial_parity")]
         parity: String,
+        #[serde(default)]
+        flow_control: crate::models::connection::SerialFlowControl,
         #[serde(default = "default_serial_stop_bits")]
         stop_bits: String,
         #[serde(default = "default_serial_backspace_mode")]
@@ -426,6 +428,7 @@ fn prepare_nyaterm_json_session(
             baud_rate,
             data_bits,
             parity,
+            flow_control,
             stop_bits,
             backspace_mode,
             description,
@@ -442,6 +445,7 @@ fn prepare_nyaterm_json_session(
                     baud_rate,
                     data_bits,
                     parity,
+                    flow_control,
                     stop_bits,
                     ai_execution_profile: AiExecutionProfile::Auto,
                     backspace_mode,

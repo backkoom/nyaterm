@@ -60,6 +60,16 @@ impl russh::server::Handler for SshPeer {
         Ok(())
     }
 
+    async fn shell_request(
+        &mut self,
+        id: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_failure(id)?;
+        session.close(id)?;
+        Ok(())
+    }
+
     async fn exec_request(
         &mut self,
         id: ChannelId,
@@ -137,13 +147,73 @@ async fn delete_with_server(
     tokio::time::timeout(
         Duration::from_secs(15),
         tokio::task::spawn_blocking(move || {
+            let attempt = config.attempt.clone();
+            let retry_config = config.clone();
+            let terminal_config = config.clone();
+            let mut retained_handle = None;
             let service = if multiplexed {
                 let handle = crate::open_ssh_multiplex_handle(config.clone()).unwrap();
+                retained_handle = Some(handle.clone());
                 SftpService::with_multiplex(config, handle).unwrap()
             } else {
                 SftpService::new(config)
             };
+            if exec_status.is_none()
+                && let Some(handle) = retained_handle.as_ref()
+            {
+                let manager = crate::SessionManager::new();
+                let mut config = terminal_config.clone();
+                config.deferred_pty = false;
+                let terminal = manager
+                    .create_ssh_session_with_multiplex(config, handle.clone())
+                    .unwrap();
+                assert_eq!(
+                    handle.shell_availability(),
+                    crate::connection_attempt::ShellAvailability::Unavailable
+                );
+                manager.close(&terminal.id).unwrap();
+            }
             service.delete_path("/dir").unwrap();
+            if exec_status.is_none() {
+                assert_eq!(
+                    attempt.shell_availability(),
+                    crate::connection_attempt::ShellAvailability::Unavailable
+                );
+                let error = crate::remote_process::run_ssh_command(
+                    retry_config,
+                    None,
+                    b"id".to_vec(),
+                    Duration::from_secs(1),
+                )
+                .unwrap_err();
+                assert!(
+                    error
+                        .downcast_ref::<crate::connection_attempt::ShellUnavailable>()
+                        .is_some()
+                );
+                if let Some(handle) = retained_handle {
+                    let manager = crate::SessionManager::new();
+                    let mut terminal_config = terminal_config;
+                    terminal_config.attempt = attempt.clone();
+                    terminal_config.deferred_pty = false;
+                    let terminal = manager
+                        .create_ssh_session_with_multiplex(terminal_config, handle)
+                        .unwrap();
+                    assert!(
+                        manager
+                            .write(&terminal.id, b"command\r")
+                            .unwrap_err()
+                            .to_string()
+                            .contains("SFTP-only")
+                    );
+                    assert!(manager.write_raw(&terminal.id, b"\xff").is_err());
+                    manager.close(&terminal.id).unwrap();
+                }
+                assert_eq!(
+                    crate::connection_attempt::ConnectionAttempt::default().shell_availability(),
+                    crate::connection_attempt::ShellAvailability::Unknown
+                );
+            }
         }),
     )
     .await
@@ -170,7 +240,7 @@ async fn ssh_directory_fast_path_skips_recursive_sftp_for_dedicated_and_multiple
 async fn failed_and_unavailable_exec_fall_back_to_sftp_directory_deletion() {
     for status in [Some(1), None] {
         let (commands, files) = delete_with_server(status, true).await;
-        assert_eq!(commands.len(), 1);
+        assert_eq!(commands.len(), usize::from(status.is_some()));
         let files = files.lock().unwrap();
         assert_eq!(files.entries.len(), 1);
         assert_eq!(files.removed.len(), 5);

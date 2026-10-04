@@ -694,7 +694,7 @@ impl NyaTermApp {
         if bytes.is_empty() {
             return MouseReportWriteResult::NotHandled;
         }
-        if let Err(error) = self.write_session_input_recorded(session_id, &bytes) {
+        if let Err(error) = self.write_session_raw_input_recorded(session_id, &bytes) {
             if self.set_terminal_status_if_changed(format!("mouse report failed: {error}")) {
                 cx.notify();
             }
@@ -855,7 +855,7 @@ impl NyaTermApp {
         if let Err(error) = self
             .session
             .manager()
-            .write(session_id, bytes)
+            .write_raw(session_id, bytes)
             .map_err(|error| error.to_string())
         {
             self.record_terminal_session_write_failure(session_id, "raw input", &error);
@@ -976,7 +976,7 @@ impl NyaTermApp {
         if let Err(error) = self
             .session
             .manager()
-            .write(session_id, bytes)
+            .write_raw(session_id, bytes)
             .map_err(|error| error.to_string())
         {
             self.record_terminal_session_write_failure(session_id, "protocol response", &error);

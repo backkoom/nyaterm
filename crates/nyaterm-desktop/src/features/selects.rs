@@ -522,6 +522,7 @@ impl NyaTermApp {
                     "connection-editor-baud-rate" => ConnectionEditorSelect::BaudRate,
                     "connection-editor-data-bits" => ConnectionEditorSelect::DataBits,
                     "connection-editor-parity" => ConnectionEditorSelect::Parity,
+                    "connection-editor-flow-control" => ConnectionEditorSelect::FlowControl,
                     "connection-editor-stop-bits" => ConnectionEditorSelect::StopBits,
                     _ => return,
                 };

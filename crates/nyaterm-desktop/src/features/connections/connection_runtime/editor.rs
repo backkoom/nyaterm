@@ -225,6 +225,7 @@ impl NyaTermApp {
                 baud_rate: "115200".to_string(),
                 data_bits: "8".to_string(),
                 parity: "none".to_string(),
+                flow_control: Default::default(),
                 stop_bits: "1".to_string(),
                 raw_tcp_cli: false,
                 telnet_enter_mode: "cr".to_string(),

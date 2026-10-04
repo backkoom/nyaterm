@@ -162,6 +162,7 @@ pub(super) fn connection_editor_from_saved(
         baud_rate: "115200".to_string(),
         data_bits: "8".to_string(),
         parity: "none".to_string(),
+        flow_control: Default::default(),
         stop_bits: "1".to_string(),
         raw_tcp_cli: false,
         telnet_enter_mode: "cr".to_string(),
@@ -275,6 +276,7 @@ pub(super) fn connection_editor_from_saved(
             baud_rate,
             data_bits,
             parity,
+            flow_control,
             stop_bits,
             backspace_mode,
             encoding,
@@ -284,6 +286,7 @@ pub(super) fn connection_editor_from_saved(
             editor.baud_rate = baud_rate.to_string();
             editor.data_bits = data_bits.to_string();
             editor.parity = parity;
+            editor.flow_control = flow_control;
             editor.stop_bits = stop_bits;
             editor.backspace_mode = backspace_mode;
             editor.encoding = encoding_to_editor_value(&encoding);
@@ -505,6 +508,7 @@ pub(super) fn build_saved_connection_from_editor(
                 baud_rate,
                 data_bits,
                 parity: non_empty_or(editor.parity.clone(), "none"),
+                flow_control: editor.flow_control,
                 stop_bits: non_empty_or(editor.stop_bits.clone(), "1"),
                 ai_execution_profile: AiExecutionProfile::Auto,
                 backspace_mode: nyaterm_core::terminal::connection_input::BackspaceMode::parse(

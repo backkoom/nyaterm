@@ -620,6 +620,7 @@ pub(crate) enum TransferJobOutput {
         session_id: String,
         files: Vec<PathBuf>,
         probe_skipped: bool,
+        overwrite: bool,
     },
 }
 

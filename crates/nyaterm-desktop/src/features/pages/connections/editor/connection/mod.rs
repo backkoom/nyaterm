@@ -871,6 +871,20 @@ impl NyaTermApp {
             ConnectionEditorChoice::new(Some(value.to_string()), label, editor.parity == value)
         })
         .collect::<Vec<_>>();
+        let flow_control_options = [
+            ("none", t!("dialog.serialFlowControlNone")),
+            ("software", t!("dialog.serialFlowControlSoftware")),
+            ("hardware", t!("dialog.serialFlowControlHardware")),
+        ]
+        .into_iter()
+        .map(|(value, label)| {
+            ConnectionEditorChoice::new(
+                Some(value.to_string()),
+                label,
+                editor.flow_control.as_str() == value,
+            )
+        })
+        .collect::<Vec<_>>();
         let stop_bits_options = ["1", "1.5", "2"]
             .into_iter()
             .map(|value| {
@@ -1069,6 +1083,11 @@ impl NyaTermApp {
             (
                 ConnectionEditorSelect::Parity,
                 parity_options.as_slice(),
+                String::new(),
+            ),
+            (
+                ConnectionEditorSelect::FlowControl,
+                flow_control_options.as_slice(),
                 String::new(),
             ),
             (
@@ -2152,7 +2171,7 @@ fn connection_editor_agent_identity_picker(
     .into_any_element()
 }
 
-fn connection_editor_select_keys() -> [ConnectionEditorSelect; 30] {
+fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
     [
         ConnectionEditorSelect::Group,
         ConnectionEditorSelect::SavedPassword,
@@ -2184,6 +2203,7 @@ fn connection_editor_select_keys() -> [ConnectionEditorSelect; 30] {
         ConnectionEditorSelect::DataBits,
         ConnectionEditorSelect::Parity,
         ConnectionEditorSelect::StopBits,
+        ConnectionEditorSelect::FlowControl,
     ]
 }
 
@@ -2222,6 +2242,7 @@ fn connection_editor_select_id(select: ConnectionEditorSelect) -> &'static str {
         ConnectionEditorSelect::DataBits => "connection-editor-data-bits",
         ConnectionEditorSelect::Parity => "connection-editor-parity",
         ConnectionEditorSelect::StopBits => "connection-editor-stop-bits",
+        ConnectionEditorSelect::FlowControl => "connection-editor-flow-control",
     }
 }
 
@@ -3064,6 +3085,7 @@ mod tests {
             baud_rate: "115200".to_string(),
             data_bits: "8".to_string(),
             parity: "none".to_string(),
+            flow_control: Default::default(),
             stop_bits: "1".to_string(),
             raw_tcp_cli: false,
             telnet_enter_mode: "cr".to_string(),

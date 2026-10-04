@@ -306,6 +306,16 @@ pub(super) fn connection_editor_serial_section(
                     ConnectionEditorSelect::StopBits,
                 )),
         )
+        .child(connection_editor_select(
+            ConnectionEditorRenderContext {
+                palette,
+                fields,
+                cx,
+            },
+            "connection-editor-flow-control",
+            t!("dialog.serialFlowControl"),
+            ConnectionEditorSelect::FlowControl,
+        ))
         .child(
             div()
                 .id("connection-editor-serial-advanced-toggle")

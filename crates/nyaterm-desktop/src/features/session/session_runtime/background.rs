@@ -1051,6 +1051,7 @@ fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
             baud_rate: 9600,
             data_bits: 8,
             parity: "none".to_string(),
+            flow_control: Default::default(),
             stop_bits: "1".to_string(),
             backspace_mode: "delete".to_string(),
             encoding: "UTF-8".to_string(),
