@@ -13,3 +13,4 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 memchr = "2"
 regex.workspace = true
 unicode-width = "0.2"
+unicode-segmentation.workspace = true

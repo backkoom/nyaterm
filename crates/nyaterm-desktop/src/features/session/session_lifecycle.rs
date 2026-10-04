@@ -277,6 +277,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        self.terminal.invalidate_shell_editing_session(session_id);
         self.clear_terminal_mouse_report_for_session(session_id);
         self.transfer.clear_file_clipboard_for_session(session_id);
         self.session.remove_remote_file_service(session_id);

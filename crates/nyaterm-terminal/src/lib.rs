@@ -14,9 +14,11 @@ use alacritty_terminal::vte::ansi;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
 mod cells;
+pub mod editing;
 mod encoding;
 mod graphics;
 mod kitty_payload;
+pub mod navigation;
 mod sixel;
 pub use cells::{
     TerminalTextCell, terminal_byte_index_for_cell_col, terminal_cell_col_for_byte_index,
@@ -47,6 +49,13 @@ pub enum ShellCommandMark {
 pub struct TerminalLineId {
     pub epoch: u64,
     pub logical_line: i64,
+}
+
+/// Exact OSC 133 B input boundary within a coordinate epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellInputAnchor {
+    pub line_id: TerminalLineId,
+    pub col: usize,
 }
 
 /// Shell input classification for a snapshot row.
@@ -216,6 +225,7 @@ pub struct TerminalSnapshotMeta {
     pub scrollback_len: usize,
     pub total_rows: usize,
     pub display_offset: usize,
+    pub shell_input_anchor: Option<ShellInputAnchor>,
     pub images: Vec<GraphicsImageSnapshot>,
 }
 
@@ -246,6 +256,7 @@ pub struct TerminalSnapshot {
     pub total_rows: usize,
     /// Alacritty display offset represented by this snapshot.
     pub display_offset: usize,
+    pub shell_input_anchor: Option<ShellInputAnchor>,
     /// Inline graphics placements visible in this viewport (Kitty / iTerm2 / Sixel).
     pub images: Vec<GraphicsImageSnapshot>,
 }
@@ -265,6 +276,7 @@ impl TerminalSnapshot {
             scrollback_len: meta.scrollback_len,
             total_rows: meta.total_rows,
             display_offset: meta.display_offset,
+            shell_input_anchor: meta.shell_input_anchor,
             images: meta.images,
         }
     }
@@ -475,6 +487,7 @@ struct ScreenLineState {
     logical_origin: i64,
     metadata: BTreeMap<i64, LineMetadata>,
     active_input_start: Option<i64>,
+    input_anchor: Option<ShellInputAnchor>,
     active_input_end: Option<i64>,
     consumed_scroll_epoch: u64,
     consumed_generation: u64,
@@ -496,6 +509,11 @@ impl ScreenLineState {
             let _ = retained.split_off(&after_last);
         }
         self.metadata = retained;
+        if self.input_anchor.is_some_and(|anchor| {
+            anchor.line_id.logical_line < first || anchor.line_id.logical_line > last
+        }) {
+            self.input_anchor = None;
+        }
         match (self.active_input_start, self.active_input_end) {
             (Some(start), Some(end)) if start <= end => {
                 let retained_start = start.max(first);
@@ -505,12 +523,14 @@ impl ScreenLineState {
                     self.active_input_end = Some(retained_end);
                 } else {
                     self.active_input_start = None;
+                    self.input_anchor = None;
                     self.active_input_end = None;
                 }
             }
             (None, None) => {}
             _ => {
                 self.active_input_start = None;
+                self.input_anchor = None;
                 self.active_input_end = None;
             }
         }
@@ -543,6 +563,7 @@ pub struct TerminalCore {
     primary_lines: ScreenLineState,
     alternate_lines: ScreenLineState,
     consumed_reset_generation: u64,
+    presentation_alternate: bool,
     next_line_revision: u64,
     snapshot_row_cache: Mutex<TerminalSnapshotRowCache>,
     search_cache: Mutex<TerminalSearchCache>,
@@ -721,6 +742,7 @@ impl TerminalCore {
             primary_lines,
             alternate_lines,
             consumed_reset_generation,
+            presentation_alternate: false,
             next_line_revision: 1,
             snapshot_row_cache: Mutex::new(TerminalSnapshotRowCache::default()),
             search_cache: Mutex::new(TerminalSearchCache::default()),
@@ -766,6 +788,10 @@ impl TerminalCore {
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let old_cols = self.cols;
+        if self.cols != usize::from(cols).max(1) || self.rows != usize::from(rows).max(1) {
+            self.primary_lines.input_anchor = None;
+            self.alternate_lines.input_anchor = None;
+        }
         self.cols = usize::from(cols).max(1);
         self.rows = usize::from(rows).max(1);
         let size = TermSize {
@@ -778,8 +804,10 @@ impl TerminalCore {
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
             self.primary_lines.active_input_start = None;
+            self.primary_lines.input_anchor = None;
             self.primary_lines.active_input_end = None;
             self.alternate_lines.active_input_start = None;
+            self.alternate_lines.input_anchor = None;
             self.alternate_lines.active_input_end = None;
             self.primary_lines.epoch = self.primary_lines.epoch.saturating_add(1);
             self.alternate_lines.epoch = self.alternate_lines.epoch.saturating_add(1);
@@ -1700,13 +1728,21 @@ impl TerminalCore {
     }
 
     fn sync_presentation_state(&mut self) {
+        let alternate = self.alternate_screen();
+        if alternate != self.presentation_alternate {
+            self.primary_lines.input_anchor = None;
+            self.alternate_lines.input_anchor = None;
+            self.presentation_alternate = alternate;
+        }
         let reset_generation = self.term.reset_generation();
         if reset_generation != self.consumed_reset_generation {
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
             self.primary_lines.active_input_start = None;
+            self.primary_lines.input_anchor = None;
             self.primary_lines.active_input_end = None;
             self.alternate_lines.active_input_start = None;
+            self.alternate_lines.input_anchor = None;
             self.alternate_lines.active_input_end = None;
             self.primary_lines.epoch = self.primary_lines.epoch.saturating_add(1);
             self.alternate_lines.epoch = self.alternate_lines.epoch.saturating_add(1);
@@ -1723,6 +1759,11 @@ impl TerminalCore {
         let alternate_epoch = self.term.alternate_grid_scroll_epoch();
         let primary_generation = self.term.primary_screen_generation();
         let alternate_generation = self.term.alternate_screen_generation();
+        // Entering and leaving alternate screen can occur in one parser chunk.
+        // Its generation records the transition even when the final mode agrees.
+        if alternate_generation != self.alternate_lines.consumed_generation {
+            self.primary_lines.input_anchor = None;
+        }
         Self::sync_screen_line_state(
             &mut self.primary_lines,
             primary_epoch,
@@ -1750,6 +1791,7 @@ impl TerminalCore {
             state.metadata.clear();
             state.logical_origin = 0;
             state.active_input_start = None;
+            state.input_anchor = None;
             state.active_input_end = None;
             state.epoch = state.epoch.saturating_add(1);
             state.pending_scroll_rows = 0;
@@ -1813,11 +1855,19 @@ impl TerminalCore {
                 }
                 let state = self.active_line_state_mut();
                 state.active_input_start = None;
+                state.input_anchor = None;
                 state.active_input_end = None;
             }
             ShellBoundaryKind::InputStart => {
                 metadata.command_mark = Some(ShellCommandMark::Prompt);
                 let state = self.active_line_state_mut();
+                state.input_anchor = Some(ShellInputAnchor {
+                    line_id: TerminalLineId {
+                        epoch: state.epoch,
+                        logical_line,
+                    },
+                    col: point.column.0,
+                });
                 state.active_input_start = Some(logical_line);
                 state.active_input_end = Some(logical_line);
             }
@@ -1834,6 +1884,7 @@ impl TerminalCore {
                 }
                 let state = self.active_line_state_mut();
                 state.active_input_start = None;
+                state.input_anchor = None;
                 state.active_input_end = None;
             }
             ShellBoundaryKind::Finished { exit_code } => {
@@ -1843,6 +1894,7 @@ impl TerminalCore {
                     self.commit_shell_input_range(start, end);
                     let state = self.active_line_state_mut();
                     state.active_input_start = None;
+                    state.input_anchor = None;
                     state.active_input_end = None;
                 }
             }
@@ -2044,6 +2096,7 @@ fn snapshot_window_from_term(
                 .saturating_add(viewport_rows)
                 .saturating_add(window.newer_rows),
             display_offset,
+            shell_input_anchor: line_state.input_anchor,
             images: Vec::new(),
         },
         row_data,

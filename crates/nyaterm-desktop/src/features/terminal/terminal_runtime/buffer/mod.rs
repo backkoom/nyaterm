@@ -922,6 +922,7 @@ impl NyaTermApp {
         // Worker may already omit snapshot for low-priority sessions.
         let keep_hidden_snapshot = !self.runtime_output_pressure_active();
         let mut need_live_snapshot = false;
+        let mut shell_edit_snapshot_available = false;
         let (unread_changed, output_scroll_offset) = {
             let view = self
                 .terminal
@@ -943,6 +944,7 @@ impl NyaTermApp {
             });
             if is_visible {
                 if let Some(snapshot) = snapshot {
+                    shell_edit_snapshot_available = true;
                     view.apply_terminal_frame_parts(TerminalFrameParts {
                         visible_text: &visible_text,
                         snapshot,
@@ -977,6 +979,7 @@ impl NyaTermApp {
                 }
             } else {
                 let retain = keep_hidden_snapshot.then_some(snapshot).flatten();
+                shell_edit_snapshot_available = retain.is_some();
                 view.apply_terminal_background_frame_parts(
                     retain,
                     if keep_hidden_snapshot {
@@ -991,6 +994,28 @@ impl NyaTermApp {
             }
             (unread_changed, view.scroll_offset)
         };
+        if shell_edit_snapshot_available {
+            if let Some(state) = self.terminal.editing.sessions.get_mut(&session_id) {
+                state.awaiting_snapshot = false;
+            }
+            self.reconcile_shell_editing(&session_id, cx);
+        } else if accepted_bytes > 0 {
+            let state = self
+                .terminal
+                .editing
+                .sessions
+                .entry(session_id.clone())
+                .or_default();
+            if state.model.phase == nyaterm_core::terminal::editing::EditPhase::Ready {
+                state.invalidate();
+            } else {
+                state.mapping = None;
+                state.selection = None;
+                state.selection_origin_version = None;
+                state.model.queued_cursor = None;
+            }
+            state.awaiting_snapshot = true;
+        }
         if output_scroll_offset == 0 {
             self.clear_terminal_scroll_residual_for_session(Some(&session_id));
         }
@@ -1154,6 +1179,12 @@ impl NyaTermApp {
                 view.scrollback_action_links.remove(&frame.offset);
             }
             view.prune_scrollback_snapshot_cache(frame.offset);
+        }
+        if frame.offset == 0 {
+            if let Some(state) = self.terminal.editing.sessions.get_mut(&frame.session_id) {
+                state.awaiting_snapshot = false;
+            }
+            self.reconcile_shell_editing(&frame.session_id, cx);
         }
         if frame.process_duration >= Duration::from_millis(20)
             && self.should_log_slow_diagnostic("terminal_frame_snapshot", Instant::now())

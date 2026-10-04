@@ -104,7 +104,7 @@ impl NyaTermApp {
         let payload = normalize_paste_newlines(&text);
         // Tauri pasteText: replace smart input selection when present.
         if let Some(selected) = self.smart_cursor_selected_input_range()
-            && self.replace_smart_input_selection(selected, &payload, cx)
+            && self.replace_smart_input_selection_with_paste(selected, &payload, cx)
         {
             return;
         }
@@ -211,6 +211,7 @@ impl NyaTermApp {
             }
         }
 
+        self.note_shell_editing_input(text.as_bytes(), cx);
         // History tracks the logical pasted text, not per-session framing bytes.
         let history_bytes = text.as_bytes();
         let session_refs: Vec<&str> = ok_sessions.iter().map(String::as_str).collect();
@@ -253,7 +254,11 @@ impl NyaTermApp {
             return;
         };
         self.terminal.paste.clear();
-        self.send_terminal_paste_input(&text, cx);
+        if let Some(selected) = self.smart_cursor_selected_input_range() {
+            self.replace_smart_input_selection_with_paste(selected, &text, cx);
+        } else {
+            self.send_terminal_paste_input(&text, cx);
+        }
         self.focus_active_workspace_surface(window, cx);
     }
 

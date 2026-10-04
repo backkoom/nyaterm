@@ -243,7 +243,7 @@ impl NyaTermApp {
             if self.terminal.assist.command_suggestions.take().is_some() {
                 root_overlay_dirty = true;
             }
-            self.terminal.assist.command_input_tracker = TerminalInputState::new();
+            *self.terminal.editing.input_mut() = TerminalInputState::new();
         }
 
         if self.terminal.assist.credential_suggestions.is_some()

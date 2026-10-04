@@ -146,6 +146,7 @@ impl NyaTermApp {
         self.session.start.clear_active_selection();
         self.shell.prepare_session_switch();
         // Session switch resets terminal-output credential autofill (Tauri XTerminal remount).
+        self.terminal.activate_shell_editing_session(session_id);
         self.terminal.reset_assist_for_session_switch();
         let previous_session_id = self.session.active_id_owned();
         let switching_sessions = previous_session_id.as_deref() != Some(session_id);

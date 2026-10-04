@@ -458,6 +458,7 @@ impl NyaTermApp {
         if self.terminal.session_id_is_retired(&session_id) {
             return false;
         }
+        self.terminal.invalidate_shell_editing_session(&session_id);
         tracing::warn!(
             diagnostic = "session_error",
             session_id = %session_id,

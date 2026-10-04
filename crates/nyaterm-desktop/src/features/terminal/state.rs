@@ -14,6 +14,7 @@ use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
 use nyaterm_ui::NyaDocumentEditorState;
 
 use super::assist_state::TerminalAssistState;
+use super::editing_state::TerminalEditingState;
 use super::terminal_surface::TerminalScrollbarDragState;
 use super::terminal_surface_entity::TerminalSurface;
 use super::window_state::TerminalWindowState;
@@ -31,6 +32,7 @@ pub(in crate::features) struct TerminalFeatureState {
     pub(super) input: TerminalInputState,
     pub(super) paste: TerminalPasteReviewState,
     pub(super) assist: TerminalAssistState,
+    pub(super) editing: TerminalEditingState,
     pub(super) selection: TerminalSelectionState,
     pub(super) layout: TerminalLayoutState,
     pub(super) menus: TerminalMenuState,
@@ -239,6 +241,7 @@ impl TerminalFeatureState {
             },
             paste: TerminalPasteReviewState::new(),
             assist: TerminalAssistState::new(),
+            editing: TerminalEditingState::default(),
             selection: TerminalSelectionState {
                 selection: None,
                 session_id: None,
@@ -572,7 +575,6 @@ impl TerminalPasteReviewState {
 #[cfg(test)]
 mod tests {
     use gpui::{Bounds, TestAppContext, point, px, size};
-    use nyaterm_core::TerminalInputState as CommandInputState;
     use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
 
     use super::super::window_state::{TerminalWindowDockResult, TerminalWindowReconcileResult};
@@ -869,7 +871,7 @@ mod tests {
     #[test]
     fn session_switch_reset_clears_terminal_assist_transients() {
         let mut state = terminal_state();
-        state.assist.command_input_tracker.value = "git status".to_string();
+        state.editing.input_mut().value = "git status".to_string();
         state.assist.command_suggestions_suppressed = true;
         state.assist.pending_command_history_entry = Some("git status".to_string());
         state.assist.credential_autofill_buffer = "login:".to_string();
@@ -883,7 +885,7 @@ mod tests {
 
         state.reset_assist_for_session_switch();
 
-        assert_eq!(state.assist.command_input_tracker, CommandInputState::new());
+        assert_eq!(state.editing.input().value, "git status");
         assert!(!state.assist.command_suggestions_suppressed);
         assert!(state.assist.pending_command_history_entry.is_none());
         assert!(state.assist.credential_autofill_buffer.is_empty());

@@ -101,24 +101,14 @@ impl NyaTermApp {
                 cx.stop_propagation();
                 return;
             }
-            if self.terminal.selection.selection.is_some()
-                && smart_input_selection.is_some()
-                && self.handle_smart_input_selection_key(event, cx)
-            {
-                cx.stop_propagation();
-                return;
-            }
             if self.terminal_should_defer_key_text_to_input_handler(event) {
                 return;
             }
             cx.stop_propagation();
-            // When a non-smart buffer selection is painted, still send
-            // keystrokes but skip suggestion tracking so the selection
-            // edit path stays isolated (Tauri preserves selection).
-            let has_buffer_selection =
-                self.terminal.selection.selection.is_some() && smart_input_selection.is_none();
-            if has_buffer_selection {
-                self.send_terminal_key_event(event, false, cx);
+            if smart_input_selection.is_some()
+                && let Some(text) = event.keystroke.key_char.as_deref()
+            {
+                self.commit_terminal_text(text, cx);
             } else {
                 self.send_terminal_key_event(event, true, cx);
             }

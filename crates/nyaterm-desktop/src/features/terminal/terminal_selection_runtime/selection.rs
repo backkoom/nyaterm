@@ -246,6 +246,7 @@ impl NyaTermApp {
             }
         }
         let cols = geometry.cols;
+        self.begin_smart_input_selection();
         // Shift+click extends the existing selection from its anchor (xterm-style).
         if event.modifiers.shift
             && event.click_count <= 1
@@ -262,10 +263,19 @@ impl NyaTermApp {
             return;
         }
         if event.click_count >= 3 {
-            self.terminal.selection.selection = Some(TerminalSelection::from_range(
-                TerminalBufferCellPos::new(buffer_cell.line, 0),
-                TerminalBufferCellPos::new(buffer_cell.line, cols.saturating_sub(1)),
-            ));
+            let editable = if !event.modifiers.modified()
+                && selection_session_id.as_deref() == self.session.active_id()
+            {
+                self.smart_input_line_selection_at_mouse(event.position, cx)
+            } else {
+                None
+            };
+            self.terminal.selection.selection = editable.or_else(|| {
+                Some(TerminalSelection::from_range(
+                    TerminalBufferCellPos::new(buffer_cell.line, 0),
+                    TerminalBufferCellPos::new(buffer_cell.line, cols.saturating_sub(1)),
+                ))
+            });
             self.terminal.selection.session_id = selection_session_id;
             self.terminal.selection.dragging = false;
             self.shell
@@ -440,6 +450,10 @@ impl NyaTermApp {
         }
         self.stop_terminal_selection_autoscroll();
         self.terminal.selection.scroll_rehit_armed = false;
+        if let Some(id) = self.session.active_id_owned() {
+            self.reconcile_shell_editing(&id, cx);
+        }
+        self.commit_smart_input_selection();
         if self.finish_terminal_mouse_report(event, cx) {
             self.clear_terminal_selection(cx);
             return;
@@ -489,6 +503,7 @@ impl NyaTermApp {
         }
         self.terminal.selection.dragging = false;
         self.terminal.selection.drag_pointer_position = None;
+        self.commit_smart_input_selection();
         if self
             .terminal
             .selection
@@ -500,20 +515,6 @@ impl NyaTermApp {
             self.clear_terminal_selected_occurrence(cx);
             // Empty selection after click: try smart input cursor move.
             self.handle_smart_input_click(event, cx);
-        } else if let Some(selected) = self.smart_cursor_selected_input_range() {
-            // Collapse caret toward click/edge, then clear selection (Tauri path).
-            let target = if event.click_count >= 2 {
-                selected.end
-            } else if let Some(index) = self.input_index_at_mouse(event.position, cx) {
-                index.clamp(selected.start, selected.end)
-            } else {
-                selected.end
-            };
-            if self.settings.summary().interaction_copy_on_select {
-                let _ = self.copy_terminal_selection(cx);
-            }
-            let _ = self.move_smart_input_cursor(target, cx);
-            self.clear_terminal_selection(cx);
         } else if self.settings.summary().interaction_copy_on_select {
             let _ = self.copy_terminal_selection(cx);
         } else if self.terminal.selection.selection.is_some() {

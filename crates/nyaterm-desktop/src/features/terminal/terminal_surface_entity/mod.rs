@@ -1187,6 +1187,7 @@ impl TerminalSurface {
 
         Some(Arc::new(TerminalSnapshot::from_rows(
             nyaterm_terminal::TerminalSnapshotMeta {
+                shell_input_anchor: None,
                 cols,
                 viewport_rows,
                 cursor: hidden_terminal_cursor_snapshot(),
@@ -1226,6 +1227,7 @@ impl TerminalSurface {
         }
         Some(Arc::new(TerminalSnapshot::from_rows(
             nyaterm_terminal::TerminalSnapshotMeta {
+                shell_input_anchor: None,
                 cols,
                 viewport_rows,
                 cursor: hidden_terminal_cursor_snapshot(),

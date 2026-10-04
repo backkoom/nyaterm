@@ -188,19 +188,16 @@ impl NyaTermApp {
         }
         let input_wake_duration = input_wake_started_at.elapsed();
 
+        self.note_shell_editing_input(&bytes, cx);
         let suggestion_started_at = Instant::now();
-        if track_suggestions {
-            if terminal_should_track_command_suggestion_input(
-                track_suggestions,
-                self.settings.summary().terminal_low_latency_mode,
-                self.settings
-                    .summary()
-                    .interaction_command_suggestions_enabled,
-            ) {
-                self.note_command_suggestion_input(&bytes, cx);
-            } else {
-                self.note_command_history_input(&bytes);
-            }
+        if terminal_should_track_command_suggestion_input(
+            track_suggestions,
+            self.settings.summary().terminal_low_latency_mode,
+            self.settings
+                .summary()
+                .interaction_command_suggestions_enabled,
+        ) {
+            self.note_command_suggestion_input(&bytes, cx);
         }
         let suggestion_duration = suggestion_started_at.elapsed();
 
@@ -329,19 +326,16 @@ impl NyaTermApp {
         }
         let input_wake_duration = input_wake_started_at.elapsed();
 
+        self.note_shell_editing_input(&primary_bytes, cx);
         let suggestion_started_at = Instant::now();
-        if track_suggestions {
-            if terminal_should_track_command_suggestion_input(
-                track_suggestions,
-                self.settings.summary().terminal_low_latency_mode,
-                self.settings
-                    .summary()
-                    .interaction_command_suggestions_enabled,
-            ) {
-                self.note_command_suggestion_input(&primary_bytes, cx);
-            } else {
-                self.note_command_history_input(&primary_bytes);
-            }
+        if terminal_should_track_command_suggestion_input(
+            track_suggestions,
+            self.settings.summary().terminal_low_latency_mode,
+            self.settings
+                .summary()
+                .interaction_command_suggestions_enabled,
+        ) {
+            self.note_command_suggestion_input(&primary_bytes, cx);
         }
         let suggestion_duration = suggestion_started_at.elapsed();
 

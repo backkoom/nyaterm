@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{Context, KeyDownEvent};
 use nyaterm_core::{
-    TerminalInputState, TerminalResizeGeometry,
-    terminal_resize_geometry_for_size_with_insets_and_scale, terminal_snapped_cell_height,
+    TerminalResizeGeometry, terminal_resize_geometry_for_size_with_insets_and_scale,
+    terminal_snapped_cell_height,
 };
 use nyaterm_transport::SessionKind;
 
@@ -1076,8 +1076,7 @@ impl NyaTermApp {
             return;
         }
         if started {
-            // Command is running: clear tracker and suppress suggestions (Tauri C mark).
-            self.terminal.assist.command_input_tracker = TerminalInputState::new();
+            // Outer command execution suppresses suggestions, not nested-shell editing.
             self.terminal.assist.command_suggestions = None;
             self.terminal.assist.command_suggestions_suppressed = true;
             self.terminal.assist.command_suggestion_search_gen = self
@@ -1087,9 +1086,8 @@ impl NyaTermApp {
                 .saturating_add(1);
         }
         if finished {
-            // Command finished: re-enable suggestion tracking (Tauri D mark).
+            // Command finished: re-enable suggestions; editor input has its own lifecycle.
             self.terminal.assist.command_suggestions_suppressed = false;
-            self.terminal.assist.command_input_tracker = TerminalInputState::new();
             self.terminal.assist.command_suggestions = None;
             self.terminal.assist.command_suggestion_search_gen = self
                 .terminal
@@ -1608,6 +1606,7 @@ impl NyaTermApp {
                     pixel_height,
                 );
             }
+            self.terminal.invalidate_shell_editing_session(session_id);
             if grid_changed {
                 self.clear_terminal_selection_state_for_session(session_id);
             }

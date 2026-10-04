@@ -6354,6 +6354,7 @@ dependencies = [
  "flate2",
  "memchr",
  "regex",
+ "unicode-segmentation",
  "unicode-width",
 ]
 
