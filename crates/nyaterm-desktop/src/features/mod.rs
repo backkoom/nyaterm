@@ -15,6 +15,7 @@ mod notes;
 mod pages;
 mod panels;
 mod perf;
+pub(crate) mod plugins;
 mod recording;
 mod remote;
 mod remote_desktop;

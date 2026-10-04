@@ -16,6 +16,7 @@ pub mod keyword_highlight_presets;
 pub mod models;
 pub mod natural_order;
 pub mod note_export;
+pub mod plugins;
 pub mod portable_snapshot;
 pub mod remote_preview;
 pub mod runtime;

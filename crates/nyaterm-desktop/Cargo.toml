@@ -25,6 +25,7 @@ tar = "0.4"
 nyaterm-core.workspace = true
 nyaterm-mcp-protocol.workspace = true
 nyaterm-otp.workspace = true
+nyaterm-plugin-host.workspace = true
 nyaterm-remote-desktop.workspace = true
 nyaterm-store.workspace = true
 nyaterm-terminal.workspace = true

@@ -195,6 +195,7 @@ pub struct DesktopController {
     bootstrap_in_flight: bool,
     process_state: Option<gpui::Entity<ProcessStateStore>>,
     update_store: gpui::Entity<UpdateStore>,
+    plugin_process: gpui::Entity<crate::features::plugins::PluginProcess>,
     shared_refresh_generation: u64,
     applied_shared_refresh_generation: u64,
     auto_sync: AutoSyncCoordinator,
@@ -208,6 +209,8 @@ impl DesktopController {
             .shared_store_runtime()
             .map_or(0, |store| store.sync_mutation_generation());
         Self {
+            plugin_process: cx
+                .new(|cx| crate::features::plugins::PluginProcess::new(runtime.clone(), cx)),
             runtime,
             session_hub: cx.new(|_| SessionHub::new()),
             most_recent_workspace_id: startup
@@ -1111,6 +1114,24 @@ impl DesktopController {
         self.update_store.clone()
     }
 
+    pub(crate) fn plugin_process(&self) -> gpui::Entity<crate::features::plugins::PluginProcess> {
+        self.plugin_process.clone()
+    }
+
+    pub(crate) fn shutdown_plugins(&self, cx: &mut gpui::App) -> Task<()> {
+        let service = self.plugin_process.read(cx).service();
+        cx.background_executor().spawn(async move {
+            if let Some(service) = service {
+                service.shutdown();
+            }
+        })
+    }
+    pub(crate) fn restart_plugins(&mut self, cx: &mut gpui::App) {
+        let runtime = self.runtime.clone();
+        self.plugin_process
+            .update(cx, |process, cx| process.restart(runtime, cx));
+    }
+
     fn workspace_ui_seed(
         &self,
         requested_source: Option<WorkspaceId>,
@@ -1904,7 +1925,8 @@ impl DesktopController {
     }
 
     fn quit_after_workspace_shutdown(&mut self, cx: &mut Context<Self>) {
-        let tasks = self.shutdown_workspaces_except(None, cx);
+        let mut tasks = self.shutdown_workspaces_except(None, cx);
+        tasks.push(self.shutdown_plugins(cx));
         cx.spawn(async move |this, cx| {
             for task in tasks {
                 task.await;

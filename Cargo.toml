@@ -14,6 +14,8 @@ members = [
     "crates/nyaterm-mcp",
     "crates/nyaterm-mcp-protocol",
     "crates/nyaterm-otp",
+    "crates/nyaterm-plugin-api",
+    "crates/nyaterm-plugin-host",
     "crates/nyaterm-rdp-helper",
     "crates/nyaterm-remote-desktop",
     "crates/nyaterm-store",
@@ -30,7 +32,7 @@ resolver = "3"
 # revision below. Editing anything under `temp/` has no effect on what is
 # compiled. The exclude entry only stops cargo from claiming those manifests
 # belong to this workspace, so they can still be built on their own.
-exclude = ["temp"]
+exclude = ["temp", "examples/plugins/guests"]
 
 [workspace.package]
 version = "2.0.0-preview.4"
@@ -77,6 +79,8 @@ nyaterm-core = { path = "crates/nyaterm-core" }
 nyaterm-mcp-protocol = { path = "crates/nyaterm-mcp-protocol" }
 nyaterm-desktop = { path = "crates/nyaterm-desktop" }
 nyaterm-otp = { path = "crates/nyaterm-otp" }
+nyaterm-plugin-api = { path = "crates/nyaterm-plugin-api" }
+nyaterm-plugin-host = { path = "crates/nyaterm-plugin-host" }
 nyaterm-remote-desktop = { path = "crates/nyaterm-remote-desktop" }
 nyaterm-store = { path = "crates/nyaterm-store" }
 nyaterm-terminal = { path = "crates/nyaterm-terminal" }
@@ -131,6 +135,10 @@ zed_reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-featur
     "socks",
 ] }
 zip = { version = "8.2.0", default-features = false, features = ["deflate"] }
+toml = "0.9"
+wasmtime = { version = "=39.0.1", default-features = false, features = ["std", "runtime", "cranelift", "component-model"] }
+wasmparser = "=0.240.0"
+wit-bindgen = { version = "=0.49.0", default-features = false, features = ["macros", "realloc", "std"] }
 
 [profile.dev]
 debug = "line-tables-only"

@@ -333,12 +333,13 @@ impl AppShell {
             overlays: self.overlays.clone(),
         };
         let update_store = self.controller.read(cx).update_store();
+        let plugin_process = self.controller.read(cx).plugin_process();
         let app = cx.new(|cx| {
             let session_hub = self.session_hub.read(cx).clone();
             NyaTermApp::from_bootstrap(
                 self.runtime.clone(),
                 stores,
-                NyaTermProcessEntities::new(process_state, update_store.clone()),
+                NyaTermProcessEntities::new(process_state, update_store.clone(), plugin_process),
                 workspace_init,
                 NyaTermStoreClients::new(
                     store_runtime.ui_client(),
@@ -668,7 +669,9 @@ impl AppShell {
     fn quit_after_worker_shutdown(&mut self, launch_update: bool, cx: &mut Context<Self>) {
         let started_at = Instant::now();
         let mut tasks = self.controller.update(cx, |controller, cx| {
-            controller.shutdown_other_workspaces(self.workspace_id, cx)
+            let mut tasks = controller.shutdown_other_workspaces(self.workspace_id, cx);
+            tasks.push(controller.shutdown_plugins(cx));
+            tasks
         });
         // The current shell is already borrowed by the persistence completion callback.
         if let Some(app) = &self.app {
@@ -708,8 +711,10 @@ impl AppShell {
                 if let Some(store_runtime) = &self.store_runtime {
                     store_runtime.resume_after_failed_shutdown();
                 }
-                self.controller
-                    .update(cx, |controller, _| controller.cancel_process_quit());
+                self.controller.update(cx, |controller, cx| {
+                    controller.cancel_process_quit();
+                    controller.restart_plugins(cx);
+                });
                 self.lifecycle = AppShellLifecycle::FlushFailed(error.clone());
                 app.update(cx, |app, cx| app.report_close_save_failed(error, cx));
                 cx.notify();

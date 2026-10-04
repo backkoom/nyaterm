@@ -65,6 +65,7 @@ impl NyaTermApp {
         let NyaTermProcessEntities {
             process_state,
             update,
+            plugins,
         } = process_entities;
         let session_manager = session_hub.manager();
         let ssh_connections = session_hub.ssh_connections();
@@ -244,6 +245,7 @@ impl NyaTermApp {
 
         let blocking_jobs = crate::blocking_jobs::BlockingJobScheduler::new();
         let mut app = Self {
+            plugins: crate::features::plugins::PluginFeatureState::new(plugins),
             workspace_id,
             workspace_revision: 0,
             desktop_controller: None,
@@ -475,7 +477,11 @@ impl NyaTermApp {
         let mut app = Self::from_bootstrap(
             runtime,
             stores,
-            NyaTermProcessEntities::new(process_state, update),
+            NyaTermProcessEntities::new(
+                process_state,
+                update,
+                cx.new(|_| crate::features::plugins::PluginProcess::empty()),
+            ),
             workspace_init,
             NyaTermStoreClients::new(store_ui, store_blocking),
             SessionHub::new(),
