@@ -14,9 +14,7 @@ use nyaterm_core::plugins::{ErrorCode, PluginError, PluginResult, PluginStatus, 
 use nyaterm_core::runtime::AppRuntime;
 use nyaterm_store::plugin_preferences::PluginPreferenceStore;
 
-use crate::package::{
-    Package, StagingDirectory, io_error, load, reject_ancestor_links, reject_link,
-};
+use crate::package::{Package, StagingDirectory, io_error, load, reject_link, reject_path_links};
 use crate::runtime::{CallTicket, RuntimeEngine, RuntimeInstance, RuntimeLimits, RuntimeToken};
 
 mod preparation;
@@ -158,16 +156,16 @@ impl PluginManager {
     }
 
     pub fn open(root: PathBuf, host_version: &str, limits: RuntimeLimits) -> PluginResult<Self> {
-        reject_ancestor_links(&root)?;
+        fs::create_dir_all(&root).map_err(|_| io_error())?;
+        reject_link(&root)?;
         for directory in [
-            &root,
             &root.join("installed"),
             &root.join("staging"),
             &root.join("work/data"),
             &root.join("dev"),
         ] {
             fs::create_dir_all(directory).map_err(|_| io_error())?;
-            reject_ancestor_links(directory)?;
+            reject_path_links(&root, directory)?;
         }
         let preferences_path = root.join("dev/preferences.redb");
         if preferences_path.exists() {
@@ -403,7 +401,7 @@ impl PluginManager {
         }
         let mut trash = StagingDirectory::new(&self.root.join("staging"))?;
         let target = self.root.join("installed").join(id);
-        reject_ancestor_links(&target)?;
+        reject_path_links(&self.root, &target)?;
         fs::rename(&target, trash.path.join("old")).map_err(|_| io_error())?;
         let mut preferences = self.preferences.clone();
         preferences.plugins.remove(id);

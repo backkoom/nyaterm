@@ -270,6 +270,23 @@ fn archive_install_rejects_traversal_links_duplicate_names_and_limits() {
     assert!(!root.join("outside").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn package_below_symlinked_ancestor_installs_when_package_tree_has_no_links() {
+    let root = root();
+    let physical_parent = root.join("physical-parent");
+    fs::create_dir(&physical_parent).unwrap();
+    let source = fixture(&physical_parent, "linkedparent");
+    let aliased_parent = root.join("aliased-parent");
+    std::os::unix::fs::symlink(&physical_parent, &aliased_parent).unwrap();
+
+    let mut host = manager(&root);
+    host.install(&aliased_parent.join(source.file_name().unwrap()), false)
+        .unwrap();
+
+    assert_eq!(text(call(&host, "linkedparent", "count")), "1");
+}
+
 #[test]
 fn infinite_loop_deadline_actually_stops_worker_and_other_plugins_still_run() {
     let root = root();

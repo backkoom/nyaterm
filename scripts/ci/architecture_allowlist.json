@@ -28,6 +28,7 @@
     {"path": "crates/nyaterm-desktop/src/features/layout/workspace/surface/assets.rs", "max_count": 1, "reason": "Asset table uses a caller-owned horizontal scroll handle with an explicit NyaHorizontalScrollbar overlay."},
     {"path": "crates/nyaterm-desktop/src/features/layout/workspace/surface/tabs.rs", "max_count": 1, "reason": "Session tabs use a caller-owned scroll handle and attach a visible horizontal scrollbar to the non-scrolling parent."},
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/browser/view.rs", "max_count": 1, "reason": "Browser uses a caller-owned horizontal scrollbar."},
+    {"path": "crates/nyaterm-desktop/src/features/pages/transfers/path_bar.rs", "max_count": 1, "reason": "Transfer path menu uses a caller-owned ScrollHandle and attaches an explicit vertical scrollbar to the scrolling child."},
     {"path": "crates/nyaterm-ui/src/settings.rs", "max_count": 1, "reason": "Settings content tracks an explicit scroll handle and attaches a visible vertical scrollbar to the non-scrolling parent."},
     {"path": "crates/nyaterm-ui/src/widgets.rs", "max_count": 2, "reason": "Reusable widgets own caller-positioned scrollbar overlays."}
   ]

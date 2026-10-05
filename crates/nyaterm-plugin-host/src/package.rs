@@ -59,7 +59,8 @@ pub fn promote(
     let old = rollback.path.join("old");
     let had_old = target.exists();
     if had_old {
-        reject_ancestor_links(target)?;
+        let managed_root = staging_root.parent().ok_or_else(unsafe_path)?;
+        reject_path_links(managed_root, target)?;
         fs::rename(target, &old).map_err(|_| io_error())?;
     }
     if fs::rename(&stage.path, target).is_err() {
@@ -122,19 +123,20 @@ pub fn reject_link(path: &Path) -> PluginResult<fs::Metadata> {
     Ok(metadata)
 }
 
-pub fn reject_ancestor_links(path: &Path) -> PluginResult<()> {
-    let mut current = Some(path);
-    while let Some(part) = current {
-        if part.exists() {
-            reject_link(part)?;
+pub fn reject_path_links(root: &Path, path: &Path) -> PluginResult<()> {
+    let relative = path.strip_prefix(root).map_err(|_| unsafe_path())?;
+    reject_link(root)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        if current.exists() {
+            reject_link(&current)?;
         }
-        current = part.parent();
     }
     Ok(())
 }
 
 pub fn snapshot(source: &Path, destination: &Path) -> PluginResult<()> {
-    reject_ancestor_links(source)?;
     if reject_link(source)?.is_dir() {
         let mut count = 0;
         let mut bytes = 0;
@@ -273,7 +275,9 @@ pub fn read_bounded(path: &Path, limit: u64) -> PluginResult<Vec<u8>> {
 }
 
 pub fn load(directory: &Path, host_version: &str) -> PluginResult<Package> {
-    reject_ancestor_links(directory)?;
+    if !reject_link(directory)?.is_dir() {
+        return Err(unsafe_path());
+    }
     let raw = read_bounded(&directory.join("plugin.toml"), MAX_MANIFEST_BYTES as u64)?;
     let raw = std::str::from_utf8(&raw)
         .map_err(|_| PluginError::new(ErrorCode::InvalidManifest, "plugin.toml must be UTF-8"))?;
@@ -282,7 +286,7 @@ pub fn load(directory: &Path, host_version: &str) -> PluginResult<Package> {
     for action in &manifest.actions {
         if let Some(path) = &action.template {
             let path = directory.join(path);
-            reject_ancestor_links(&path)?;
+            reject_path_links(directory, &path)?;
             let raw = read_bounded(&path, MAX_TEXT_BYTES as u64)?;
             let template = String::from_utf8(raw).map_err(|_| {
                 PluginError::new(
@@ -299,7 +303,7 @@ pub fn load(directory: &Path, host_version: &str) -> PluginResult<Package> {
         .as_ref()
         .map(|path| {
             let path = directory.join(path);
-            reject_ancestor_links(&path)?;
+            reject_path_links(directory, &path)?;
             read_bounded(&path, MAX_FILE_BYTES)
         })
         .transpose()?;
