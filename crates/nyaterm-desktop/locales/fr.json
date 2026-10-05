@@ -3413,6 +3413,8 @@
     "replace": "Remplacer le brouillon de la zone d’envoi",
     "reuse": "Utiliser le résultat comme texte d’entrée",
     "draftFilled": "Brouillon rempli. Vérifiez-le dans la zone d’envoi, puis envoyez-le manuellement.",
+    "draftOrigin": "Sortie du plugin : %{source}",
+    "draftEdited": "Modifié",
     "installed": "Installé（désactivé）",
     "enabled": "Activé",
     "running": "En cours d’exécution",

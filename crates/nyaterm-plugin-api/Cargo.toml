@@ -7,5 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Rust guest SDK and WIT for NyaTerm plugins"
 
+[features]
+default = ["guest"]
+guest = ["dep:wit-bindgen"]
+
 [dependencies]
-wit-bindgen.workspace = true
+wit-bindgen = { workspace = true, optional = true }

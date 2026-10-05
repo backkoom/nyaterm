@@ -4,6 +4,7 @@ use gpui::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     Subscription, Task, WeakEntity, Window, div, px, rgb,
 };
+use nyaterm_core::command_draft::DraftOrigin;
 use nyaterm_core::plugins::invocation::{ActionInput, ActionResult, parse_parameter};
 use nyaterm_core::plugins::manifest::{ParameterKind, ResultKind};
 use nyaterm_core::plugins::{ErrorCode, MAX_TEXT_BYTES, PluginError, PluginStatus};
@@ -336,10 +337,19 @@ impl PluginPanel {
             return;
         }
         let output = self.output.read(cx).value(cx);
-        self.status = match self
-            .app
-            .update(cx, |app, cx| app.fill_plugin_draft(&output, replace, cx))
-        {
+        let origin = DraftOrigin::Plugin {
+            plugin_id: preview.plugin_id.clone(),
+            action_id: preview
+                .contribution_id
+                .split_once(':')
+                .unwrap()
+                .1
+                .to_owned(),
+            revision: preview.revision,
+        };
+        self.status = match self.app.update(cx, |app, cx| {
+            app.fill_plugin_draft(&output, replace, origin, cx)
+        }) {
             Ok(Ok(())) => t!("plugins.draftFilled").to_string(),
             Ok(Err(error)) => error.message,
             Err(_) => t!("plugins.unavailable").to_string(),

@@ -405,3 +405,76 @@ fn failed_startup_closes_event_stream_and_preserves_error_and_preferences() {
     assert_eq!(fs::read(path).unwrap(), before);
     fs::remove_dir_all(root.join("plugins")).unwrap();
 }
+
+#[test]
+fn different_plugins_prepare_concurrently_and_invocations_bypass_preparation() {
+    let root = TestTempDir::new("nyaterm-plugin-service-prepare-concurrency");
+    let (hook, arrived, release) =
+        gate(|op| matches!(op, PluginOperation::Reload { id } if id == "slow"));
+    let (service, _) = PluginService::start_inner(
+        runtime(&root),
+        RuntimeLimits::default(),
+        TestHooks {
+            before_prepare: Some(hook),
+            ..TestHooks::default()
+        },
+    )
+    .unwrap();
+    install(&service, &root, "slow");
+    install(&service, &root, "other");
+    let slow = service
+        .submit(PluginOperation::Reload { id: "slow".into() })
+        .unwrap();
+    arrived.recv_timeout(WAIT).unwrap();
+    // Both dispatch and execution complete while the other package worker is
+    // deliberately paused. A serial control plane cannot pass this barrier.
+    let (done, completed) = mpsc::sync_channel(1);
+    let observer = service.clone();
+    let probe = thread::spawn(move || {
+        let first = count(&observer, "other");
+        block_on(
+            observer
+                .submit(PluginOperation::Reload { id: "other".into() })
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        done.send((first, count(&observer, "other"))).unwrap();
+    });
+    let outcome = completed.recv_timeout(WAIT);
+    release.send(()).unwrap();
+    probe.join().unwrap();
+    assert_eq!(outcome.unwrap(), ("1".into(), "1".into()));
+    block_on(slow).unwrap().unwrap();
+    service.shutdown();
+}
+
+#[test]
+fn real_guest_fault_updates_catalog_without_another_request_or_polling() {
+    let root = TestTempDir::new("nyaterm-plugin-service-fault-event");
+    let (service, mut events) = PluginService::start(runtime(&root)).unwrap();
+    install(&service, &root, "broken");
+    // Consume the installation notification before executing the guest.
+    block_on(events.next()).unwrap();
+    let OperationReply::Invocation(call) = block_on(
+        service
+            .submit(invocation(&service, "broken", "loop"))
+            .unwrap(),
+    )
+    .unwrap()
+    .unwrap() else {
+        panic!("missing invocation");
+    };
+    assert!(block_on(call.result()).is_err());
+    let (done, completed) = mpsc::sync_channel(1);
+    let listener = thread::spawn(move || {
+        done.send(block_on(events.next()).is_some()).unwrap();
+    });
+    let outcome = completed.recv_timeout(WAIT);
+    let faulted = service.snapshot().plugins[0].status;
+    service.shutdown();
+    listener.join().unwrap();
+    assert!(outcome.unwrap());
+    assert_eq!(faulted, PluginStatus::Faulted);
+    assert!(service.snapshot().stopped);
+}

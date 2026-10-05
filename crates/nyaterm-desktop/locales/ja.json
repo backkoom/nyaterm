@@ -3413,6 +3413,8 @@
     "replace": "送信欄の下書きを置換",
     "reuse": "結果をテキスト入力に使用",
     "draftFilled": "下書きを入力しました。送信欄で確認してから手動で送信してください。",
+    "draftOrigin": "プラグイン出力：%{source}",
+    "draftEdited": "編集済み",
     "installed": "インストール済み（無効）",
     "enabled": "有効",
     "running": "実行中",

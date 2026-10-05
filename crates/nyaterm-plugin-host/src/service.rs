@@ -1,16 +1,16 @@
-use crate::manager::{CatalogSnapshot, Invocation, PluginManager};
+use crate::manager::{CatalogSnapshot, Invocation, PluginManager, PreparedChange};
 use futures::channel::{mpsc as async_channel, oneshot};
 use nyaterm_core::plugins::invocation::ActionInput;
 use nyaterm_core::plugins::{ErrorCode, PluginError, PluginResult};
 use nyaterm_core::runtime::AppRuntime;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex, RwLock,
-    atomic::{AtomicBool, Ordering},
-    mpsc::{self, SyncSender, TrySendError},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    mpsc::{self, Sender},
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 pub enum PluginOperation {
     Install {
@@ -55,6 +55,7 @@ struct Request {
 struct TestHooks {
     before_dispatch: Option<DispatchHook>,
     after_start: Option<DispatchHook>,
+    before_prepare: Option<DispatchHook>,
 }
 #[cfg(test)]
 type DispatchHook = Arc<dyn Fn(&PluginOperation) + Send + Sync>;
@@ -63,14 +64,32 @@ fn shutdown_error() -> PluginError {
     PluginError::new(ErrorCode::Shutdown, "Plugin service is shutting down")
 }
 
-/// One process-level service. Startup, filesystem, preferences and compilation
-/// run on this actor; each component has its own execution worker.
+enum Message {
+    Request(Request),
+    Prepared(u64, Box<PluginResult<PreparedChange>>),
+    RuntimeChanged,
+    Shutdown,
+}
+
+struct Preparing {
+    // None reserves installation order until the new package ID is known.
+    id: Option<String>,
+    reply: oneshot::Sender<PluginResult<OperationReply>>,
+    worker: JoinHandle<()>,
+}
+
+const QUEUE_CAPACITY: usize = 16;
+const PREPARATION_WORKERS: usize = 2;
+
+/// One process-level registry actor. Package snapshots, compilation and guest
+/// initialization run on at most two preparation threads; commits stay serial.
+/// Requests for the same plugin retain submission order, while other plugins
+/// can still invoke or prepare. No worker wakes periodically while idle.
 pub struct PluginService {
-    requests: SyncSender<Request>,
+    requests: Sender<Message>,
+    queued: Arc<AtomicUsize>,
     snapshot: Arc<RwLock<CatalogSnapshot>>,
     stop: Arc<AtomicBool>,
-    // Linearizes submission, dispatch start and shutdown. Never held during I/O,
-    // guest execution or join, so shutdown cannot strand a late accepted request.
     dispatch: Arc<Mutex<()>>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -93,7 +112,10 @@ impl PluginService {
         #[cfg(test)] limits: crate::runtime::RuntimeLimits,
         #[cfg(test)] hooks: TestHooks,
     ) -> PluginResult<(Arc<Self>, async_channel::Receiver<PluginEvent>)> {
-        let (requests, receiver) = mpsc::sync_channel::<Request>(16);
+        // The admission counter bounds user requests independently of internal
+        // completions, so shutdown/fault notifications cannot be lost to a full queue.
+        let (requests, receiver) = mpsc::channel::<Message>();
+        let queued = Arc::new(AtomicUsize::new(0));
         let (mut events, event_receiver) = async_channel::channel(16);
         let snapshot = Arc::new(RwLock::new(CatalogSnapshot::default()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -101,6 +123,8 @@ impl PluginService {
         let snapshot_for_worker = snapshot.clone();
         let stop_for_worker = stop.clone();
         let dispatch_for_worker = dispatch.clone();
+        let queued_for_worker = queued.clone();
+        let completion = requests.clone();
         let worker = thread::Builder::new()
             .name("plugin-manager".into())
             .spawn(move || {
@@ -113,97 +137,219 @@ impl PluginService {
                     limits,
                 );
                 let mut manager = match opened {
-                    Ok(manager) => Some(manager),
+                    Ok(manager) => {
+                        let changed = completion.clone();
+                        let notified = Arc::new(AtomicBool::new(false));
+                        let flag = notified.clone();
+                        manager.set_change_handler(Arc::new(move || {
+                            if !flag.swap(true, Ordering::AcqRel) {
+                                let _ = changed.send(Message::RuntimeChanged);
+                            }
+                        }));
+                        Some((manager, notified))
+                    }
                     Err(error) => {
                         snapshot_for_worker.write().unwrap().startup_error = Some(error);
                         let _ = events.try_send(PluginEvent::CatalogChanged);
                         None
                     }
                 };
-                while !stop_for_worker.load(Ordering::Acquire) {
-                    if let Some(manager) = &manager {
-                        publish(manager, &snapshot_for_worker, &mut events);
-                    }
-                    let request = match receiver.recv_timeout(Duration::from_millis(100)) {
-                        Ok(request) => request,
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    };
-                    #[cfg(test)]
-                    if let Some(hook) = &hooks.before_dispatch {
-                        hook(&request.operation);
-                    }
-                    {
-                        let _dispatch = dispatch_for_worker.lock().unwrap();
+                let mut pending = VecDeque::<Request>::new();
+                let mut preparing = BTreeMap::<u64, Preparing>::new();
+                let mut sequence = 0;
+                if let Some((manager, _)) = &manager {
+                    publish(manager, &snapshot_for_worker, &mut events);
+                }
+                loop {
+                    // Scan past a busy plugin without reordering requests that
+                    // target that plugin. Installation is a management barrier.
+                    let mut index = 0;
+                    while index < pending.len() {
                         if stop_for_worker.load(Ordering::Acquire) {
+                            let request = pending.remove(index).unwrap();
+                            queued_for_worker.fetch_sub(1, Ordering::AcqRel);
                             let _ = request.reply.send(Err(shutdown_error()));
-                            break;
-                        }
-                        if matches!(&request.operation, PluginOperation::Invoke { .. })
-                            && request.reply.is_canceled()
-                        {
                             continue;
                         }
-                        // From here a management transaction is started and must
-                        // finish or roll back even if shutdown begins next.
-                    }
-                    #[cfg(test)]
-                    if let Some(hook) = &hooks.after_start {
-                        hook(&request.operation);
-                    }
-                    let Some(manager) = &mut manager else {
-                        let error = snapshot_for_worker
-                            .read()
-                            .unwrap()
-                            .startup_error
-                            .clone()
-                            .unwrap();
-                        let _ = request.reply.send(Err(error));
-                        continue;
-                    };
-                    let result = match request.operation {
-                        PluginOperation::Install {
-                            source,
-                            development,
-                        } => manager
-                            .install(&source, development)
-                            .map(|_| OperationReply::Changed),
-                        PluginOperation::Update { id, source } => manager
-                            .update(&id, &source)
-                            .map(|_| OperationReply::Changed),
-                        PluginOperation::Enable { id, enabled } => manager
-                            .set_enabled(&id, enabled)
-                            .map(|_| OperationReply::Changed),
-                        PluginOperation::Reload { id } => {
-                            manager.reload(&id).map(|_| OperationReply::Changed)
+                        let operation = &pending[index].operation;
+                        let id = operation_id(operation);
+                        let invoke = matches!(operation, PluginOperation::Invoke { .. });
+                        let blocked = preparing.values().any(|job| {
+                            if invoke {
+                                job.id.as_deref().is_some_and(|busy| Some(busy) == id)
+                            } else {
+                                job.id.is_none() || id.is_none() || job.id.as_deref() == id
+                            }
+                        }) || pending.iter().take(index).any(|earlier| {
+                            if invoke {
+                                operation_id(&earlier.operation) == id
+                            } else {
+                                let earlier_id = operation_id(&earlier.operation);
+                                earlier_id.is_none() || id.is_none() || earlier_id == id
+                            }
+                        });
+                        if blocked || (!invoke && preparing.len() >= PREPARATION_WORKERS) {
+                            index += 1;
+                            continue;
                         }
-                        PluginOperation::Uninstall { id } => {
-                            manager.uninstall(&id).map(|_| OperationReply::Changed)
+                        let request = pending.remove(index).unwrap();
+                        queued_for_worker.fetch_sub(1, Ordering::AcqRel);
+                        #[cfg(test)]
+                        if let Some(hook) = &hooks.before_dispatch {
+                            hook(&request.operation);
                         }
-                        PluginOperation::Invoke {
-                            contribution_id,
-                            expected_revision,
-                            input,
-                        } => manager
-                            .invoke_at_revision(&contribution_id, expected_revision, input)
-                            .map(OperationReply::Invocation),
-                    };
-                    publish(manager, &snapshot_for_worker, &mut events);
-                    let _ = request.reply.send(result);
+                        {
+                            let _dispatch = dispatch_for_worker.lock().unwrap();
+                            if stop_for_worker.load(Ordering::Acquire) {
+                                let _ = request.reply.send(Err(shutdown_error()));
+                                continue;
+                            }
+                            if invoke && request.reply.is_canceled() {
+                                continue;
+                            }
+                        }
+                        #[cfg(test)]
+                        if let Some(hook) = &hooks.after_start {
+                            hook(&request.operation);
+                        }
+                        let Some((manager, _)) = &mut manager else {
+                            let error = snapshot_for_worker
+                                .read()
+                                .unwrap()
+                                .startup_error
+                                .clone()
+                                .unwrap();
+                            let _ = request.reply.send(Err(error));
+                            continue;
+                        };
+                        let plan = match &request.operation {
+                            PluginOperation::Install {
+                                source,
+                                development,
+                            } => Some(manager.plan_replace(source, *development, None)),
+                            PluginOperation::Update { id, source } => {
+                                Some(manager.plan_update(id, source))
+                            }
+                            PluginOperation::Enable { id, enabled: true } => {
+                                Some(manager.plan_load(id, true))
+                            }
+                            PluginOperation::Reload { id } => Some(manager.plan_load(id, false)),
+                            _ => None,
+                        };
+                        if let Some(plan) = plan {
+                            let plan = match plan {
+                                Ok(plan) => plan,
+                                Err(error) => {
+                                    let _ = request.reply.send(Err(error));
+                                    continue;
+                                }
+                            };
+                            sequence += 1;
+                            let key = sequence;
+                            let done = completion.clone();
+                            let job_id = operation_id(&request.operation).map(str::to_owned);
+                            #[cfg(test)]
+                            let prepare_hook = hooks.before_prepare.clone();
+                            let worker = thread::Builder::new()
+                                .name("plugin-prepare".into())
+                                .spawn(move || {
+                                    let result = std::panic::catch_unwind(
+                                        std::panic::AssertUnwindSafe(|| {
+                                            #[cfg(test)]
+                                            if let Some(hook) = prepare_hook {
+                                                hook(&request.operation);
+                                            }
+                                            plan.run()
+                                        }),
+                                    )
+                                    .unwrap_or_else(|_| {
+                                        Err(PluginError::new(
+                                            ErrorCode::Initialization,
+                                            "Plugin preparation worker failed",
+                                        ))
+                                    });
+                                    let _ = done.send(Message::Prepared(key, Box::new(result)));
+                                });
+                            match worker {
+                                Ok(worker) => {
+                                    preparing.insert(
+                                        key,
+                                        Preparing {
+                                            id: job_id,
+                                            reply: request.reply,
+                                            worker,
+                                        },
+                                    );
+                                }
+                                Err(_) => {
+                                    let _ = request.reply.send(Err(PluginError::new(
+                                        ErrorCode::Initialization,
+                                        "Cannot start plugin preparation worker",
+                                    )));
+                                }
+                            }
+                        } else {
+                            let result = match request.operation {
+                                PluginOperation::Enable { id, enabled: false } => manager
+                                    .set_enabled(&id, false)
+                                    .map(|_| OperationReply::Changed),
+                                PluginOperation::Uninstall { id } => {
+                                    manager.uninstall(&id).map(|_| OperationReply::Changed)
+                                }
+                                PluginOperation::Invoke {
+                                    contribution_id,
+                                    expected_revision,
+                                    input,
+                                } => manager
+                                    .invoke_at_revision(&contribution_id, expected_revision, input)
+                                    .map(OperationReply::Invocation),
+                                _ => unreachable!(),
+                            };
+                            publish(manager, &snapshot_for_worker, &mut events);
+                            let _ = request.reply.send(result);
+                        }
+                    }
+                    if stop_for_worker.load(Ordering::Acquire) && preparing.is_empty() {
+                        break;
+                    }
+                    match receiver.recv() {
+                        Ok(Message::Request(request)) => pending.push_back(request),
+                        Ok(Message::Prepared(key, result)) => {
+                            let job = preparing.remove(&key).unwrap();
+                            let _ = job.worker.join();
+                            let (manager, _) = manager.as_mut().unwrap();
+                            // An accepted, started transaction finishes or rolls
+                            // back even when shutdown has closed submission.
+                            let result = (*result)
+                                .and_then(|prepared| manager.commit(prepared))
+                                .map(|_| OperationReply::Changed);
+                            publish(manager, &snapshot_for_worker, &mut events);
+                            let _ = job.reply.send(result);
+                        }
+                        Ok(Message::RuntimeChanged) => {
+                            if let Some((manager, notified)) = &manager {
+                                notified.store(false, Ordering::Release);
+                                publish(manager, &snapshot_for_worker, &mut events);
+                            }
+                        }
+                        Ok(Message::Shutdown) => {}
+                        Err(_) => break,
+                    }
                 }
-                // Submission is closed before draining, including any request
-                // accepted immediately before shutdown acquired the dispatch lock.
                 {
                     let _dispatch = dispatch_for_worker.lock().unwrap();
                     stop_for_worker.store(true, Ordering::Release);
                 }
-                while let Ok(request) = receiver.try_recv() {
-                    let _ = request.reply.send(Err(shutdown_error()));
+                while let Ok(message) = receiver.try_recv() {
+                    if let Message::Request(request) = message {
+                        queued_for_worker.fetch_sub(1, Ordering::AcqRel);
+                        let _ = request.reply.send(Err(shutdown_error()));
+                    }
                 }
-                let final_snapshot = if let Some(mut manager) = manager.take() {
+                let final_snapshot = if let Some((mut manager, _)) = manager.take() {
                     manager.shutdown();
                     let snapshot = manager.snapshot();
-                    drop(manager); // Includes joining the epoch clock.
+                    drop(manager);
                     snapshot
                 } else {
                     CatalogSnapshot {
@@ -223,6 +369,7 @@ impl PluginService {
         Ok((
             Arc::new(Self {
                 requests,
+                queued,
                 snapshot,
                 stop,
                 dispatch,
@@ -241,27 +388,28 @@ impl PluginService {
         if self.stop.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
+        if self.queued.load(Ordering::Acquire) >= QUEUE_CAPACITY {
+            return Err(PluginError::new(
+                ErrorCode::QueueFull,
+                "Plugin management queue is full; wait and retry",
+            ));
+        }
+        self.queued.fetch_add(1, Ordering::AcqRel);
         let (reply, task) = oneshot::channel();
-        self.requests
-            .try_send(Request { operation, reply })
-            .map_err(|error| match error {
-                TrySendError::Full(_) => PluginError::new(
-                    ErrorCode::QueueFull,
-                    "Plugin management queue is full; wait and retry",
-                ),
-                TrySendError::Disconnected(_) => PluginError::new(
-                    ErrorCode::Shutdown,
-                    "Plugin management worker is unavailable",
-                ),
-            })?;
+        if self
+            .requests
+            .send(Message::Request(Request { operation, reply }))
+            .is_err()
+        {
+            self.queued.fetch_sub(1, Ordering::AcqRel);
+            return Err(shutdown_error());
+        }
         Ok(task)
     }
 
     /// Call off the UI thread, before AppShell quits the process.
     pub fn shutdown(&self) {
         self.begin_shutdown();
-        // Keep the join lock until completion: concurrent shutdown callers must
-        // not return while the first caller is still reclaiming workers.
         let mut worker = self.worker.lock().unwrap();
         if let Some(worker) = worker.take() {
             let _ = worker.join();
@@ -270,7 +418,22 @@ impl PluginService {
 
     fn begin_shutdown(&self) {
         let _dispatch = self.dispatch.lock().unwrap();
-        self.stop.store(true, Ordering::Release);
+        if !self.stop.swap(true, Ordering::AcqRel) {
+            let _ = self.requests.send(Message::Shutdown);
+        }
+    }
+}
+
+fn operation_id(operation: &PluginOperation) -> Option<&str> {
+    match operation {
+        PluginOperation::Install { .. } => None,
+        PluginOperation::Update { id, .. }
+        | PluginOperation::Enable { id, .. }
+        | PluginOperation::Reload { id }
+        | PluginOperation::Uninstall { id } => Some(id),
+        PluginOperation::Invoke {
+            contribution_id, ..
+        } => contribution_id.split_once(':').map(|(id, _)| id),
     }
 }
 

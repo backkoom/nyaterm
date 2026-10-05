@@ -3414,6 +3414,8 @@
     "replace": "Replace send-box draft",
     "reuse": "Use result as text input",
     "draftFilled": "Draft filled. Review it in the send box and send when ready.",
+    "draftOrigin": "Plugin output: %{source}",
+    "draftEdited": "Edited",
     "installed": "Installed (disabled)",
     "enabled": "Enabled",
     "running": "Running",

@@ -2,6 +2,7 @@ use rust_i18n::t;
 
 use std::borrow::Cow;
 
+use nyaterm_core::command_draft::DraftOrigin;
 use nyaterm_transport::SessionKind;
 
 use crate::features::{NyaTermApp, panels::SendCommandPresentationState};
@@ -79,7 +80,7 @@ impl NyaTermApp {
         } else {
             format!("{} · {}", t!("serialSend.send"), send_shortcut())
         };
-        let status = if hex_error {
+        let mut status = if hex_error {
             t!("serialSend.invalidPaste").to_string()
         } else if validation_error {
             t!("serialSend.incompleteByte").to_string()
@@ -111,6 +112,27 @@ impl NyaTermApp {
             }
             .to_string()
         };
+        let sources = send
+            .provenance
+            .origins
+            .iter()
+            .filter_map(|origin| match origin {
+                DraftOrigin::Plugin {
+                    plugin_id,
+                    action_id,
+                    ..
+                } => Some(format!("{plugin_id}:{action_id}")),
+                DraftOrigin::User => None,
+            })
+            .collect::<Vec<_>>();
+        if !sources.is_empty() {
+            status.push_str(" · ");
+            status.push_str(&t!("plugins.draftOrigin", source = sources.join(", ")));
+            if send.provenance.edited {
+                status.push_str(" · ");
+                status.push_str(&t!("plugins.draftEdited"));
+            }
+        }
         let input_hint = if send.data_type == SendCommandDataType::Hex {
             t!("serialSend.hexPlaceholder")
         } else {

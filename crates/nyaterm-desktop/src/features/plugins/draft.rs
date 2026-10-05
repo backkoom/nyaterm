@@ -1,6 +1,7 @@
 use crate::features::NyaTermApp;
 use crate::send_command::SendCommandDataType;
 use gpui::Context;
+use nyaterm_core::command_draft::DraftOrigin;
 use nyaterm_core::plugins::invocation::ordinary_text;
 use nyaterm_core::plugins::{ErrorCode, MAX_TEXT_BYTES, PluginError, PluginResult};
 
@@ -32,6 +33,7 @@ impl NyaTermApp {
         &mut self,
         incoming: &str,
         replace: bool,
+        origin: DraftOrigin,
         cx: &mut Context<Self>,
     ) -> PluginResult<()> {
         let state = self.send_command.presentation(cx);
@@ -42,7 +44,8 @@ impl NyaTermApp {
             ));
         }
         let draft = compose(&state.draft, incoming, replace)?;
-        self.apply_send_command_draft(draft.clone(), cx);
+        self.send_command
+            .fill_plugin_draft(draft.clone(), origin, replace);
         self.reset_text_input("send-command.draft", &draft, cx);
         self.set_bottom_panel_mode(crate::models::BottomPanelMode::CommandSend);
         self.shell
@@ -57,7 +60,16 @@ mod tests {
     use crate::features::plugins::draft::compose;
     use crate::features::test_support::app_with_visible_local_session;
     use gpui::AppContext;
+    use nyaterm_core::command_draft::DraftOrigin;
     use nyaterm_core::test_support::TestTempDir;
+
+    fn origin() -> DraftOrigin {
+        DraftOrigin::Plugin {
+            plugin_id: "diagnostic".into(),
+            action_id: "ping".into(),
+            revision: 4,
+        }
+    }
     #[test]
     fn explicit_fill_preserves_existing_draft_and_replacement_requires_separate_choice() {
         assert_eq!(
@@ -83,9 +95,13 @@ mod tests {
             let commands = serde_json::to_string(app.commands.quick_commands()).unwrap();
             let history = serde_json::to_string(app.commands.command_history()).unwrap();
             let target = app.send_command.presentation(cx).target;
-            app.fill_plugin_draft("ping host", false, cx).unwrap();
+            app.fill_plugin_draft("ping host", false, origin(), cx)
+                .unwrap();
             let state = app.send_command.presentation(cx);
             assert_eq!(state.draft, "echo user\nping host");
+            assert_eq!(state.provenance.origins, vec![DraftOrigin::User, origin()]);
+            app.apply_send_command_draft("echo user\nping other-host".into(), cx);
+            assert!(app.send_command.presentation(cx).provenance.edited);
             assert!(!state.sending);
             assert_eq!(state.target, target);
             assert_eq!(app.session.active_id(), session.as_deref());
@@ -97,8 +113,22 @@ mod tests {
                 serde_json::to_string(app.commands.command_history()).unwrap(),
                 history
             );
-            app.fill_plugin_draft("replacement", true, cx).unwrap();
+            app.fill_plugin_draft("replacement", true, origin(), cx)
+                .unwrap();
             assert_eq!(app.send_command.presentation(cx).draft, "replacement");
+            assert_eq!(
+                app.send_command.presentation(cx).provenance.origins,
+                vec![origin()]
+            );
+            assert!(!app.send_command.presentation(cx).provenance.edited);
+            app.send_command.clear_draft(cx);
+            assert!(
+                app.send_command
+                    .presentation(cx)
+                    .provenance
+                    .origins
+                    .is_empty()
+            );
         });
     }
 }

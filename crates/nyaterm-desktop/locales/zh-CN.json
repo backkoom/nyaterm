@@ -3414,6 +3414,8 @@
     "replace": "替换命令发送框草稿",
     "reuse": "将结果用作文本输入",
     "draftFilled": "已填入草稿，请在发送框中检查后手动发送。",
+    "draftOrigin": "插件来源：%{source}",
+    "draftEdited": "已编辑",
     "installed": "已安装（禁用）",
     "enabled": "已启用",
     "running": "运行中",

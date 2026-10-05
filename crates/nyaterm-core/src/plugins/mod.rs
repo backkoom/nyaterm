@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const MANIFEST_SCHEMA: u32 = 1;
-pub const API_VERSION: &str = "1.0.0";
+pub use nyaterm_plugin_api::abi::{API_VERSION_PARTS, API_VERSION_TEXT as API_VERSION};
 pub const MAX_MANIFEST_BYTES: usize = 128 * 1024;
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 pub const MAX_PARAMETERS: usize = 32;

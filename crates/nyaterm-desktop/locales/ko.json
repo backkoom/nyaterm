@@ -3414,6 +3414,8 @@
     "replace": "전송 상자 초안 바꾸기",
     "reuse": "결과를 텍스트 입력으로 사용",
     "draftFilled": "초안을 입력했습니다. 전송 상자에서 확인한 후 직접 전송하세요.",
+    "draftOrigin": "플러그인 출력: %{source}",
+    "draftEdited": "수정됨",
     "installed": "설치됨（비활성）",
     "enabled": "활성화됨",
     "running": "실행 중",

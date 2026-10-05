@@ -6,6 +6,7 @@ pub mod assets;
 pub mod capabilities;
 pub mod character_encoding;
 pub mod cloud_sync;
+pub mod command_draft;
 pub mod command_search;
 pub mod command_suggestion_suppression;
 pub mod connection_route;

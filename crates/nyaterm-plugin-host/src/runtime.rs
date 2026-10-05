@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
     mpsc::{self, SyncSender, TrySendError},
 };
@@ -11,7 +11,7 @@ use nyaterm_core::plugins::invocation::{
     ActionInput, ActionResult, ParameterValue, validate_result,
 };
 use nyaterm_core::plugins::manifest::{PluginManifest, ResultKind};
-use nyaterm_core::plugins::{API_VERSION, ErrorCode, PluginError, PluginResult};
+use nyaterm_core::plugins::{API_VERSION, API_VERSION_PARTS, ErrorCode, PluginError, PluginResult};
 use wasmtime::component::{Component, Linker};
 use wasmtime::{
     Config, Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline,
@@ -50,8 +50,35 @@ impl Default for RuntimeLimits {
 
 pub struct RuntimeEngine {
     engine: Engine,
-    stopping: Arc<AtomicBool>,
+    clock: Arc<EpochClock>,
+    on_change: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     ticker: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[derive(Default)]
+struct ClockState {
+    calls: usize,
+    stopping: bool,
+    #[cfg(test)]
+    ticks: u64,
+}
+
+#[derive(Default)]
+struct EpochClock {
+    state: Mutex<ClockState>,
+    changed: Condvar,
+}
+
+struct ActiveCall(Arc<EpochClock>);
+
+impl Drop for ActiveCall {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap();
+        state.calls -= 1;
+        if state.calls == 0 {
+            self.0.changed.notify_one();
+        }
+    }
 }
 
 impl RuntimeEngine {
@@ -68,15 +95,36 @@ impl RuntimeEngine {
                 "Cannot initialize the Wasm engine",
             )
         })?;
-        let stopping = Arc::new(AtomicBool::new(false));
+        let clock = Arc::new(EpochClock::default());
         let engine_for_tick = engine.clone();
-        let stop_for_tick = stopping.clone();
+        let clock_for_tick = clock.clone();
         let ticker = thread::Builder::new()
             .name("plugin-epoch".into())
             .spawn(move || {
-                while !stop_for_tick.load(Ordering::Acquire) {
-                    thread::sleep(Duration::from_millis(10));
-                    engine_for_tick.increment_epoch();
+                let mut state = clock_for_tick.state.lock().unwrap();
+                let mut next_tick = Instant::now() + Duration::from_millis(10);
+                loop {
+                    while state.calls == 0 && !state.stopping {
+                        state = clock_for_tick.changed.wait(state).unwrap();
+                        next_tick = Instant::now() + Duration::from_millis(10);
+                    }
+                    if state.stopping {
+                        break;
+                    }
+                    let (next, elapsed) = clock_for_tick
+                        .changed
+                        .wait_timeout(state, next_tick.saturating_duration_since(Instant::now()))
+                        .unwrap();
+                    state = next;
+                    if elapsed.timed_out() && state.calls > 0 {
+                        engine_for_tick.increment_epoch();
+                        #[cfg(test)]
+                        {
+                            state.ticks += 1;
+                            clock_for_tick.changed.notify_all();
+                        }
+                        next_tick = Instant::now() + Duration::from_millis(10);
+                    }
                 }
             })
             .map_err(|_| {
@@ -87,15 +135,36 @@ impl RuntimeEngine {
             })?;
         Ok(Arc::new(Self {
             engine,
-            stopping,
+            clock,
+            on_change: Mutex::new(None),
             ticker: Mutex::new(Some(ticker)),
         }))
+    }
+
+    fn active_call(&self) -> ActiveCall {
+        let mut state = self.clock.state.lock().unwrap();
+        state.calls += 1;
+        if state.calls == 1 {
+            self.clock.changed.notify_one();
+        }
+        ActiveCall(self.clock.clone())
+    }
+
+    pub(crate) fn set_change_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) {
+        *self.on_change.lock().unwrap() = Some(handler);
+    }
+
+    fn changed(&self) {
+        if let Some(handler) = self.on_change.lock().unwrap().as_ref() {
+            handler();
+        }
     }
 }
 
 impl Drop for RuntimeEngine {
     fn drop(&mut self) {
-        self.stopping.store(true, Ordering::Release);
+        self.clock.state.lock().unwrap().stopping = true;
+        self.clock.changed.notify_one();
         if let Some(ticker) = self.ticker.get_mut().unwrap().take() {
             let _ = ticker.join();
         }
@@ -123,6 +192,11 @@ struct Request {
     deadline: Instant,
     cancelled: Arc<AtomicBool>,
     reply: oneshot::Sender<PluginResult<ActionResult>>,
+}
+
+enum RuntimeRequest {
+    Invoke(Request),
+    Shutdown,
 }
 
 pub struct CallTicket {
@@ -162,7 +236,7 @@ fn cancelled() -> PluginError {
 }
 
 pub struct RuntimeInstance {
-    sender: SyncSender<Request>,
+    sender: Mutex<Option<SyncSender<RuntimeRequest>>>,
     token: Arc<RuntimeToken>,
     thread: Mutex<Option<JoinHandle<()>>>,
     limits: RuntimeLimits,
@@ -313,7 +387,7 @@ impl RuntimeInstance {
             active: AtomicBool::new(true),
             fault: Mutex::new(None),
         });
-        let (sender, receiver) = mpsc::sync_channel::<Request>(limits.queue_capacity);
+        let (sender, receiver) = mpsc::sync_channel::<RuntimeRequest>(limits.queue_capacity);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let identity = wit::Identity {
             id: manifest.id.clone(),
@@ -363,6 +437,7 @@ impl RuntimeInstance {
                         Ok(UpdateDeadline::Continue(1))
                     });
                     let initialization = (|| {
+                        let _active = engine.active_call();
                         reset_budget(
                             &mut store,
                             &limits,
@@ -376,7 +451,7 @@ impl RuntimeInstance {
                         let version = plugin
                             .call_api_version(&mut store)
                             .map_err(|error| execution_error(&store, &error))?;
-                        if (version.major, version.minor, version.patch) != (1, 0, 0) {
+                        if (version.major, version.minor, version.patch) != API_VERSION_PARTS {
                             return Err(PluginError::new(
                                 ErrorCode::Incompatible,
                                 "Component exports a different API version",
@@ -404,17 +479,18 @@ impl RuntimeInstance {
                         }
                     };
                     while token_for_worker.active() {
-                        let request = match receiver.recv_timeout(Duration::from_millis(20)) {
-                            Ok(request) => request,
-                            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        let request = match receiver.recv() {
+                            Ok(RuntimeRequest::Invoke(request)) => request,
+                            Ok(RuntimeRequest::Shutdown) | Err(_) => break,
                         };
-                        if request.cancelled.load(Ordering::Acquire)
+                        if !token_for_worker.active()
+                            || request.cancelled.load(Ordering::Acquire)
                             || Instant::now() >= request.deadline
                         {
                             let _ = request.reply.send(Err(cancelled()));
                             continue;
                         }
+                        let _active = engine.active_call();
                         reset_budget(&mut store, &limits, request.cancelled, request.deadline)?;
                         let input = wit::ActionInput {
                             action: request.action,
@@ -483,6 +559,7 @@ impl RuntimeInstance {
                         active: AtomicBool::new(true),
                         fault: Mutex::new(None),
                     });
+                    let _active = engine.active_call();
                     reset_budget(
                         &mut store,
                         &limits,
@@ -501,19 +578,22 @@ impl RuntimeInstance {
                     *token_for_worker.fault.lock().unwrap() = Some(error);
                 }
                 token_for_worker.active.store(false, Ordering::Release);
+                engine.changed();
             })
             .map_err(|_| {
                 PluginError::new(ErrorCode::Initialization, "Cannot start plugin worker")
             })?;
         match ready_rx.recv_timeout(limits.timeout + Duration::from_secs(1)) {
             Ok(Ok(())) => Ok(Arc::new(Self {
-                sender,
+                sender: Mutex::new(Some(sender)),
                 token,
                 thread: Mutex::new(Some(thread)),
                 limits,
             })),
             result => {
                 token.active.store(false, Ordering::Release);
+                let _ = sender.try_send(RuntimeRequest::Shutdown);
+                drop(sender);
                 let _ = thread.join();
                 Err(result.ok().and_then(Result::err).unwrap_or_else(|| {
                     PluginError::new(
@@ -548,13 +628,19 @@ impl RuntimeInstance {
             cancelled: cancelled.clone(),
             reply,
         };
-        self.sender.try_send(request).map_err(|error| match error {
-            TrySendError::Full(_) => PluginError::new(
-                ErrorCode::QueueFull,
-                "Plugin action queue is full; wait and retry",
-            ),
-            TrySendError::Disconnected(_) => self.token.fault().unwrap_or_else(cancelled_error),
-        })?;
+        self.sender
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or_else(cancelled_error)?
+            .try_send(RuntimeRequest::Invoke(request))
+            .map_err(|error| match error {
+                TrySendError::Full(_) => PluginError::new(
+                    ErrorCode::QueueFull,
+                    "Plugin action queue is full; wait and retry",
+                ),
+                TrySendError::Disconnected(_) => self.token.fault().unwrap_or_else(cancelled_error),
+            })?;
         Ok(CallTicket {
             reply: Some(response),
             cancelled,
@@ -564,7 +650,13 @@ impl RuntimeInstance {
 
     pub fn stop(&self) {
         self.token.active.store(false, Ordering::Release);
-        if let Some(thread) = self.thread.lock().unwrap().take() {
+        if let Some(sender) = self.sender.lock().unwrap().take() {
+            // Closing also wakes a zero-capacity mailbox when its receiver has
+            // not entered recv yet; shutdown never depends on free queue space.
+            let _ = sender.try_send(RuntimeRequest::Shutdown);
+        }
+        let mut worker = self.thread.lock().unwrap();
+        if let Some(thread) = worker.take() {
             let _ = thread.join();
         }
     }
@@ -577,5 +669,39 @@ fn cancelled_error() -> PluginError {
 impl Drop for RuntimeInstance {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::runtime::RuntimeEngine;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn epoch_clock_parks_without_calls_and_resumes_then_parks_again() {
+        let engine = RuntimeEngine::new().unwrap();
+        thread::sleep(Duration::from_millis(60));
+        assert_eq!(engine.clock.state.lock().unwrap().ticks, 0);
+        let active = engine.active_call();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut state = engine.clock.state.lock().unwrap();
+        while state.ticks == 0 {
+            let (next, _) = engine
+                .clock
+                .changed
+                .wait_timeout(state, deadline.saturating_duration_since(Instant::now()))
+                .unwrap();
+            state = next;
+            assert!(
+                Instant::now() < deadline,
+                "active guest clock did not resume"
+            );
+        }
+        drop(state);
+        drop(active);
+        let ticks = engine.clock.state.lock().unwrap().ticks;
+        thread::sleep(Duration::from_millis(60));
+        assert_eq!(engine.clock.state.lock().unwrap().ticks, ticks);
     }
 }

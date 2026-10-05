@@ -8,17 +8,19 @@ use std::sync::{
 
 use nyaterm_core::plugins::invocation::{ActionInput, ActionResult, validate_input};
 use nyaterm_core::plugins::manifest::{ActionManifest, PluginManifest};
-use nyaterm_core::plugins::preferences::{PluginPreference, PluginPreferences};
+use nyaterm_core::plugins::preferences::PluginPreferences;
 use nyaterm_core::plugins::template::expand;
 use nyaterm_core::plugins::{ErrorCode, PluginError, PluginResult, PluginStatus, validate_id};
 use nyaterm_core::runtime::AppRuntime;
 use nyaterm_store::plugin_preferences::PluginPreferenceStore;
 
 use crate::package::{
-    Package, StagingDirectory, io_error, load, promote, reject_ancestor_links, reject_link,
-    snapshot,
+    Package, StagingDirectory, io_error, load, reject_ancestor_links, reject_link,
 };
 use crate::runtime::{CallTicket, RuntimeEngine, RuntimeInstance, RuntimeLimits, RuntimeToken};
+
+mod preparation;
+pub(crate) use preparation::PreparedChange;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PluginSource {
@@ -344,11 +346,8 @@ impl PluginManager {
     }
 
     pub fn update(&mut self, id: &str, source: &Path) -> PluginResult<String> {
-        let development = matches!(
-            self.entries.get(id).map(|e| &e.source),
-            Some(PluginSource::Development(_))
-        );
-        self.replace(source, development, Some(id))
+        let prepared = self.plan_update(id, source)?.run()?;
+        self.commit(prepared)
     }
 
     fn replace(
@@ -357,114 +356,32 @@ impl PluginManager {
         development: bool,
         expected: Option<&str>,
     ) -> PluginResult<String> {
-        self.ensure_active()?;
-        if development && !reject_link(source)?.is_dir() {
-            return Err(PluginError::new(
-                ErrorCode::InvalidManifest,
-                "Register a development directory, not an archive",
-            ));
-        }
-        let mut stage = StagingDirectory::new(&self.root.join("staging"))?;
-        snapshot(source, &stage.path)?;
-        let package = load(&stage.path, &self.host_version)?;
-        let id = package.manifest.id;
-        if expected.is_some_and(|expected| expected != id) {
-            return Err(PluginError::new(
-                ErrorCode::Conflict,
-                "Update package has a different plugin ID",
-            ));
-        }
-        if expected.is_none() && self.entries.contains_key(&id) {
-            return Err(PluginError::new(
-                ErrorCode::Conflict,
-                "Plugin is already installed; use Update",
-            ));
-        }
-        if expected.is_some() && !self.entries.contains_key(&id) {
-            return Err(PluginError::new(
-                ErrorCode::NotFound,
-                "Plugin is not installed",
-            ));
-        }
-        let enabled = self.entries.get(&id).is_none_or(|e| e.enabled);
-        let source_kind = if development {
-            PluginSource::Development(fs::canonicalize(source).map_err(|_| io_error())?)
-        } else {
-            PluginSource::Managed
-        };
-        let candidate = self.prepare(&stage.path, enabled, source_kind.clone())?;
-        let target = self.root.join("installed").join(&id);
-        let mut preferences = self.preferences.clone();
-        preferences.plugins.insert(
-            id.clone(),
-            PluginPreference {
-                enabled,
-                development_source: match source_kind {
-                    PluginSource::Managed => None,
-                    PluginSource::Development(path) => Some(path.to_string_lossy().into_owned()),
-                },
-            },
-        );
-        promote(&mut stage, &target, &self.root.join("staging"), || {
-            self.store.save(&preferences)
-        })?;
-        self.preferences = preferences;
-        // Candidate owns bytes/Store, not package handles. Retirement cannot stop
-        // the prepared candidate, and no old worker can publish into its lease.
-        if let Some(mut old) = self.entries.insert(id.clone(), candidate) {
-            old.retire();
-        }
-        Ok(id)
+        let prepared = self.plan_replace(source, development, expected)?.run()?;
+        self.commit(prepared)
     }
 
     pub fn reload(&mut self, id: &str) -> PluginResult<()> {
-        self.ensure_active()?;
-        validate_id(id)?;
-        let entry = self
-            .entries
-            .get(id)
-            .ok_or_else(|| PluginError::new(ErrorCode::NotFound, "Plugin is not installed"))?;
-        if let PluginSource::Development(source) = &entry.source {
-            let source = source.clone();
-            self.replace(&source, true, Some(id))?;
-        } else {
-            let candidate = self.prepare(
-                &self.root.join("installed").join(id),
-                entry.enabled,
-                entry.source.clone(),
-            )?;
-            if let Some(mut old) = self.entries.insert(id.into(), candidate) {
-                old.retire();
-            }
-        }
-        Ok(())
+        let prepared = self.plan_load(id, false)?.run()?;
+        self.commit(prepared).map(|_| ())
     }
 
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> PluginResult<()> {
-        self.ensure_active()?;
-        validate_id(id)?;
-        let entry = self
-            .entries
-            .get(id)
-            .ok_or_else(|| PluginError::new(ErrorCode::NotFound, "Plugin is not installed"))?;
-        let candidate = if enabled {
-            Some(self.prepare(
-                &self.root.join("installed").join(id),
-                true,
-                entry.source.clone(),
-            )?)
+        if enabled {
+            let prepared = self.plan_load(id, true)?.run()?;
+            self.commit(prepared)?;
         } else {
-            None
-        };
-        let mut preferences = self.preferences.clone();
-        preferences.plugins.entry(id.into()).or_default().enabled = enabled;
-        self.store.save(&preferences)?;
-        self.preferences = preferences;
-        if let Some(candidate) = candidate {
-            if let Some(mut old) = self.entries.insert(id.into(), candidate) {
-                old.retire();
+            self.ensure_active()?;
+            validate_id(id)?;
+            if !self.entries.contains_key(id) {
+                return Err(PluginError::new(
+                    ErrorCode::NotFound,
+                    "Plugin is not installed",
+                ));
             }
-        } else {
+            let mut preferences = self.preferences.clone();
+            preferences.plugins.entry(id.into()).or_default().enabled = false;
+            self.store.save(&preferences)?;
+            self.preferences = preferences;
             let revision = self.next_revision();
             let entry = self.entries.get_mut(id).unwrap();
             entry.retire();
@@ -595,5 +512,81 @@ impl PluginManager {
 impl Drop for PluginManager {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::manager::PluginManager;
+    use crate::runtime::RuntimeLimits;
+    use nyaterm_core::plugins::ErrorCode;
+    use nyaterm_core::test_support::TestTempDir;
+    use std::fs;
+
+    #[test]
+    fn prepared_update_cannot_overwrite_a_newer_registry_revision_or_preferences() {
+        let root = TestTempDir::new("nyaterm-preparation-revision");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("plugin.toml"), "schema_version = 1\nid = \"fixture\"\nname = \"Fixture\"\nversion = \"1.0.0\"\nauthors = []\ndescription = \"Fixture\"\nhost_version = \">=2.0.0-preview.4\"\napi_version = \"1.0.0\"\ncomponent = \"plugin.wasm\"\n[[actions]]\nid = \"count\"\nname = \"Count\"\ndescription = \"Count\"\nresult = \"text\"\n").unwrap();
+        fs::write(
+            source.join("plugin.wasm"),
+            include_bytes!("../tests/fixtures/lifecycle.wasm"),
+        )
+        .unwrap();
+        let host_root = root.join("host");
+        let mut manager = PluginManager::open(
+            host_root.clone(),
+            "2.0.0-preview.4",
+            RuntimeLimits::default(),
+        )
+        .unwrap();
+        manager.install(&source, false).unwrap();
+        let candidate = manager
+            .plan_update("fixture", &source)
+            .unwrap()
+            .run()
+            .unwrap();
+        manager.set_enabled("fixture", false).unwrap();
+        let current = manager.snapshot();
+        assert_eq!(
+            manager.commit(candidate).unwrap_err().code,
+            ErrorCode::Cancelled
+        );
+        assert!(manager.snapshot() == current);
+        drop(manager);
+        let manager =
+            PluginManager::open(host_root, "2.0.0-preview.4", RuntimeLimits::default()).unwrap();
+        assert!(!manager.snapshot().plugins[0].enabled);
+    }
+
+    #[test]
+    fn idle_zero_capacity_mailbox_shutdown_joins_without_a_polling_timeout() {
+        let root = TestTempDir::new("nyaterm-zero-capacity-shutdown");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let manifest = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/plugins/text-tools/plugin.toml"
+        ))
+        .unwrap();
+        fs::write(source.join("plugin.toml"), manifest).unwrap();
+        fs::write(
+            source.join("plugin.wasm"),
+            include_bytes!("../tests/fixtures/text-tools.wasm"),
+        )
+        .unwrap();
+        let mut manager = PluginManager::open(
+            root.join("host"),
+            "2.0.0-preview.4",
+            RuntimeLimits {
+                queue_capacity: 0,
+                ..RuntimeLimits::default()
+            },
+        )
+        .unwrap();
+        manager.install(&source, false).unwrap();
+        manager.shutdown();
+        assert!(manager.snapshot().stopped);
     }
 }

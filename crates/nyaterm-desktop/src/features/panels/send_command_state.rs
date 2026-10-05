@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::{App, AppContext as _, Entity};
+use nyaterm_core::command_draft::{DraftOrigin, DraftProvenance};
 use nyaterm_core::hex_document::{HexCopyFormat, format_hex};
 use nyaterm_transport::SessionKind;
 use nyaterm_ui::hex_editor::NyaHexEditorState;
@@ -26,6 +27,7 @@ pub(in crate::features) struct SendCommandFeatureState {
 /// The payload being composed and where the caret is.
 struct SendCommandComposerState {
     text_draft: String,
+    provenance: DraftProvenance,
     hex: Entity<NyaHexEditorState>,
     viewport_width: f32,
 }
@@ -56,6 +58,7 @@ struct SendCommandProgressState {
 #[derive(Clone)]
 pub(in crate::features) struct SendCommandPresentationState {
     pub draft: String,
+    pub provenance: DraftProvenance,
     pub hex: Entity<NyaHexEditorState>,
     pub viewport_width: f32,
     pub data_type: SendCommandDataType,
@@ -91,6 +94,7 @@ impl SendCommandFeatureState {
         Self {
             composer: SendCommandComposerState {
                 text_draft: String::new(),
+                provenance: DraftProvenance::default(),
                 hex: cx.new(NyaHexEditorState::new),
                 viewport_width: 0.,
             },
@@ -119,6 +123,11 @@ impl SendCommandFeatureState {
     pub(in crate::features) fn presentation(&self, cx: &App) -> SendCommandPresentationState {
         SendCommandPresentationState {
             draft: self.draft_for_send(false, cx),
+            provenance: if self.options.data_type == SendCommandDataType::Text {
+                self.composer.provenance.clone()
+            } else {
+                DraftProvenance::default()
+            },
             hex: self.composer.hex.clone(),
             viewport_width: self.composer.viewport_width,
             data_type: self.options.data_type,
@@ -169,6 +178,7 @@ impl SendCommandFeatureState {
         let text =
             std::str::from_utf8(self.composer.hex.read(cx).document().bytes()).map_err(|_| ())?;
         self.composer.text_draft = text.to_string();
+        self.composer.provenance = DraftProvenance::default();
         self.set_data_type(SendCommandDataType::Text);
         Ok(())
     }
@@ -214,7 +224,10 @@ impl SendCommandFeatureState {
 
     pub(in crate::features) fn clear_draft(&mut self, cx: &mut App) {
         match self.options.data_type {
-            SendCommandDataType::Text => self.composer.text_draft.clear(),
+            SendCommandDataType::Text => {
+                self.composer.text_draft.clear();
+                self.composer.provenance = DraftProvenance::default();
+            }
             SendCommandDataType::Hex => self.composer.hex.update(cx, |hex, cx| hex.clear(cx)),
         }
     }
@@ -246,6 +259,21 @@ impl SendCommandFeatureState {
     }
 
     pub(in crate::features) fn apply_draft(&mut self, text: String) {
+        if self.composer.text_draft != text {
+            self.composer.provenance.edit(text.is_empty());
+        }
+        self.composer.text_draft = text;
+    }
+
+    pub(in crate::features) fn fill_plugin_draft(
+        &mut self,
+        text: String,
+        origin: DraftOrigin,
+        replace: bool,
+    ) {
+        self.composer
+            .provenance
+            .fill(origin, replace, self.composer.text_draft.is_empty());
         self.composer.text_draft = text;
     }
 

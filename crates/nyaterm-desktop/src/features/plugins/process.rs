@@ -197,6 +197,16 @@ mod tests {
         assert!(
             matches!(invoke(&two), ActionResult::Command { title, .. } if title == "Diagnostic draft 2")
         );
+        // Other-plugin preparation no longer blocks this window's invocation.
+        // An ordered management request verifies the abandoned install commits.
+        block_on(
+            two.submit(PluginOperation::Reload {
+                id: "other-plugin".into(),
+            })
+            .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
         assert!(
             two.snapshot()
                 .contributions

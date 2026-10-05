@@ -52,6 +52,10 @@ send-box draft** explicitly replaces it. The send box opens, but neither action
 sends bytes, presses Enter, changes targets or chooses sessions. Stop any active
 send and select text mode first. Review the final draft and use NyaTerm's usual
 send controls yourself. Plugin contributions never modify saved QuickCommands.
+The text draft retains plugin/action IDs and revisions for its current lifetime.
+Appending preserves existing sources; replacing starts a new provenance record.
+Editing retains the source with an edited marker, and clearing removes it. The
+send-box footer displays plugin sources. This metadata is not persisted.
 
 For a local demonstration from a checkout:
 
@@ -208,6 +212,27 @@ The SDK embeds a `nyaterm:plugin-api` custom section. The host requires exactly
 one marker matching `1.0.0`, verifies actual typed component exports using the
 generated bindings, and calls the exported version function. A forged manifest
 or marker cannot authorize a different interface. Only this ABI is implemented.
+The versioned package declaration in `wit/plugin.wit` is the ABI authority. The
+SDK build generates the Rust version, host validation constants and marker bytes
+from it, including the marker length. The default `guest` feature exposes the
+SDK; `default-features = false` exposes only ABI constants for the core contracts.
+
+## Scheduling and shutdown
+
+The process registry blocks on explicit requests and runtime fault notifications.
+At most two background preparation threads copy/validate package snapshots,
+compile components and initialize guests. The registry serializes promotion and
+preference commits, checking the expected revision again before replacing an
+entry. Requests targeting the same plugin keep submission order; other plugins
+can invoke or prepare while that plugin prepares. New installations retain a
+management barrier until the package ID is known. Invocations of existing other
+plugins can still proceed during installation.
+
+Idle guest workers block on their mailboxes. The epoch clock parks whenever no
+guest calls are active, including initialization and bounded shutdown exports.
+Active calls retain fuel, memory and deadline enforcement. Shutdown explicitly
+wakes the registry and guest mailboxes, rejects queued requests, completes or
+rolls back started transactions, and joins all preparation/runtime workers.
 
 ## Build, debug and package
 

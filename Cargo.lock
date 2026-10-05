@@ -6443,6 +6443,7 @@ dependencies = [
  "hmac 0.13.0",
  "md5",
  "nyaterm-mcp-protocol",
+ "nyaterm-plugin-api",
  "percent-encoding",
  "quick-xml 0.40.1",
  "rand 0.10.3",

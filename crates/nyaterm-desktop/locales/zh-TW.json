@@ -3414,6 +3414,8 @@
     "replace": "取代命令傳送框草稿",
     "reuse": "將結果用作文字輸入",
     "draftFilled": "已填入草稿，請在傳送框中檢查後手動傳送。",
+    "draftOrigin": "外掛來源：%{source}",
+    "draftEdited": "已編輯",
     "installed": "已安裝（停用）",
     "enabled": "已啟用",
     "running": "執行中",
