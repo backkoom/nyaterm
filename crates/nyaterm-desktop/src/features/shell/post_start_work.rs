@@ -1,16 +1,5 @@
-//! Bootstrap work that has to wait for the app to fall calm.
-//!
-//! Two things want to run once session starts have settled: restoring the terminal
-//! window layout, and starting an auto-recording. Both open files or the config
-//! database, so both were gated on the app being calm -- no pending start, no output
-//! pressure, no window geometry churn, and past the connect-settle hold.
-//!
-//! That combination is why neither could simply be hung off the session-start drain
-//! the way the restore *queue* was in `64e1cc3f`. A start settling is the moment they
-//! become *eligible*, but connect settle is still active for
-//! `CONNECT_SETTLE_HOLD` afterwards, so a one-shot fired at that moment would find the
-//! gate closed, skip, and never come back. Hence a clock that retries until the gate
-//! opens, and retires as soon as there is nothing left to do.
+//! Layout restoration waits for startup and geometry to settle.
+//! Auto-recording is queued before session output delivery and does not use this clock.
 
 use std::time::{Duration, Instant};
 
@@ -67,7 +56,6 @@ impl NyaTermApp {
 
     pub(in crate::features) fn has_post_start_work(&self) -> bool {
         !self.terminal.terminal_windows_restore_is_complete()
-            || self.recording.has_pending_auto_start()
     }
 
     /// Returns whether the clock should keep running.
@@ -93,11 +81,6 @@ impl NyaTermApp {
                 self.reconcile_terminal_windows();
             }
         }
-        // Auto-recording opens files.
-        if let Some((session_id, session_name)) = self.recording.take_pending_auto_start() {
-            self.maybe_auto_start_recording(&session_id, &session_name, cx);
-        }
-
         // `try_restore_terminal_window_layout` may not complete in one pass, so ask
         // again rather than assuming this call finished the job.
         if self.has_post_start_work() {

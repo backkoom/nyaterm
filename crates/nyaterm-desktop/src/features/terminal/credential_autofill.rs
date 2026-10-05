@@ -49,6 +49,38 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn observe_recording_prompt_output(
+        &mut self,
+        session_id: &str,
+        text: &str,
+    ) {
+        self.recording.observe_prompt(session_id, text, |prompt| {
+            matches!(
+                credential_autofill_detect_prompt_kind(prompt),
+                Some(CredentialPromptKind::Password)
+            )
+        });
+    }
+
+    pub(in crate::features) fn recording_input_is_sensitive(&self, session_id: &str) -> bool {
+        // Inspect this session's prompt; active-session suggestion state cannot classify peers.
+        if self.recording.has_observed_prompt(session_id) {
+            return self.recording.input_is_sensitive(session_id);
+        }
+        self.terminal
+            .view
+            .views
+            .get(session_id)
+            .and_then(|view| view.frame_snapshot.as_deref())
+            .and_then(credential_autofill_prompt_text_from_snapshot)
+            .is_some_and(|prompt| {
+                matches!(
+                    credential_autofill_detect_prompt_kind(&prompt),
+                    Some(CredentialPromptKind::Password)
+                )
+            })
+    }
+
     pub(in crate::features) fn is_credential_prompt_input_mode(&self) -> bool {
         let now = Self::now_unix_ms();
         self.terminal.assist.credential_prompt_input_mode(now)

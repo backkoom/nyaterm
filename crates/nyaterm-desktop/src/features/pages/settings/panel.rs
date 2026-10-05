@@ -1920,6 +1920,7 @@ forward_app_action!(
     toggle_recording_auto_start,
     toggle_recording_binary_transfer_payloads,
     toggle_recording_io_labels,
+    toggle_recording_input,
     toggle_recording_session_metadata,
     toggle_recording_timestamps,
     toggle_remote_stats_panel,

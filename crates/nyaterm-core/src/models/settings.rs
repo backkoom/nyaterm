@@ -397,6 +397,8 @@ pub struct AppSettingsSummary {
     #[serde(default = "default_recording_path_template")]
     pub recording_path_template: String,
     pub recording_include_io_labels: bool,
+    #[serde(default)]
+    pub recording_include_input: bool,
     pub recording_include_timestamps: bool,
     #[serde(default = "default_true")]
     pub recording_include_session_metadata: bool,
@@ -599,6 +601,7 @@ impl Default for AppSettingsSummary {
             recording_default_mode: RecordingMode::Transcript,
             recording_path_template: default_recording_path_template(),
             recording_include_io_labels: true,
+            recording_include_input: false,
             recording_include_timestamps: true,
             recording_include_session_metadata: true,
             recording_rotation: RecordingRotationPolicy::Session,
@@ -963,6 +966,22 @@ mod tests {
             summary.ui_activity_bar_left_bottom,
             ["syncBackupHistory", "plugins", "settings"]
         );
+    }
+
+    #[test]
+    fn recording_input_is_explicit_opt_in_for_current_and_legacy_settings() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+        assert_eq!(value["recording_include_input"], false);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("recording_include_input");
+        let mut decoded: AppSettingsSummary = serde_json::from_value(value).unwrap();
+        assert!(!decoded.recording_include_input);
+        decoded.recording_include_input = true;
+        let roundtrip: AppSettingsSummary =
+            serde_json::from_str(&serde_json::to_string(&decoded).unwrap()).unwrap();
+        assert!(roundtrip.recording_include_input);
     }
 
     #[test]

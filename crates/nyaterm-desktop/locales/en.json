@@ -2552,6 +2552,8 @@
     "recordingExistingUnique": "Create unique file",
     "recordingIncludeBinaryTransfers": "Include binary transfer payloads",
     "recordingIncludeBinaryTransfersDesc": "When off, Raw logs suppress binary transfer payloads to avoid huge logs.",
+    "recordingIncludeInput": "Record user input",
+    "recordingIncludeInputDesc": "Off by default. Input may contain passwords or one-time codes that cannot always be detected. Raw input is saved separately as .input.bin. Changes apply to the next recording.",
     "recordingIncludeIoLabels": "Show INPUT/OUTPUT labels",
     "recordingIncludeIoLabelsDesc": "Include INPUT and OUTPUT markers in recording and saved session text files.",
     "recordingIncludeMetadata": "Include session metadata",

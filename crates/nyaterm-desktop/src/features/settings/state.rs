@@ -670,6 +670,10 @@ impl SettingsFeatureState {
         };
     }
 
+    pub(in crate::features) fn toggle_recording_input(&mut self) {
+        self.summary.recording_include_input = !self.summary.recording_include_input;
+    }
+
     pub(in crate::features) fn toggle_recording_io_labels(&mut self) {
         self.summary.recording_include_io_labels = !self.summary.recording_include_io_labels;
     }

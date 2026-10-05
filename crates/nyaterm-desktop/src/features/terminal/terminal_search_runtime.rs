@@ -590,17 +590,25 @@ impl NyaTermApp {
         match event {
             RecordingWriteEvent::Status(status) => {
                 let state = status.state;
+                let previous_state = self
+                    .recording
+                    .status(&status.session_id)
+                    .map(|status| status.state);
                 let last_error = status.last_error.clone();
                 self.recording.apply_status(status);
                 match state {
-                    nyaterm_transport::RecordingStatusState::Degraded => {
+                    nyaterm_transport::RecordingStatusState::Degraded
+                        if previous_state != Some(state) =>
+                    {
                         self.shell.set_status(format!(
                             "recording degraded: {}",
                             last_error
                                 .unwrap_or_else(|| "some recording data was lost".to_string())
                         ));
                     }
-                    nyaterm_transport::RecordingStatusState::Failed => {
+                    nyaterm_transport::RecordingStatusState::Failed
+                        if previous_state != Some(state) =>
+                    {
                         self.shell.set_status(format!(
                             "recording failed: {}",
                             last_error.unwrap_or_else(|| "writer failed".to_string())
@@ -608,8 +616,16 @@ impl NyaTermApp {
                     }
                     nyaterm_transport::RecordingStatusState::Starting
                     | nyaterm_transport::RecordingStatusState::Recording
-                    | nyaterm_transport::RecordingStatusState::Stopping => {}
+                    | nyaterm_transport::RecordingStatusState::Stopping
+                    | nyaterm_transport::RecordingStatusState::Degraded
+                    | nyaterm_transport::RecordingStatusState::Failed => {}
                 }
+                true
+            }
+            RecordingWriteEvent::PendingStatus { .. }
+            | RecordingWriteEvent::PendingHistorySearch { .. } => false,
+            RecordingWriteEvent::ShutdownError(error) => {
+                self.shell.set_status(format!("recording failed: {error}"));
                 true
             }
             RecordingWriteEvent::StatusRemoved { session_id } => {

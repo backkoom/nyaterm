@@ -194,9 +194,18 @@ pub(in crate::features) struct TerminalOverlayVisibility {
 }
 
 impl TerminalFeatureState {
-    pub(in crate::features) fn shutdown_workers(&mut self) {
+    pub(in crate::features) fn recording_output_fence(
+        &self,
+    ) -> impl FnOnce() -> Result<(), String> + Send + 'static {
+        let pipeline = self.view.frame_pipeline.clone();
+        move || pipeline.finish_pending_output()
+    }
+
+    pub(in crate::features) fn take_frame_shutdown(
+        &mut self,
+    ) -> Option<impl FnOnce() + Send + 'static> {
         self.assist.shutdown_workers();
-        self.view.frame_pipeline.shutdown();
+        self.view.frame_pipeline.take_shutdown()
     }
 
     #[allow(clippy::too_many_arguments)]

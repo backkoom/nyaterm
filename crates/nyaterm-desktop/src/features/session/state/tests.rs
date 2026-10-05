@@ -80,6 +80,7 @@ fn session_state_with_runtime(
     let event_bridge = SessionEventBridge::spawn(
         Arc::clone(&manager),
         TerminalFramePipeline::default(),
+        None,
         "utf-8".to_string(),
         10_000,
     );
@@ -443,6 +444,7 @@ fn session_state_owns_live_runtime_and_initializes_transient_state() {
     let event_bridge = SessionEventBridge::spawn(
         Arc::clone(&manager),
         TerminalFramePipeline::default(),
+        None,
         "utf-8".to_string(),
         10_000,
     );

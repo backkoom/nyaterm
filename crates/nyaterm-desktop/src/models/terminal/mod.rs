@@ -1388,6 +1388,7 @@ impl KeywordHighlightEditorField {
 
 #[derive(Debug)]
 pub(crate) struct TerminalFramePipeline {
+    recording_writer: RecordingWriteHandle,
     command_tx: TerminalFrameCommandSender,
     event_queue: TerminalFrameEventQueue,
     event_wake_rx: Arc<Mutex<Option<UnboundedReceiver<()>>>>,
@@ -1396,6 +1397,8 @@ pub(crate) struct TerminalFramePipeline {
 }
 
 pub(crate) struct TerminalFrameOutputSubmission {
+    /// Set by ingress capture before charset decoding or UI output processing.
+    pub(crate) raw_already_captured: bool,
     pub(crate) session_id: String,
     pub(crate) data: Vec<u8>,
     pub(crate) encoding: String,
@@ -1435,13 +1438,19 @@ impl TerminalFramePipeline {
         let (event_queue, event_wake_rx) =
             TerminalFrameEventQueue::new_with_wake(TERMINAL_FRAME_EVENT_QUEUE_CAP);
         let event_queue_for_worker = event_queue.clone();
+        let worker_recording_writer = recording_writer.clone();
         let worker = thread::Builder::new()
             .name("nyaterm-terminal-frame-processor".to_string())
             .spawn(move || {
-                run_terminal_frame_processor(command_rx, event_queue_for_worker, recording_writer)
+                run_terminal_frame_processor(
+                    command_rx,
+                    event_queue_for_worker,
+                    worker_recording_writer,
+                )
             })
             .expect("failed to spawn terminal frame processor");
         Self {
+            recording_writer,
             command_tx,
             event_queue,
             event_wake_rx: Arc::new(Mutex::new(Some(event_wake_rx))),
@@ -1600,6 +1609,7 @@ impl TerminalFramePipeline {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn submit_output(
         &self,
         session_id: impl Into<String>,
@@ -1607,22 +1617,37 @@ impl TerminalFramePipeline {
         encoding: impl Into<String>,
         scrollback_limit: usize,
     ) {
-        if data.is_empty() {
-            return;
-        }
-        let _ = self.command_tx.send_many(terminal_frame_output_commands(
-            TerminalFrameOutputSubmission {
-                session_id: session_id.into(),
-                data,
-                encoding: encoding.into(),
-                scrollback_limit,
-            },
-        ));
+        self.submit_outputs(vec![TerminalFrameOutputSubmission {
+            session_id: session_id.into(),
+            data,
+            encoding: encoding.into(),
+            scrollback_limit,
+            raw_already_captured: false,
+        }]);
+    }
+
+    pub(crate) fn submit_captured_output(
+        &self,
+        session_id: impl Into<String>,
+        data: Vec<u8>,
+        encoding: impl Into<String>,
+        scrollback_limit: usize,
+    ) {
+        self.submit_outputs(vec![TerminalFrameOutputSubmission {
+            session_id: session_id.into(),
+            data,
+            encoding: encoding.into(),
+            scrollback_limit,
+            raw_already_captured: true,
+        }]);
     }
 
     pub(crate) fn submit_outputs(&self, outputs: Vec<TerminalFrameOutputSubmission>) {
-        if outputs.is_empty() {
-            return;
+        for output in &outputs {
+            if !output.raw_already_captured {
+                self.recording_writer
+                    .write_raw_output(&output.session_id, &output.data);
+            }
         }
         let commands = outputs.into_iter().flat_map(terminal_frame_output_commands);
         let _ = self.command_tx.send_many(commands);
@@ -1742,14 +1767,22 @@ impl TerminalFramePipeline {
     /// event wakes, while tests need deterministic completion without sleeps.
     #[cfg(test)]
     pub(crate) fn flush_for_test(&self) {
+        self.finish_pending_output()
+            .expect("terminal frame worker did not reach fence");
+    }
+
+    /// Called only from background jobs so stop/export include already submitted output.
+    pub(crate) fn finish_pending_output(&self) -> Result<(), String> {
         let (complete_tx, complete_rx) = std::sync::mpsc::sync_channel(0);
-        assert!(
-            self.command_tx
-                .send(TerminalFrameCommand::Fence { complete_tx })
-        );
+        if !self
+            .command_tx
+            .send(TerminalFrameCommand::Fence { complete_tx })
+        {
+            return Err("terminal frame worker stopped".into());
+        }
         complete_rx
             .recv_timeout(Duration::from_secs(10))
-            .expect("terminal frame worker did not reach test fence before watchdog timeout");
+            .map_err(|_| "terminal frame worker did not reach recording fence".into())
     }
 
     pub(crate) fn drain_events_into(
@@ -1772,18 +1805,26 @@ impl TerminalFramePipeline {
         self.command_tx.queued_output_bytes()
     }
 
-    pub(crate) fn shutdown(&mut self) {
-        self.event_queue.close();
-        self.command_tx.close();
+    pub(crate) fn take_shutdown(&mut self) -> Option<impl FnOnce() + Send + 'static> {
         let worker = self
             .worker
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        if let Some(worker) = worker
-            && worker.join().is_err()
-        {
-            tracing::warn!("terminal frame worker panicked during shutdown");
+            .take()?;
+        let commands = self.command_tx.clone();
+        let events = self.event_queue.clone();
+        Some(move || {
+            commands.close();
+            events.close();
+            if worker.join().is_err() {
+                tracing::warn!("terminal frame worker panicked during shutdown");
+            }
+        })
+    }
+
+    pub(crate) fn shutdown(&mut self) {
+        if let Some(shutdown) = self.take_shutdown() {
+            shutdown();
         }
     }
 }
@@ -1792,6 +1833,7 @@ impl Clone for TerminalFramePipeline {
     fn clone(&self) -> Self {
         self.handle_count.fetch_add(1, Ordering::Relaxed);
         Self {
+            recording_writer: self.recording_writer.clone(),
             command_tx: self.command_tx.clone(),
             event_queue: self.event_queue.clone(),
             event_wake_rx: self.event_wake_rx.clone(),
@@ -1903,7 +1945,6 @@ enum TerminalFrameCommand {
     SetSnapshotPriority {
         session_ids: Vec<String>,
     },
-    #[cfg(test)]
     Fence {
         complete_tx: std::sync::mpsc::SyncSender<()>,
     },
@@ -3371,7 +3412,6 @@ fn terminal_frame_command_is_fence(_command: &TerminalFrameCommand) -> bool {
     if matches!(_command, TerminalFrameCommand::RekeySession { .. }) {
         return true;
     }
-    #[cfg(test)]
     if matches!(_command, TerminalFrameCommand::Fence { .. }) {
         return true;
     }
@@ -3832,7 +3872,6 @@ fn run_terminal_frame_processor(
                     );
                 }
             }
-            #[cfg(test)]
             TerminalFrameCommand::Fence { complete_tx } => {
                 let _ = complete_tx.send(());
             }

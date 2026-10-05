@@ -2552,6 +2552,8 @@
     "recordingExistingUnique": "创建唯一文件",
     "recordingIncludeBinaryTransfers": "包含二进制传输载荷",
     "recordingIncludeBinaryTransfersDesc": "关闭时，Raw 日志会抑制二进制传输载荷，避免日志过大。",
+    "recordingIncludeInput": "录制用户输入",
+    "recordingIncludeInputDesc": "默认关闭。输入可能包含无法可靠识别的密码或一次性验证码。Raw 输入另存为 .input.bin 文件。修改对下一次录制生效。",
     "recordingIncludeIoLabels": "显示 INPUT/OUTPUT 标识",
     "recordingIncludeIoLabelsDesc": "在录制文件和保存的会话文本中包含 INPUT 与 OUTPUT 标识。",
     "recordingIncludeMetadata": "包含会话元数据",

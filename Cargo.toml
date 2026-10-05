@@ -53,6 +53,8 @@ digest = "0.11.0-rc.5"
 dirs = "6"
 encoding_rs = "0.8"
 futures = "0.3"
+same-file = "1"
+tempfile = "3"
 glob = "0.3.4"
 gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "0544bd292a52fed9718e1ba9739c4ac82c41d223" }
 gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "04efb01f5c19fbb77c575632c9f09f30aadccc38" }

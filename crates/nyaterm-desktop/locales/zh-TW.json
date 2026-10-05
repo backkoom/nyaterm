@@ -2552,6 +2552,8 @@
     "recordingExistingUnique": "建立唯一檔案",
     "recordingIncludeBinaryTransfers": "包含二進位傳輸內容",
     "recordingIncludeBinaryTransfersDesc": "關閉時，Raw 日誌會抑制 ZMODEM 檔案內容，避免產生巨大日誌。",
+    "recordingIncludeInput": "錄製使用者輸入",
+    "recordingIncludeInputDesc": "預設關閉。輸入可能包含無法可靠辨識的密碼或一次性驗證碼。Raw 輸入另存為 .input.bin 檔案。修改於下一次錄製生效。",
     "recordingIncludeIoLabels": "顯示 INPUT/OUTPUT 標識",
     "recordingIncludeIoLabelsDesc": "在錄製檔案和儲存的工作階段文字中包含 INPUT 與 OUTPUT 標識。",
     "recordingIncludeMetadata": "包含工作階段中繼資料",

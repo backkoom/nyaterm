@@ -87,6 +87,7 @@ fn selected_occurrence_test_session(cols: u16, lines: usize, text: &str) -> Term
 fn terminal_frame_output_submission_is_a_single_command() {
     let data = vec![b'x'; TERMINAL_FRAME_OUTPUT_CHUNK_SIZE * 2 + 5];
     let command = terminal_frame_output_commands(TerminalFrameOutputSubmission {
+        raw_already_captured: true,
         session_id: "s1".to_string(),
         data: data.clone(),
         encoding: "UTF-8".to_string(),
@@ -104,6 +105,7 @@ fn terminal_frame_output_submission_is_a_single_command() {
 #[test]
 fn terminal_frame_empty_output_submission_produces_no_command() {
     let command = terminal_frame_output_commands(TerminalFrameOutputSubmission {
+        raw_already_captured: true,
         session_id: "s1".to_string(),
         data: Vec::new(),
         encoding: "UTF-8".to_string(),

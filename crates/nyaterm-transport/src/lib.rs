@@ -177,10 +177,10 @@ pub use local_fs::{LocalDirectoryChild, LocalFileService};
 pub use reconnect_cwd::build_ssh_reconnect_cwd_command;
 pub use recording::{
     DEFAULT_HISTORY_SEARCH_LIMIT, DEFAULT_HISTORY_SEARCH_LINES, DEFAULT_MEMORY_LIMIT_BYTES,
-    ExistingFileBehavior, MAX_HISTORY_SEARCH_LINES, RecordingContext, RecordingError,
-    RecordingManager, RecordingMode, RecordingProfile, RecordingRotationPolicy, RecordingStatus,
-    RecordingStatusState, TerminalHistorySearchRequest, TerminalHistorySearchResponse,
-    TerminalHistorySearchResult, safe_recording_name,
+    ExistingFileBehavior, MAX_HISTORY_SEARCH_LINES, RecordingCapturePolicy, RecordingCompletion,
+    RecordingContext, RecordingError, RecordingManager, RecordingMode, RecordingProfile,
+    RecordingRotationPolicy, RecordingStatus, RecordingStatusState, TerminalHistorySearchRequest,
+    TerminalHistorySearchResponse, TerminalHistorySearchResult, safe_recording_name,
 };
 pub use remote_file::{
     FileCopyRequest, FileCopySummary, FileTransferEndpoint, RemoteFileBackendKind,

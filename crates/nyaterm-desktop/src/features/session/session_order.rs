@@ -25,12 +25,14 @@ impl NyaTermApp {
     ) {
         let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
         let is_terminal = encoding.is_some();
-        self.session.register_session_metadata_for_start(
+        self.session.prepare_session_metadata_for_start(
             session_id,
             metadata,
             tab_placement,
             insert_index,
         );
+        self.queue_auto_recording(session_id);
+        self.session.claim_session_events(session_id);
         self.finish_session_registration(session_id, encoding, is_terminal);
         if let Some(placement) = tab_placement {
             self.terminal
@@ -70,7 +72,9 @@ impl NyaTermApp {
     ) {
         let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
         self.session
-            .register_provisional_reconnect(session_id, metadata);
+            .prepare_provisional_reconnect(session_id, metadata);
+        self.queue_auto_recording(session_id);
+        self.session.claim_session_events(session_id);
         self.sync_session_event_bridge_config();
         if let Some(encoding) = encoding {
             self.terminal.ensure_frame_session(

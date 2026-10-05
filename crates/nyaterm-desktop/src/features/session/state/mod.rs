@@ -380,7 +380,12 @@ impl SessionFeatureState {
         self.ssh_connections.clone()
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn shutdown_workers(&mut self) {
+        self.take_shutdown()();
+    }
+
+    pub(in crate::features) fn take_shutdown(&mut self) -> impl FnOnce() + Send + 'static {
         // Reject late worker results so their pending-session guards clean up
         // before the background shutdown barrier, even if the window is gone.
         self.start.tx.close_channel();
@@ -388,8 +393,12 @@ impl SessionFeatureState {
         for id in pending_ids {
             self.start.close_pending(&id);
         }
-        self.protocols.shutdown_workers();
-        self.event_bridge.shutdown();
+        let mut protocols = std::mem::take(&mut self.protocols);
+        let bridge_shutdown = self.event_bridge.take_shutdown();
+        move || {
+            bridge_shutdown();
+            protocols.shutdown_workers();
+        }
     }
 
     pub(in crate::features) fn new(
@@ -1321,7 +1330,21 @@ impl SessionFeatureState {
         tab_placement: Option<SessionStartTabPlacement>,
         insert_index: Option<usize>,
     ) {
+        self.prepare_session_metadata_for_start(session_id, metadata, tab_placement, insert_index);
         self.event_bridge.claim_session(session_id);
+    }
+
+    pub(in crate::features) fn claim_session_events(&self, session_id: &str) {
+        self.event_bridge.claim_session(session_id);
+    }
+
+    pub(in crate::features) fn prepare_session_metadata_for_start(
+        &mut self,
+        session_id: &str,
+        metadata: SessionRuntimeMetadata,
+        tab_placement: Option<SessionStartTabPlacement>,
+        insert_index: Option<usize>,
+    ) {
         if !self.order.iter().any(|id| id == session_id) {
             self.order.push(session_id.to_string());
         }
@@ -1350,12 +1373,21 @@ impl SessionFeatureState {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn register_provisional_reconnect(
         &mut self,
         session_id: &str,
         metadata: SessionRuntimeMetadata,
     ) {
+        self.prepare_provisional_reconnect(session_id, metadata);
         self.event_bridge.claim_session(session_id);
+    }
+
+    pub(in crate::features) fn prepare_provisional_reconnect(
+        &mut self,
+        session_id: &str,
+        metadata: SessionRuntimeMetadata,
+    ) {
         self.metadata.insert(session_id.to_string(), metadata);
     }
 

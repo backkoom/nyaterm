@@ -311,6 +311,13 @@ impl NyaTermApp {
                 output_event_count += 1;
                 processed_output_bytes = processed_output_bytes.saturating_add(data.len());
                 let mut chunk_timings = SessionEventDrainTimings::default();
+                let writer = self.recording.writer();
+                if !writer
+                    .capture_policy(&session_id)
+                    .include_binary_transfer_payloads
+                {
+                    writer.write_raw_output(&session_id, &data);
+                }
                 self.handle_session_output_after_sideband(
                     &session_id,
                     data,
@@ -401,7 +408,7 @@ impl NyaTermApp {
             .note_session_output_discontinuity(session_id.clone(), &encoding, bytes);
         let marker = terminal_output_dropped_marker(bytes);
         self.recording
-            .write_output(session_id.clone(), marker.clone());
+            .write_local_message(session_id.clone(), marker.clone());
         self.append_terminal_log_for_session(Some(&session_id), &marker, true);
         if self.session.active_id() == Some(session_id.as_str()) {
             self.shell.set_status(format!(
@@ -433,7 +440,8 @@ impl NyaTermApp {
         let log_reason = terminal_log_plain_text(&reason);
         let log = format!("\n# session disconnected: {log_reason}\n");
         if known_session {
-            self.recording.write_output(session_id.clone(), log.clone());
+            self.recording
+                .write_local_message(session_id.clone(), log.clone());
             self.append_terminal_log_for_session(Some(&session_id), &log, true);
         }
         self.clear_trzsz_session(&session_id);
@@ -469,7 +477,8 @@ impl NyaTermApp {
         let log = format!("\n# session error: {log_message}\n");
         if !session_id.is_empty() {
             self.sync_session_event_bridge_session_policy(&session_id);
-            self.recording.write_output(session_id.clone(), log.clone());
+            self.recording
+                .write_local_message(session_id.clone(), log.clone());
         }
         if session_id.is_empty() || self.session.active_id() == Some(session_id.as_str()) {
             self.shell.set_status(format!("session error: {message}"));
@@ -493,6 +502,13 @@ impl NyaTermApp {
                 chunk_duration: Duration::ZERO,
                 root_chrome_dirty: false,
             };
+        }
+        let recording_writer = self.recording.writer();
+        let include_transfer_payloads = recording_writer
+            .capture_policy(&session_id)
+            .include_binary_transfer_payloads;
+        if include_transfer_payloads {
+            recording_writer.write_raw_output(&session_id, &data);
         }
         let chunk_started_at = Instant::now();
         let chunk_input_bytes = data.len();
@@ -559,6 +575,9 @@ impl NyaTermApp {
             }
             data
         };
+        if !include_transfer_payloads {
+            recording_writer.write_raw_output(&session_id, &data);
+        }
         self.handle_session_output_after_sideband(
             &session_id,
             data,
@@ -727,5 +746,81 @@ impl NyaTermApp {
         !self.xymodem_transfer_active(session_id)
             && self.zmodem_output_can_bypass_detector(session_id, data)
             && self.trzsz_output_can_bypass_detector(session_id, data)
+    }
+}
+
+#[cfg(test)]
+mod recording_tests {
+    use crate::features::shell::event_pump::helpers::SessionEventDrainTimings;
+    use crate::features::test_support::app_with_visible_local_session;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_transport::{
+        ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
+        RecordingRotationPolicy,
+    };
+
+    #[test]
+    fn raw_ui_output_is_captured_before_decode_and_transfer_filter_obeys_profile() {
+        for include_binary in [false, true] {
+            let root = TestTempDir::new("nyaterm-raw-ui-filter");
+            let mut cx = TestAppContext::single();
+            let app = app_with_visible_local_session(&mut cx, root.path(), "raw");
+            cx.update_entity(&app, |app, cx| {
+                let path = root.join("output.log");
+                app.recording
+                    .writer()
+                    .start(
+                        "raw".into(),
+                        RecordingContext {
+                            session_id: "raw".into(),
+                            session_name: "synthetic".into(),
+                            connection_id: None,
+                            connection_name: None,
+                            group_path: None,
+                            protocol: "terminal".into(),
+                            host: None,
+                            port: None,
+                            username: None,
+                            started_at: time::OffsetDateTime::now_utc(),
+                        },
+                        RecordingProfile {
+                            mode: RecordingMode::Raw,
+                            base_path: root.path().into(),
+                            path_template: "unused.log".into(),
+                            include_timestamps: false,
+                            include_io_labels: false,
+                            include_session_metadata: false,
+                            rotation: RecordingRotationPolicy::Session,
+                            existing_file_behavior: ExistingFileBehavior::Unique,
+                            include_binary_transfer_payloads: include_binary,
+                            include_input: false,
+                        },
+                        Some(path.clone()),
+                        4096,
+                    )
+                    .unwrap();
+                let mut outputs = Vec::new();
+                let mut timings = SessionEventDrainTimings::default();
+                for data in [b"\xb2\xe2\xff\x1b[31m".to_vec(), b":".to_vec()] {
+                    app.handle_session_output_event(
+                        "raw".into(),
+                        data,
+                        &mut outputs,
+                        &mut timings,
+                        cx,
+                    );
+                }
+                app.flush_pending_session_frame_outputs(&mut outputs, &mut timings);
+                app.terminal.recording_output_fence()().unwrap();
+                app.recording.writer().stop_complete("raw".into()).unwrap();
+                let expected = if include_binary {
+                    b"\xb2\xe2\xff\x1b[31m:".as_slice()
+                } else {
+                    b"\xb2\xe2\xff\x1b[31m".as_slice()
+                };
+                assert_eq!(std::fs::read(path).unwrap(), expected);
+            });
+        }
     }
 }

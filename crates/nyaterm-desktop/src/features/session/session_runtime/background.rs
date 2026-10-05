@@ -698,7 +698,8 @@ impl NyaTermApp {
                 } else {
                     true
                 };
-                if reconnect_session_id.is_some() {
+                if let Some(old_id) = reconnect_session_id.as_deref() {
+                    self.recording.rekey_session(old_id, &session_id);
                     self.register_session_for_reconnect(&session_id, metadata);
                 } else {
                     self.register_session_for_start(
@@ -782,11 +783,6 @@ impl NyaTermApp {
                 ));
                 // Do not append local log text through the full terminal decode path
                 // on connect success — that competes with the first SSH/PTY frames.
-                // Auto-recording file open is deferred to the idle plane.
-                if self.settings.summary().recording_auto_start {
-                    self.recording
-                        .schedule_auto_start(session_id.clone(), session_info.name.clone());
-                }
                 self.apply_workspace_split_for_duplicate(cx, workspace_split, &session_id);
                 if let Some(startup_command) = pending.and_then(|pending| pending.startup_command) {
                     self.schedule_startup_command(session_id.clone(), startup_command, cx);
@@ -914,7 +910,6 @@ impl NyaTermApp {
         }
 
         self.migrate_reconnected_session_state(old_id, new_id, cx);
-        self.recording.rekey_session(old_id, new_id);
         self.remove_session_state(old_id, cx);
         self.persist_workspace_pane_layout();
         self.persist_terminal_window_layout();

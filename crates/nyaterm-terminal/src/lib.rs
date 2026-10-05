@@ -20,6 +20,7 @@ mod encoding;
 mod graphics;
 mod kitty_payload;
 pub mod navigation;
+pub mod recording_sanitizer;
 mod sixel;
 pub use cells::{
     TerminalTextCell, terminal_byte_index_for_cell_col, terminal_cell_col_for_byte_index,

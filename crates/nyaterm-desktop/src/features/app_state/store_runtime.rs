@@ -156,11 +156,20 @@ impl NyaTermApp {
         self.remote_desktop.routes.clear();
         self.remote_desktop.prepared_routes.clear();
         self.shutdown_remote_desktop_workers();
-        self.session.shutdown_workers();
-        self.terminal.shutdown_workers();
-        self.recording.shutdown_worker();
+        let session_shutdown = self.session.take_shutdown();
+        let frame_worker = self.terminal.take_frame_shutdown();
+        let recording_shutdown = self.recording.take_shutdown();
         self.transfer.shutdown_external_editor_watchers();
         cx.background_spawn(async move {
+            session_shutdown();
+            if let Some(shutdown) = frame_worker {
+                shutdown();
+            }
+            if let Some(shutdown) = recording_shutdown {
+                for error in shutdown() {
+                    tracing::warn!(%error, "recording shutdown failed");
+                }
+            }
             if let Some(worker) = agent_worker {
                 let _ = worker.join();
             }

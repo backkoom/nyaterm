@@ -496,6 +496,7 @@ impl ConnectionStore {
                 &["recording", "include_io_labels"],
                 true,
             ),
+            recording_include_input: json_bool(&value, &["recording", "include_input"], false),
             recording_include_timestamps: json_bool(
                 &value,
                 &["recording", "include_timestamps"],
@@ -662,6 +663,11 @@ impl ConnectionStore {
             &mut value,
             &["recording", "include_io_labels"],
             serde_json::Value::Bool(settings.recording_include_io_labels),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["recording", "include_input"],
+            serde_json::Value::Bool(settings.recording_include_input),
         );
         set_nested_json_value(
             &mut value,

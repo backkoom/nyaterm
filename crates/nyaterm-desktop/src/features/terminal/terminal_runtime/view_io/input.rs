@@ -829,7 +829,19 @@ impl NyaTermApp {
             self.record_terminal_session_write_failure(session_id, "input", &error);
             return Err(error);
         }
-        if disposition.record_logical_input {
+        if disposition.record_logical_input
+            && self
+                .recording
+                .writer()
+                .capture_policy(session_id)
+                .include_input
+            && !self.recording_input_is_sensitive(session_id)
+        {
+            let policy = self.recording.writer().capture_policy(session_id);
+            if policy.mode == nyaterm_transport::RecordingMode::Raw {
+                self.recording.write_raw_input(session_id, encoded);
+                return Ok(());
+            }
             if let Some(line) = terminal_line {
                 self.recording
                     .resync_input_line(session_id.to_string(), line);
@@ -861,7 +873,14 @@ impl NyaTermApp {
             self.record_terminal_session_write_failure(session_id, "raw input", &error);
             return Err(error);
         }
-        if disposition.record_raw_input {
+        if disposition.record_raw_input
+            && self
+                .recording
+                .writer()
+                .capture_policy(session_id)
+                .include_input
+            && !self.recording_input_is_sensitive(session_id)
+        {
             self.recording
                 .write_raw_input(session_id.to_string(), bytes.to_vec());
         }
@@ -954,9 +973,24 @@ impl NyaTermApp {
             self.record_terminal_session_write_failure(session_id, "framed input", &error);
             return Err(error);
         }
-        if disposition.record_logical_input {
-            self.recording
-                .write_input(session_id.to_string(), recording_bytes.to_vec());
+        if disposition.record_logical_input
+            && self
+                .recording
+                .writer()
+                .capture_policy(session_id)
+                .include_input
+            && !self.recording_input_is_sensitive(session_id)
+        {
+            let policy = self.recording.writer().capture_policy(session_id);
+            if policy.include_input {
+                if policy.mode == nyaterm_transport::RecordingMode::Raw {
+                    self.recording
+                        .write_raw_input(session_id, wire_bytes.to_vec());
+                } else {
+                    self.recording
+                        .write_input(session_id, recording_bytes.to_vec());
+                }
+            }
         }
         Ok(())
     }
@@ -1004,7 +1038,7 @@ impl NyaTermApp {
         }
         let log = terminal_session_write_failure_log(context, error);
         self.recording
-            .write_output(session_id.to_string(), log.clone());
+            .write_local_message(session_id.to_string(), log.clone());
         self.append_terminal_log_for_session(Some(session_id), &log, true);
     }
 

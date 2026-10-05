@@ -704,6 +704,13 @@ impl NyaTermApp {
     ) -> bool {
         let mut root_chrome_dirty = false;
         if !event.passthrough.is_empty() {
+            let writer = self.recording.writer();
+            if !writer
+                .capture_policy(session_id)
+                .include_binary_transfer_payloads
+            {
+                writer.write_raw_output(session_id, &event.passthrough);
+            }
             self.submit_terminal_frame_output(session_id, event.passthrough);
         }
         for response in event.responses {

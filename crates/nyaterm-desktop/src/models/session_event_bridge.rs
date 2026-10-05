@@ -13,7 +13,7 @@ use nyaterm_transport::{
 };
 
 use super::event_wake::{ANY_INTEREST, EventWake};
-use super::{TerminalFrameOutputSubmission, TerminalFramePipeline};
+use super::{RecordingWriteHandle, TerminalFrameOutputSubmission, TerminalFramePipeline};
 
 const SESSION_EVENT_BRIDGE_DRAIN_BATCH: usize = 512;
 const SESSION_EVENT_BRIDGE_OUTPUT_BUDGET: usize = 128 * 1024;
@@ -118,6 +118,7 @@ impl SessionEventBridge {
     pub(crate) fn spawn(
         session_manager: Arc<SessionManager>,
         frame_pipeline: TerminalFramePipeline,
+        recording_writer: Option<RecordingWriteHandle>,
         encoding: String,
         scrollback_limit: usize,
     ) -> Self {
@@ -149,7 +150,13 @@ impl SessionEventBridge {
         let worker = thread::Builder::new()
             .name("nyaterm-session-event-bridge".to_string())
             .spawn(move || {
-                run_session_event_bridge(worker_manager, consumer_id, frame_pipeline, worker_state)
+                run_session_event_bridge(
+                    worker_manager,
+                    consumer_id,
+                    frame_pipeline,
+                    recording_writer,
+                    worker_state,
+                )
             })
             .expect("failed to spawn session event bridge");
         Self {
@@ -340,23 +347,31 @@ impl SessionEventBridge {
         }
     }
 
-    pub(crate) fn shutdown(&mut self) {
+    pub(crate) fn take_shutdown(&mut self) -> impl FnOnce() + Send + 'static {
         self.state.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take()
-            && worker.join().is_err()
-        {
-            tracing::warn!("session event bridge panicked during shutdown");
+        let worker = self.worker.take();
+        let state = Arc::clone(&self.state);
+        let manager = Arc::clone(&self.session_manager);
+        let consumer_id = self.consumer_id;
+        move || {
+            if let Some(worker) = worker
+                && worker.join().is_err()
+            {
+                tracing::warn!("session event bridge panicked during shutdown");
+            }
+            let owned_sessions = state
+                .control
+                .lock()
+                .map(|mut control| std::mem::take(&mut control.owned_sessions))
+                .unwrap_or_default();
+            for session_id in owned_sessions {
+                manager.clear_session_event_consumer(&session_id, consumer_id);
+            }
         }
-        let owned_sessions = self
-            .state
-            .control
-            .lock()
-            .map(|mut control| std::mem::take(&mut control.owned_sessions))
-            .unwrap_or_default();
-        for session_id in owned_sessions {
-            self.session_manager
-                .clear_session_event_consumer(&session_id, self.consumer_id);
-        }
+    }
+
+    pub(crate) fn shutdown(&mut self) {
+        self.take_shutdown()();
     }
 }
 
@@ -587,6 +602,7 @@ fn run_session_event_bridge(
     session_manager: Arc<SessionManager>,
     consumer_id: SessionEventConsumerId,
     frame_pipeline: TerminalFramePipeline,
+    recording_writer: Option<RecordingWriteHandle>,
     state: Arc<SessionEventBridgeState>,
 ) {
     let mut sideband_probe_sessions: HashMap<String, SessionEventBridgeSidebandProbe> =
@@ -653,7 +669,11 @@ fn run_session_event_bridge(
                         state
                             .direct_output_bytes
                             .fetch_add(data.len() as u64, Ordering::Relaxed);
+                        if let Some(writer) = recording_writer.as_ref() {
+                            writer.write_raw_output(&session_id, &data);
+                        }
                         pending_direct_outputs.push(TerminalFrameOutputSubmission {
+                            raw_already_captured: true,
                             session_id: session_id.clone(),
                             data,
                             encoding: control.session_encodings[&session_id].clone(),
@@ -671,7 +691,11 @@ fn run_session_event_bridge(
                         state
                             .direct_backpressure_bytes
                             .fetch_add(data.len() as u64, Ordering::Relaxed);
+                        if let Some(writer) = recording_writer.as_ref() {
+                            writer.write_raw_output(&session_id, &data);
+                        }
                         pending_direct_outputs.push(TerminalFrameOutputSubmission {
+                            raw_already_captured: true,
                             session_id: session_id.clone(),
                             data,
                             encoding: control.session_encodings[&session_id].clone(),
@@ -693,6 +717,9 @@ fn run_session_event_bridge(
                     }
                 }
                 SessionEvent::OutputDropped { session_id, bytes } => {
+                    if let Some(writer) = recording_writer.as_ref() {
+                        writer.report_output_gap(&session_id, bytes);
+                    }
                     flush_bridge_direct_outputs(&frame_pipeline, &mut pending_direct_outputs);
                     sideband_probe_sessions.remove(&session_id);
                     state.route_session_to_ui(&session_id);

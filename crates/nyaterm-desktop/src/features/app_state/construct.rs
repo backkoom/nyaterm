@@ -145,6 +145,7 @@ impl NyaTermApp {
         let transfer_duplicate_policy =
             SftpDuplicatePolicy::from_legacy_value(&settings.transfer_duplicate_strategy);
         let recording = RecordingFeatureState::new(settings.recording_memory_limit_bytes as usize);
+        recording.set_history_include_input(settings.recording_include_input);
         let recording_writer = recording.writer();
         let (ai_model_draft, ai_base_url_draft) = ai_active_profile_drafts(&ai_settings);
         let mcp = McpHostFeatureState::new(&ai_settings.external_mcp);
@@ -222,10 +223,11 @@ impl NyaTermApp {
         if let Err(error) = terminal_screen.set_encoding(&settings.interaction_default_encoding) {
             tracing::warn!(%error, "terminal encoding configuration rejected");
         }
-        let terminal_frame_pipeline = TerminalFramePipeline::spawn(recording_writer);
+        let terminal_frame_pipeline = TerminalFramePipeline::spawn(recording_writer.clone());
         let session_event_bridge = SessionEventBridge::spawn(
             Arc::clone(&session_manager),
             terminal_frame_pipeline.clone(),
+            Some(recording_writer),
             settings.interaction_default_encoding.clone(),
             settings.terminal_scrollback_lines.clamp(100, 100_000) as usize,
         );

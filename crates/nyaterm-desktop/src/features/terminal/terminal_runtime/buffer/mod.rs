@@ -260,7 +260,7 @@ impl NyaTermApp {
         session_id: &str,
         data: Vec<u8>,
     ) {
-        self.terminal.view.frame_pipeline.submit_output(
+        self.terminal.view.frame_pipeline.submit_captured_output(
             session_id.to_string(),
             data,
             self.effective_session_encoding(session_id),
@@ -280,6 +280,7 @@ impl NyaTermApp {
             .into_iter()
             .filter_map(|(session_id, data)| {
                 (!data.is_empty()).then_some(TerminalFrameOutputSubmission {
+                    raw_already_captured: true,
                     data,
                     encoding: self.effective_session_encoding(&session_id),
                     scrollback_limit,
@@ -970,6 +971,7 @@ impl NyaTermApp {
                 "terminal output frame geometry"
             );
         }
+        self.observe_recording_prompt_output(&session_id, &visible_text);
         let is_active = self.session.active_id() == Some(session_id.as_str());
         let presentation = TerminalPresentation::resolve(
             is_active,

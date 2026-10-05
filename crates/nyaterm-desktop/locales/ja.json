@@ -2552,6 +2552,8 @@
     "recordingExistingUnique": "一意のファイルを作成",
     "recordingIncludeBinaryTransfers": "バイナリ転送ペイロードを含める",
     "recordingIncludeBinaryTransfersDesc": "オフの場合、Raw ログはバイナリ転送ペイロードを抑制し、巨大なログを回避します。",
+    "recordingIncludeInput": "ユーザー入力を記録",
+    "recordingIncludeInputDesc": "既定では無効です。入力には検出できないパスワードやワンタイムコードが含まれる場合があります。Raw 入力は .input.bin に別途保存されます。変更は次の記録から適用されます。",
     "recordingIncludeIoLabels": "INPUT/OUTPUT ラベルを表示",
     "recordingIncludeIoLabelsDesc": "記録および保存されたセッションテキストファイルに INPUT と OUTPUT のマーカーを含めます。",
     "recordingIncludeMetadata": "セッションメタデータを含める",

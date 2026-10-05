@@ -3210,6 +3210,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     recording_update.recording_rotation = RecordingRotationPolicy::Daily;
     recording_update.recording_existing_file_behavior = ExistingFileBehavior::Overwrite;
     recording_update.recording_include_binary_transfer_payloads = true;
+    recording_update.recording_include_input = true;
     recording_update.recording_include_io_labels = true;
     recording_update.recording_include_timestamps = true;
     recording_update.recording_memory_limit_bytes = 2 * 1024 * 1024;
@@ -3233,6 +3234,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
         ExistingFileBehavior::Overwrite
     );
     assert!(saved_recording.recording_include_binary_transfer_payloads);
+    assert!(saved_recording.recording_include_input);
     assert!(saved_recording.recording_include_io_labels);
     assert!(saved_recording.recording_include_timestamps);
     assert_eq!(
@@ -6550,5 +6552,66 @@ fn vnc_trust_cas_and_portable_roundtrip_preserve_tauri_records() {
             target.load_vnc_known_host("example.com", 5900).unwrap(),
             Some(record.clone())
         );
+    }
+}
+
+#[test]
+fn recording_input_opt_in_preserves_legacy_unknown_fields_sync_and_backup() {
+    let source_dir = unique_temp_dir("recording-settings-source");
+    let source = ConnectionStore::open(&source_dir).unwrap();
+    source
+        .save_settings_value(&serde_json::json!({
+            "recording": { "path": "synthetic/logs", "future_option": { "retain": 7 } }
+        }))
+        .unwrap();
+    let mut settings = source.load_app_settings_summary().unwrap();
+    assert!(!settings.recording_include_input);
+    settings.recording_include_input = true;
+    source.save_recording_settings(&settings).unwrap();
+    assert_eq!(
+        source.load_settings_value().unwrap()["recording"]["future_option"]["retain"],
+        7
+    );
+    for kind in [PortableSnapshotKind::Sync, PortableSnapshotKind::Backup] {
+        let target_dir = unique_temp_dir("recording-settings-portable");
+        let mut snapshot = source
+            .build_raw_portable_snapshot(kind, "fixture", "2.0.0")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        let target = ConnectionStore::open(&target_dir).unwrap();
+        target.apply_raw_portable_snapshot(&snapshot).unwrap();
+        assert!(
+            target
+                .load_app_settings_summary()
+                .unwrap()
+                .recording_include_input
+        );
+        assert_eq!(
+            target.load_settings_value().unwrap()["recording"]["future_option"]["retain"],
+            7
+        );
+        drop(target);
+        std::fs::remove_dir_all(target_dir).ok();
+    }
+    drop(source);
+    let backup_dir = unique_temp_dir("recording-settings-backup");
+    let backup_path = backup_dir.join("recording.nya");
+    let restore_dir = unique_temp_dir("recording-settings-restore");
+    ConnectionStore::export_config_database(&source_dir, None, &backup_path).unwrap();
+    ConnectionStore::import_config_database(&restore_dir, None, &backup_path).unwrap();
+    let restored = ConnectionStore::open(&restore_dir).unwrap();
+    assert!(
+        restored
+            .load_app_settings_summary()
+            .unwrap()
+            .recording_include_input
+    );
+    assert_eq!(
+        restored.load_settings_value().unwrap()["recording"]["future_option"]["retain"],
+        7
+    );
+    drop(restored);
+    for dir in [source_dir, backup_dir, restore_dir] {
+        std::fs::remove_dir_all(dir).ok();
     }
 }

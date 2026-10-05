@@ -1402,3 +1402,121 @@ fn sync_paste_encodes_each_live_target_and_stops_when_primary_cannot_encode() {
         manager.close(&id).unwrap();
     }
 }
+
+#[test]
+fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw_input() {
+    use crate::models::SessionLaunchConfig;
+    use nyaterm_transport::{
+        ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
+        RecordingRotationPolicy, TelnetSessionConfig,
+    };
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    let root = TestConfigDir::new("nyaterm-sensitive-recording-wire");
+    let mut cx = TestAppContext::single();
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (manager, ids) = cx.update_entity(&app, |app, _| {
+        let manager = app.session.manager_handle();
+        let metadata = app.session.metadata("fixture").unwrap().clone();
+        let mut ids = Vec::new();
+        app.sync_input.create_group();
+        for index in 0..2 {
+            let config = TelnetSessionConfig {
+                host: "127.0.0.1".into(),
+                port,
+                raw_tcp: true,
+                encoding: "GBK".into(),
+                ..Default::default()
+            };
+            let info = manager.create_telnet_session(config.clone()).unwrap();
+            let mut metadata = metadata.clone();
+            metadata.launch_config = SessionLaunchConfig::Telnet(config);
+            app.session.register_session_metadata(&info.id, metadata);
+            app.terminal
+                .seed_session_view(info.id.clone(), String::new(), "GBK");
+            app.sync_input.toggle_selected_session(info.id.clone());
+            let path = root.path().join(format!("{index}.bin"));
+            app.recording
+                .writer()
+                .start(
+                    info.id.clone(),
+                    RecordingContext {
+                        session_id: info.id.clone(),
+                        session_name: "synthetic".into(),
+                        connection_id: None,
+                        connection_name: None,
+                        group_path: None,
+                        protocol: "telnet".into(),
+                        host: None,
+                        port: None,
+                        username: None,
+                        started_at: time::OffsetDateTime::now_utc(),
+                    },
+                    RecordingProfile {
+                        mode: RecordingMode::Raw,
+                        base_path: root.path().into(),
+                        path_template: "unused.log".into(),
+                        include_timestamps: false,
+                        include_io_labels: false,
+                        include_session_metadata: false,
+                        rotation: RecordingRotationPolicy::Session,
+                        existing_file_behavior: ExistingFileBehavior::Unique,
+                        include_binary_transfer_payloads: false,
+                        include_input: true,
+                    },
+                    Some(path),
+                    4096,
+                )
+                .unwrap();
+            ids.push(info.id);
+        }
+        app.session.select_active_session(&ids[0]);
+        (manager, ids)
+    });
+    let mut streams = (0..2)
+        .map(|_| listener.accept().unwrap().0)
+        .collect::<Vec<_>>();
+    for stream in &streams {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+    }
+    cx.update_entity(&app, |app, cx| {
+        app.observe_recording_prompt_output(&ids[0], "Password: ");
+        app.observe_recording_prompt_output(&ids[1], "$ ");
+        assert!(app.send_terminal_input_without_suggestion_track(b"a".to_vec(), cx));
+        app.send_terminal_paste_input("测试", cx);
+        app.write_session_raw_input_recorded(&ids[0], b"r").unwrap();
+        app.write_session_raw_input_recorded(&ids[1], b"r").unwrap();
+        app.observe_recording_prompt_output(&ids[0], "\n$ ");
+        app.observe_recording_prompt_output(&ids[1], "\nOTP: ");
+        assert!(app.send_terminal_input_without_suggestion_track(b"b".to_vec(), cx));
+        for id in &ids {
+            app.write_session_sensitive_input(id, b"dedicated").unwrap();
+        }
+        for (index, id) in ids.iter().enumerate() {
+            let completion = app.recording.writer().stop_complete(id.clone()).unwrap();
+            assert!(completion.error.is_none());
+            let data = std::fs::read(completion.input_file_path.unwrap()).unwrap();
+            assert_eq!(
+                data,
+                if index == 0 {
+                    b"b".as_slice()
+                } else {
+                    b"a\xb2\xe2\xca\xd4r".as_slice()
+                }
+            );
+        }
+    });
+    for stream in &mut streams {
+        let mut data = vec![0; 1 + 4 + 1 + 1 + 9];
+        stream.read_exact(&mut data).unwrap();
+        assert_eq!(data, b"a\xb2\xe2\xca\xd4rbdedicated");
+    }
+    for id in ids {
+        manager.close(&id).unwrap();
+    }
+}

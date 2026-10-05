@@ -2552,6 +2552,8 @@
     "recordingExistingUnique": "Créer un fichier unique",
     "recordingIncludeBinaryTransfers": "Inclure les charges utiles de transfert binaire",
     "recordingIncludeBinaryTransfersDesc": "Lorsque cette option est désactivée, les journaux bruts suppriment les charges utiles de transfert binaire pour éviter des journaux volumineux.",
+    "recordingIncludeInput": "Enregistrer la saisie",
+    "recordingIncludeInputDesc": "Désactivé par défaut. La saisie peut contenir des mots de passe ou des codes à usage unique non détectables. La saisie Raw est enregistrée séparément dans .input.bin. Les modifications prennent effet au prochain enregistrement.",
     "recordingIncludeIoLabels": "Afficher les libellés INPUT/OUTPUT",
     "recordingIncludeIoLabelsDesc": "Inclure les marqueurs INPUT et OUTPUT dans les fichiers d'enregistrement et de texte de session enregistré.",
     "recordingIncludeMetadata": "Inclure les métadonnées de session",
