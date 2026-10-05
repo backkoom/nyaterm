@@ -1859,6 +1859,12 @@
     "transcriptSaved": "Session text saved to %{path}"
   },
   "resourceMonitor": {
+    "allInterfaces": "All interfaces",
+    "collectingNetworkHistory": "Collecting network history…",
+    "download": "Download",
+    "maxRate": "Max %{value}",
+    "recentMinutes": "Recent ~%{count} min",
+    "upload": "Upload",
     "Load1": "1 min",
     "Load15": "15 mins",
     "Load5": "5 mins",

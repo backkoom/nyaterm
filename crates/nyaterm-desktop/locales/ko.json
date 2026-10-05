@@ -1859,6 +1859,12 @@
     "transcriptSaved": "세션 텍스트가 %{path}에 저장되었습니다"
   },
   "resourceMonitor": {
+    "allInterfaces": "모든 인터페이스",
+    "collectingNetworkHistory": "네트워크 기록 수집 중…",
+    "download": "다운로드",
+    "maxRate": "최대 %{value}",
+    "recentMinutes": "최근 약 %{count}분",
+    "upload": "업로드",
     "Load1": "1분",
     "Load15": "15분",
     "Load5": "5분",

@@ -35,7 +35,9 @@ use gpui::{
     ScrollStrategy, Task, UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px,
 };
 use nyaterm_transport::{RemoteGpuProcess, RemoteNpuProcess, RemoteProcess};
-use nyaterm_ui::{NyaInputState, NyaNumberInputOptions, NyaNumberInputState};
+use nyaterm_ui::{
+    NyaInputState, NyaNumberInputOptions, NyaNumberInputState, NyaSelectOption, NyaSelectState,
+};
 use rust_i18n::t;
 
 use super::docker_view::docker_panel;
@@ -142,7 +144,10 @@ struct RemoteMonitorKey {
 }
 
 pub(in crate::features) enum RemoteMonitorData {
-    Stats(StatsPresentationState),
+    Stats {
+        state: StatsPresentationState,
+        network_select: Entity<NyaSelectState>,
+    },
     Gpu {
         state: GpuPresentationState,
         processes: Arc<[RemoteGpuProcess]>,
@@ -420,10 +425,16 @@ impl Render for RemoteMonitorPanel {
             let has_session = snapshot.key.has_session;
             let panel_width = snapshot.key.panel_width;
             return match &snapshot.data {
-                RemoteMonitorData::Stats(state) => {
-                    let state = state.clone();
-                    stats_panel(chrome, has_session, state, cx)
-                }
+                RemoteMonitorData::Stats {
+                    state,
+                    network_select,
+                } => stats_panel(
+                    chrome,
+                    has_session,
+                    state.clone(),
+                    network_select.clone(),
+                    cx,
+                ),
                 RemoteMonitorData::Gpu {
                     state,
                     processes,
@@ -621,7 +632,32 @@ impl NyaTermApp {
     ) -> RemoteMonitorSnapshot {
         let data = match kind {
             RemoteMonitorKind::Stats => {
-                RemoteMonitorData::Stats(self.remote_ops.stats_presentation())
+                let state = self.remote_ops.stats_presentation();
+                let mut options = vec![NyaSelectOption::new(
+                    "all",
+                    t!("resourceMonitor.allInterfaces"),
+                )];
+                if let Some(stats) = &state.data {
+                    options.extend(stats.networks.iter().map(|network| {
+                        NyaSelectOption::new(format!("nic:{}", network.nic), network.nic.clone())
+                    }));
+                }
+                let selected_value = state
+                    .selected_network_interface
+                    .as_ref()
+                    .map(|nic| format!("nic:{nic}"))
+                    .unwrap_or_else(|| "all".to_string());
+                let network_select = self.select_entity(
+                    "remote.stats.network",
+                    options,
+                    Some(selected_value),
+                    !key.has_session,
+                    cx,
+                );
+                RemoteMonitorData::Stats {
+                    state,
+                    network_select,
+                }
             }
             RemoteMonitorKind::Gpu => {
                 let state = self.remote_ops.gpu_presentation();
@@ -788,7 +824,7 @@ mod tests {
     };
     use nyaterm_core::{AppRuntime, RuntimeMode};
 
-    use super::{RemoteMonitorKind, RemoteMonitorPanel};
+    use super::{RemoteMonitorData, RemoteMonitorKind, RemoteMonitorPanel};
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::test_support::TestConfigDir;
@@ -883,6 +919,133 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| {
             _ = window.draw(cx);
+        });
+    }
+
+    #[test]
+    fn network_select_events_refresh_the_stats_snapshot_and_reconcile_removed_interfaces() {
+        use crate::features::runtime_jobs::StatsJobResult;
+        use nyaterm_transport::{NetworkInfo, NetworkSummaryInfo, RemoteStats};
+        use nyaterm_ui::NyaSelectEvent;
+
+        fn stats(include_eth1: bool) -> RemoteStats {
+            let mut networks = vec![NetworkInfo {
+                nic: "eth0".to_string(),
+                state: "up".to_string(),
+                rx_bytes_per_sec: 10.,
+                tx_bytes_per_sec: 20.,
+            }];
+            if include_eth1 {
+                networks.push(NetworkInfo {
+                    nic: "eth1".to_string(),
+                    state: "up".to_string(),
+                    rx_bytes_per_sec: 100.,
+                    tx_bytes_per_sec: 200.,
+                });
+            }
+            RemoteStats {
+                network_summary: NetworkSummaryInfo {
+                    rx_bytes_per_sec: networks
+                        .iter()
+                        .map(|network| network.rx_bytes_per_sec)
+                        .sum(),
+                    tx_bytes_per_sec: networks
+                        .iter()
+                        .map(|network| network.tx_bytes_per_sec)
+                        .sum(),
+                },
+                networks,
+                ..Default::default()
+            }
+        }
+
+        let test_dir = TestConfigDir::new("nyaterm-resource-network");
+        let mut cx = TestAppContext::single();
+        let app = app(&mut cx, test_dir.path());
+        activate_ssh_session(&app, &mut cx);
+        let (panel, select) = cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            for _ in 0..2 {
+                let ticket = app
+                    .remote_ops
+                    .begin_stats_job("remote-panel-test".to_string(), false);
+                app.remote_ops.apply_stats_event(
+                    StatsJobResult {
+                        job_id: ticket.job_id,
+                        session_id: "remote-panel-test".to_string(),
+                        result: Ok(stats(true)),
+                    },
+                    Some("remote-panel-test"),
+                );
+            }
+            app.flush_remote_panel_snapshots(cx);
+            let panel = app.remote_panels.entity(RemoteMonitorKind::Stats).clone();
+            let select = app.selects.field(&"remote.stats.network".into()).unwrap();
+            assert_eq!(select.read(cx).selected_value(), Some("all"));
+            (panel, select)
+        });
+        let host_panel = panel.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| PanelHost {
+            panels: vec![host_panel],
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            select.update(cx, |_, cx| {
+                cx.emit(NyaSelectEvent::Changed(Some("nic:eth1".to_string())))
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            let panel = panel.read(cx);
+            let snapshot = panel.snapshot.as_ref().unwrap();
+            let RemoteMonitorData::Stats {
+                state,
+                network_select,
+            } = &snapshot.data
+            else {
+                panic!("expected stats");
+            };
+            assert_eq!(state.selected_network_interface.as_deref(), Some("eth1"));
+            assert_eq!(state.network_traffic().unwrap().rx_bytes_per_sec, 100.);
+            assert_eq!(network_select.read(cx).selected_value(), Some("nic:eth1"));
+            assert_eq!(
+                snapshot.key.revision,
+                app.read(cx).remote_ops.stats_revision()
+            );
+        });
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let ticket = app
+                    .remote_ops
+                    .begin_stats_job("remote-panel-test".to_string(), false);
+                app.remote_ops.apply_stats_event(
+                    StatsJobResult {
+                        job_id: ticket.job_id,
+                        session_id: "remote-panel-test".to_string(),
+                        result: Ok(stats(false)),
+                    },
+                    Some("remote-panel-test"),
+                );
+                app.flush_remote_panel_snapshots(cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            let panel = panel.read(cx);
+            let RemoteMonitorData::Stats {
+                state,
+                network_select,
+            } = &panel.snapshot.as_ref().unwrap().data
+            else {
+                panic!("expected stats");
+            };
+            assert!(state.selected_network_interface.is_none());
+            assert_eq!(state.network_traffic().unwrap().rx_bytes_per_sec, 10.);
+            assert_eq!(network_select.read(cx).selected_value(), Some("all"));
         });
     }
 

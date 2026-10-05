@@ -1859,6 +1859,12 @@
     "transcriptSaved": "会话文本已保存至 %{path}"
   },
   "resourceMonitor": {
+    "allInterfaces": "全部网卡",
+    "collectingNetworkHistory": "正在收集网络历史数据…",
+    "download": "下载",
+    "maxRate": "峰值 %{value}",
+    "recentMinutes": "最近约 %{count} 分钟",
+    "upload": "上传",
     "Load1": "1分钟",
     "Load15": "15分钟",
     "Load5": "5分钟",

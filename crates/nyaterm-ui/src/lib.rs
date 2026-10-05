@@ -16,6 +16,7 @@ mod markdown;
 mod menu;
 pub mod notification;
 mod number_input;
+pub mod plot;
 mod popover;
 mod root;
 mod selectable_text;

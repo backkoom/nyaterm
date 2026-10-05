@@ -1,7 +1,7 @@
 use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
 use crate::features::runtime_jobs::StatsJobResult;
 use futures::channel::mpsc::UnboundedReceiver;
-use nyaterm_transport::{CpuUsageSource, RemoteStats, RemoteStatsSampler};
+use nyaterm_transport::{CpuUsageSource, NetworkSummaryInfo, RemoteStats, RemoteStatsSampler};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,11 +31,13 @@ pub(super) struct StatsPaneState {
     revision: u64,
     active_session_id: Option<String>,
     network_history: HashMap<String, VecDeque<NetworkHistorySample>>,
+    selected_network_interfaces: HashMap<String, String>,
     snapshots: HashMap<String, RemoteStats>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::features) struct NetworkHistorySample {
+    pub sampled_at: Instant,
     pub rx_bytes_per_sec: f64,
     pub tx_bytes_per_sec: f64,
     pub interfaces: HashMap<String, (f64, f64)>,
@@ -44,10 +46,44 @@ pub(in crate::features) struct NetworkHistorySample {
 pub(in crate::features) struct StatsPresentationState {
     pub data: Option<RemoteStats>,
     pub network_history: Arc<[NetworkHistorySample]>,
+    pub selected_network_interface: Option<String>,
     pub cpu_expanded: bool,
     pub pending: bool,
     pub error: bool,
     pub consecutive_refresh_failures: u8,
+}
+
+impl NetworkHistorySample {
+    pub(in crate::features) fn traffic(
+        &self,
+        interface: Option<&str>,
+    ) -> Option<NetworkSummaryInfo> {
+        let (rx_bytes_per_sec, tx_bytes_per_sec) = match interface {
+            Some(nic) => *self.interfaces.get(nic)?,
+            None => (self.rx_bytes_per_sec, self.tx_bytes_per_sec),
+        };
+        Some(NetworkSummaryInfo {
+            rx_bytes_per_sec,
+            tx_bytes_per_sec,
+        })
+    }
+}
+
+impl StatsPresentationState {
+    pub(in crate::features) fn network_traffic(&self) -> Option<NetworkSummaryInfo> {
+        let stats = self.data.as_ref()?;
+        match self.selected_network_interface.as_deref() {
+            Some(nic) => stats
+                .networks
+                .iter()
+                .find(|network| network.nic == nic)
+                .map(|network| NetworkSummaryInfo {
+                    rx_bytes_per_sec: network.rx_bytes_per_sec,
+                    tx_bytes_per_sec: network.tx_bytes_per_sec,
+                }),
+            None => Some(stats.network_summary.clone()),
+        }
+    }
 }
 
 impl StatsPaneState {
@@ -74,7 +110,16 @@ impl StatsPaneState {
     }
 
     fn record_network_sample(&mut self, session_id: &str, stats: &RemoteStats) {
+        // A removed interface must not become selected again if it later reappears.
+        if self
+            .selected_network_interfaces
+            .get(session_id)
+            .is_some_and(|nic| !stats.networks.iter().any(|network| &network.nic == nic))
+        {
+            self.selected_network_interfaces.remove(session_id);
+        }
         let sample = NetworkHistorySample {
+            sampled_at: Instant::now(),
             rx_bytes_per_sec: stats.network_summary.rx_bytes_per_sec,
             tx_bytes_per_sec: stats.network_summary.tx_bytes_per_sec,
             interfaces: stats
@@ -110,6 +155,43 @@ impl StatsPaneState {
             .and_then(|session_id| self.network_history.get(session_id))
             .map(|history| Arc::from(history.iter().cloned().collect::<Vec<_>>()))
             .unwrap_or_else(|| Arc::from([]))
+    }
+
+    pub(super) fn select_network_interface(
+        &mut self,
+        session_id: &str,
+        interface: Option<&str>,
+    ) -> bool {
+        if self.active_session_id.as_deref() != Some(session_id) {
+            return false;
+        }
+        if let Some(nic) = interface
+            && !self
+                .snapshots
+                .get(session_id)
+                .is_some_and(|stats| stats.networks.iter().any(|network| network.nic == nic))
+        {
+            return false;
+        }
+        if self
+            .selected_network_interfaces
+            .get(session_id)
+            .map(String::as_str)
+            == interface
+        {
+            return false;
+        }
+        match interface {
+            Some(nic) => {
+                self.selected_network_interfaces
+                    .insert(session_id.to_string(), nic.to_string());
+            }
+            None => {
+                self.selected_network_interfaces.remove(session_id);
+            }
+        }
+        self.touch();
+        true
     }
 
     fn clear_data(&mut self) {
@@ -231,6 +313,7 @@ impl StatsPaneState {
             revision: 0,
             active_session_id: None,
             network_history: HashMap::new(),
+            selected_network_interfaces: HashMap::new(),
             snapshots: HashMap::new(),
             sampler: Arc::new(RemoteStatsSampler::default()),
         }
@@ -245,6 +328,7 @@ impl StatsPaneState {
     pub(super) fn clear_stats_sample(&mut self, session_id: &str) {
         self.sampler.clear_session(session_id);
         self.network_history.remove(session_id);
+        self.selected_network_interfaces.remove(session_id);
         self.snapshots.remove(session_id);
         if self.job.is_pending_for(session_id) {
             self.job.reset_for_session_switch();
@@ -262,6 +346,11 @@ impl StatsPaneState {
                 .and_then(|id| self.snapshots.get(id))
                 .cloned(),
             network_history: self.active_network_history(),
+            selected_network_interface: self
+                .active_session_id
+                .as_ref()
+                .and_then(|id| self.selected_network_interfaces.get(id))
+                .cloned(),
             cpu_expanded: self.cpu_expanded,
             pending: self.is_pending(),
             error: self.consecutive_refresh_failures() > 0,
@@ -334,5 +423,208 @@ impl StatsPaneState {
                 StatsApplyOutcome::Failed { status }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StatsApplyOutcome, StatsPaneState};
+    use crate::features::runtime_jobs::StatsJobResult;
+    use nyaterm_transport::{NetworkInfo, NetworkSummaryInfo, RemoteStats};
+    use std::time::Instant;
+
+    fn stats(interfaces: &[(&str, f64, f64)]) -> RemoteStats {
+        RemoteStats {
+            networks: interfaces
+                .iter()
+                .map(|(nic, rx, tx)| NetworkInfo {
+                    nic: nic.to_string(),
+                    state: "up".to_string(),
+                    rx_bytes_per_sec: *rx,
+                    tx_bytes_per_sec: *tx,
+                })
+                .collect(),
+            network_summary: NetworkSummaryInfo {
+                rx_bytes_per_sec: interfaces.iter().map(|(_, rx, _)| rx).sum(),
+                tx_bytes_per_sec: interfaces.iter().map(|(_, _, tx)| tx).sum(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn selecting_an_interface_changes_current_and_historical_traffic_together() {
+        let mut state = StatsPaneState::new();
+        let started = Instant::now();
+        state.apply_data("a", stats(&[("eth0", 10., 20.)]));
+        state.apply_data("a", stats(&[("eth0", 30., 40.), ("eth1", 100., 200.)]));
+        assert_eq!(
+            state
+                .stats_presentation()
+                .network_traffic()
+                .unwrap()
+                .rx_bytes_per_sec,
+            130.
+        );
+        let revision = state.revision();
+        assert!(state.select_network_interface("a", Some("eth1")));
+        assert_ne!(state.revision(), revision);
+        let presentation = state.stats_presentation();
+        let interface = presentation.selected_network_interface.as_deref();
+        assert_eq!(interface, Some("eth1"));
+        assert_eq!(
+            presentation.network_traffic().unwrap(),
+            NetworkSummaryInfo {
+                rx_bytes_per_sec: 100.,
+                tx_bytes_per_sec: 200.,
+            }
+        );
+        assert_eq!(presentation.network_history[0].traffic(interface), None);
+        assert_eq!(
+            presentation.network_history[1].traffic(interface),
+            presentation.network_traffic()
+        );
+        assert!(presentation.network_history[0].sampled_at >= started);
+        assert!(
+            presentation.network_history[1].sampled_at
+                >= presentation.network_history[0].sampled_at
+        );
+        let revision = state.revision();
+        assert!(!state.select_network_interface("a", Some("eth1")));
+        assert!(!state.select_network_interface("a", Some("missing")));
+        assert_eq!(state.revision(), revision);
+        assert!(state.select_network_interface("a", None));
+        assert_eq!(
+            state
+                .stats_presentation()
+                .network_traffic()
+                .unwrap()
+                .tx_bytes_per_sec,
+            240.
+        );
+    }
+
+    #[test]
+    fn network_selection_is_restored_per_session_and_cleared_on_close() {
+        let mut state = StatsPaneState::new();
+        state.apply_data("a", stats(&[("eth0", 10., 20.), ("eth1", 30., 40.)]));
+        assert!(state.select_network_interface("a", Some("eth1")));
+        state.reset_for_session_switch();
+        state.apply_data("b", stats(&[("eth0", 100., 200.)]));
+        assert!(
+            state
+                .stats_presentation()
+                .selected_network_interface
+                .is_none()
+        );
+        assert!(state.select_network_interface("b", Some("eth0")));
+        assert!(
+            !state.select_network_interface("a", None),
+            "an inactive session cannot change selection"
+        );
+        state.reset_for_session_switch();
+        state.activate_session("a");
+        assert_eq!(
+            state
+                .stats_presentation()
+                .selected_network_interface
+                .as_deref(),
+            Some("eth1")
+        );
+        assert_eq!(
+            state
+                .stats_presentation()
+                .network_traffic()
+                .unwrap()
+                .rx_bytes_per_sec,
+            30.
+        );
+        state.clear_stats_sample("a");
+        let presentation = state.stats_presentation();
+        assert!(presentation.selected_network_interface.is_none());
+        assert!(presentation.network_history.is_empty());
+        state.apply_data("a", stats(&[("eth1", 50., 60.)]));
+        assert!(
+            state
+                .stats_presentation()
+                .selected_network_interface
+                .is_none()
+        );
+        state.activate_session("b");
+        assert_eq!(
+            state
+                .stats_presentation()
+                .selected_network_interface
+                .as_deref(),
+            Some("eth0")
+        );
+    }
+
+    #[test]
+    fn a_removed_interface_falls_back_to_summary_and_stays_unselected_when_it_returns() {
+        let mut state = StatsPaneState::new();
+        state.apply_data("a", stats(&[("eth0", 10., 20.), ("eth1", 30., 40.)]));
+        state.select_network_interface("a", Some("eth1"));
+        state.apply_data("a", stats(&[("eth0", 50., 60.)]));
+        let presentation = state.stats_presentation();
+        assert!(presentation.selected_network_interface.is_none());
+        assert_eq!(
+            presentation.network_traffic().unwrap().rx_bytes_per_sec,
+            50.
+        );
+        assert!(
+            presentation.network_history[1]
+                .traffic(Some("eth1"))
+                .is_none()
+        );
+        assert!(!state.select_network_interface("a", Some("eth1")));
+        state.apply_data("a", stats(&[("eth0", 70., 80.), ("eth1", 90., 100.)]));
+        assert!(
+            state
+                .stats_presentation()
+                .selected_network_interface
+                .is_none()
+        );
+        state.apply_data("a", stats(&[]));
+        assert_eq!(
+            state.stats_presentation().network_traffic(),
+            Some(NetworkSummaryInfo::default())
+        );
+    }
+
+    #[test]
+    fn an_inactive_reply_reconciles_only_its_own_network_selection() {
+        let mut state = StatsPaneState::new();
+        state.apply_data("a", stats(&[("eth1", 10., 20.)]));
+        state.select_network_interface("a", Some("eth1"));
+        let ticket = state.begin_job("a".to_string(), false);
+        state.activate_session("b");
+        assert!(matches!(
+            state.apply_stats_event(
+                StatsJobResult {
+                    job_id: ticket.job_id,
+                    session_id: "a".to_string(),
+                    result: Ok(stats(&[("eth0", 30., 40.)])),
+                },
+                Some("b")
+            ),
+            StatsApplyOutcome::CompletedInactive
+        ));
+        assert!(state.stats_presentation().data.is_none());
+        state.activate_session("a");
+        assert!(
+            state
+                .stats_presentation()
+                .selected_network_interface
+                .is_none()
+        );
+        assert_eq!(
+            state
+                .stats_presentation()
+                .network_traffic()
+                .unwrap()
+                .rx_bytes_per_sec,
+            30.
+        );
     }
 }

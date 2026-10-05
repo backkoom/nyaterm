@@ -1859,6 +1859,12 @@
     "transcriptSaved": "工作階段文字已儲存至 %{path}"
   },
   "resourceMonitor": {
+    "allInterfaces": "所有網卡",
+    "collectingNetworkHistory": "正在收集網路歷史資料…",
+    "download": "下載",
+    "maxRate": "峰值 %{value}",
+    "recentMinutes": "最近約 %{count} 分鐘",
+    "upload": "上傳",
     "Load1": "1分鐘",
     "Load15": "15分鐘",
     "Load5": "5分鐘",

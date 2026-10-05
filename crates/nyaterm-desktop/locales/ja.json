@@ -1859,6 +1859,12 @@
     "transcriptSaved": "セッションテキストを %{path} に保存しました"
   },
   "resourceMonitor": {
+    "allInterfaces": "すべてのインターフェース",
+    "collectingNetworkHistory": "ネットワーク履歴を収集中…",
+    "download": "ダウンロード",
+    "maxRate": "最大 %{value}",
+    "recentMinutes": "直近約 %{count} 分",
+    "upload": "アップロード",
     "Load1": "1 分",
     "Load15": "15 分",
     "Load5": "5 分",

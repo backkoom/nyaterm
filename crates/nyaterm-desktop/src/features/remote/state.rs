@@ -35,9 +35,7 @@ pub(in crate::features) use process::{
     ProcessApplyOutcome, ProcessPresentationState, ProcessSortColumns,
 };
 use stats::StatsPaneState;
-pub(in crate::features) use stats::{
-    NetworkHistorySample, StatsApplyOutcome, StatsPresentationState,
-};
+pub(in crate::features) use stats::{StatsApplyOutcome, StatsPresentationState};
 
 pub(in crate::features) struct RemoteOpsFeatureState {
     docker: DockerPaneState,
@@ -161,6 +159,14 @@ impl RemoteOpsFeatureState {
 
     pub(in crate::features) fn stats_presentation(&self) -> StatsPresentationState {
         self.stats.stats_presentation()
+    }
+
+    pub(in crate::features) fn select_stats_network_interface(
+        &mut self,
+        session_id: &str,
+        interface: Option<&str>,
+    ) -> bool {
+        self.stats.select_network_interface(session_id, interface)
     }
 
     pub(in crate::features) fn gpu_presentation(&self) -> GpuPresentationState {

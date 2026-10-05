@@ -1859,6 +1859,12 @@
     "transcriptSaved": "Texte de la session enregistré dans %{path}"
   },
   "resourceMonitor": {
+    "allInterfaces": "Toutes les interfaces",
+    "collectingNetworkHistory": "Collecte de l’historique réseau…",
+    "download": "Réception",
+    "maxRate": "Maximum %{value}",
+    "recentMinutes": "Sur environ %{count} min",
+    "upload": "Envoi",
     "Load1": "1 min",
     "Load15": "15 min",
     "Load5": "5 min",
