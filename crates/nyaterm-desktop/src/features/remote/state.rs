@@ -404,6 +404,7 @@ impl RemoteOpsFeatureState {
         self.docker.start_docker_details(container_id, status)
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn apply_docker_overview(&mut self, overview: RemoteDockerOverview) {
         self.docker.apply_overview(overview);
     }

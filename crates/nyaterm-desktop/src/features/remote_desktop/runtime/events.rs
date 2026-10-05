@@ -1,7 +1,7 @@
 use super::errors::format_rdp_error;
 use super::input::POINTER_MOVE_INTERVAL;
-use super::resize::should_disable_dynamic_resize_after_state;
 use crate::features::NyaTermApp;
+use crate::features::remote_desktop::state::resize::should_disable_dynamic_resize_after_state;
 use crate::models::TransferJobKind;
 use crate::models::TransferJobState;
 use crate::models::TransferJobStatus;

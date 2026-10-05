@@ -11,6 +11,8 @@ mod resize;
 #[cfg(test)]
 mod tests;
 mod trust;
+#[cfg(test)]
+use super::state::resize::RESIZE_DEBOUNCE;
 pub(super) use errors::format_remote_desktop_error;
 #[cfg(test)]
 use events::MAINTENANCE_INTERVAL;
@@ -48,9 +50,3 @@ use lifecycle::rdp_error_is_retryable;
 use lifecycle::rdp_reconnect_delay;
 #[cfg(test)]
 use lifecycle::remote_desktop_password_id;
-#[cfg(test)]
-use resize::RESIZE_DEBOUNCE;
-#[cfg(test)]
-use resize::rdp_resize_is_material;
-#[cfg(test)]
-use resize::should_disable_dynamic_resize_after_state;

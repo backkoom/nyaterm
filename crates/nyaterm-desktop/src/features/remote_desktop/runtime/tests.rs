@@ -3,19 +3,17 @@ use std::time::{Duration, Instant};
 use gpui::Modifiers;
 use nyaterm_core::ConnectionAuth;
 use nyaterm_remote_desktop::{
-    CursorPosition, RdpDisplayMetrics, RdpError, RdpErrorKind, RdpServerCapabilities,
-    RemoteDesktopViewState, VncServerCapabilities, VncSessionState,
+    CursorPosition, RdpError, RdpErrorKind, RdpServerCapabilities, RemoteDesktopViewState,
+    VncServerCapabilities, VncSessionState,
 };
 
 use super::{
     MAINTENANCE_INTERVAL, POINTER_MOVE_INTERVAL, RESIZE_DEBOUNCE, clear_rdp_reconnect_after_frame,
     defer_rdp_pointer_move, inline_remote_desktop_password, rdp_error_is_retryable,
-    rdp_key_modifiers, rdp_reconnect_delay, rdp_resize_is_material,
-    record_remote_cursor_position_if_sent, remote_committed_text_supported,
-    remote_desktop_password_id, remote_desktop_periodic_delay, remote_modifier_transitions,
-    remote_state_clears_input, secure_attention_available,
-    should_disable_dynamic_resize_after_state, vnc_capabilities_for_state, vnc_input_allowed,
-    vnc_keysym_for_key,
+    rdp_key_modifiers, rdp_reconnect_delay, record_remote_cursor_position_if_sent,
+    remote_committed_text_supported, remote_desktop_password_id, remote_desktop_periodic_delay,
+    remote_modifier_transitions, remote_state_clears_input, secure_attention_available,
+    vnc_capabilities_for_state, vnc_input_allowed, vnc_keysym_for_key,
 };
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
@@ -138,58 +136,6 @@ fn first_frame_clears_reconnect_attempt_and_error_state() {
     assert_eq!(session.reconnect_attempts, 0);
     assert_eq!(session.reconnect_at, None);
     assert_eq!(session.error, None);
-}
-
-#[test]
-fn resize_filter_ignores_duplicate_and_sub_threshold_changes() {
-    let metrics = |width, height, desktop_scale_factor| RdpDisplayMetrics {
-        width,
-        height,
-        desktop_scale_factor,
-        physical_size_mm: None,
-    };
-    assert!(!rdp_resize_is_material(
-        Some((1280, 720)),
-        None,
-        metrics(1300, 740, 100)
-    ));
-    assert!(rdp_resize_is_material(
-        Some((1280, 720)),
-        None,
-        metrics(1312, 720, 100)
-    ));
-    assert!(!rdp_resize_is_material(
-        None,
-        Some(metrics(1280, 720, 100)),
-        metrics(1280, 720, 100)
-    ));
-    assert!(rdp_resize_is_material(None, None, metrics(1280, 720, 100)));
-    assert!(rdp_resize_is_material(
-        Some((1280, 720)),
-        None,
-        metrics(1280, 720, 150)
-    ));
-}
-
-#[test]
-fn resize_related_failure_disables_dynamic_resize_only_inside_window() {
-    let now = Instant::now();
-    let error = RdpError::new(RdpErrorKind::Session, "resize failed");
-    assert!(should_disable_dynamic_resize_after_state(
-        &nyaterm_remote_desktop::RdpSessionState::Failed(error.clone()),
-        Some(now - Duration::from_secs(2)),
-        now,
-    ));
-    assert!(!should_disable_dynamic_resize_after_state(
-        &nyaterm_remote_desktop::RdpSessionState::Failed(error),
-        Some(now - Duration::from_secs(4)),
-        now,
-    ));
-    assert!(!should_disable_dynamic_resize_after_state(
-        &nyaterm_remote_desktop::RdpSessionState::Connected,
-        Some(now),
-        now,
-    ));
 }
 
 #[test]
