@@ -1,5 +1,5 @@
 use gpui::{AppContext as _, TestAppContext, px, size};
-use nyaterm_core::{AppRuntime, RuntimeMode, WorkspaceId, uuid};
+use nyaterm_core::{AppRuntime, RuntimeMode, WorkspaceId, test_support::TestTempDir};
 use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
 use super::{DesktopController, WorkspaceWindow, tray_click_shows_window};
@@ -44,11 +44,14 @@ fn tray_click_policy_accepts_only_left_release_and_left_double_click() {
 
 #[test]
 fn tray_routes_live_ownership_after_move_and_ignores_closed_sessions() {
+    // Drop GPUI state before the guards remove directories that its store workers use.
+    let root = TestTempDir::new("nyaterm-tray-routing");
+    let first_root = TestTempDir::new("nyaterm-tray-first");
+    let second_root = TestTempDir::new("nyaterm-tray-second");
     let mut cx = TestAppContext::single();
-    let root = std::env::temp_dir().join(format!("nyaterm-tray-routing-{}", uuid()));
     let runtime = AppRuntime::from_parts_for_test(
         RuntimeMode::Portable,
-        root.clone(),
+        root.path().to_path_buf(),
         root.join("config"),
         root.join("logs"),
         root.join("cache"),
@@ -86,8 +89,6 @@ fn tray_routes_live_ownership_after_move_and_ignores_closed_sessions() {
         });
         shells.push(shell);
     }
-    let first_root = std::env::temp_dir().join(format!("nyaterm-tray-first-{}", uuid()));
-    let second_root = std::env::temp_dir().join(format!("nyaterm-tray-second-{}", uuid()));
     let first_app = app_with_visible_local_session(&mut cx, &first_root, "first-session");
     let second_app = app_with_visible_local_session(&mut cx, &second_root, "second-session");
     cx.update_entity(&shells[0], |shell, _| shell.app = Some(first_app.clone()));
