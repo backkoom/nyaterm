@@ -14,6 +14,19 @@ use crate::send_command::{
 };
 
 impl NyaTermApp {
+    pub(in crate::features) fn set_send_command_clear_after_send(
+        &mut self,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.send_command.is_sending() {
+            return;
+        }
+        self.settings.set_send_command_clear_after_send(enabled);
+        self.persist_ui_layout();
+        cx.notify();
+    }
+
     pub(in crate::features) fn apply_send_command_control_input(
         &mut self,
         control_id: &str,
@@ -130,6 +143,8 @@ impl NyaTermApp {
         }
 
         let units_per_round = units.len() as u32;
+        let sent_draft = self.send_command.presentation().draft;
+        let clear_after_send = self.settings.summary().ui_serial_send_clear_after_send;
         let failed_writes = Arc::new(AtomicUsize::new(0));
         let run = self.send_command.begin_send(units_per_round);
         let cancel = run.cancel;
@@ -205,6 +220,14 @@ impl NyaTermApp {
             let _ = this.update(cx, |this, cx| {
                 let progress = this.send_command.finish_send();
                 let failed_writes = failed_writes.load(Ordering::SeqCst);
+                if this.send_command.clear_sent_draft(
+                    clear_after_send,
+                    !aborted && !cancel.load(Ordering::SeqCst) && !infinite && failed_writes == 0
+                        && progress.completed == progress.total,
+                    &sent_draft,
+                ) {
+                    this.reset_text_input("send-command.draft", "", cx);
+                }
                 if aborted {
                     this.shell.set_status(if infinite {
                         format!(

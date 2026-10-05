@@ -9,7 +9,7 @@ use gpui_kit::component::input::{
     Copy, Cut, Editor, EditorState, Input, InputEvent, InputState, Paste, SelectAll, Textarea,
     TextareaState,
 };
-use gpui_kit::component::{Icon, IconName, Sizable, Size};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable, Size};
 
 use crate::input_focus::{preserve_nya_input_focus_on_pointer_down, register_nya_input_focus};
 use crate::menu::{NyaContextMenu, NyaMenuItem};
@@ -610,7 +610,9 @@ pub struct NyaInputShell {
     search: bool,
     framed: bool,
     height: Option<gpui::Pixels>,
+    fill_height: bool,
     trailing: Vec<AnyElement>,
+    footer: Option<AnyElement>,
     on_key_down: Option<KeyDownHandler>,
     context_menu_labels: Option<[SharedString; 4]>,
 }
@@ -625,7 +627,9 @@ impl NyaInputShell {
             search: false,
             framed: true,
             height: None,
+            fill_height: false,
             trailing: Vec::new(),
+            footer: None,
             on_key_down: None,
             context_menu_labels: None,
         }
@@ -651,6 +655,14 @@ impl NyaInputShell {
 
     pub fn height(mut self, height: gpui::Pixels) -> Self {
         self.height = Some(height);
+        self.fill_height = false;
+        self
+    }
+
+    /// Fill a definite-height parent instead of using the default textarea height.
+    pub fn fill_height(mut self) -> Self {
+        self.height = None;
+        self.fill_height = true;
         self
     }
 
@@ -667,6 +679,12 @@ impl NyaInputShell {
 
     pub fn trailing(mut self, child: impl IntoElement) -> Self {
         self.trailing.push(child.into_any_element());
+        self
+    }
+
+    /// Add a fixed action row inside a textarea's frame, outside its scroll viewport.
+    pub fn footer(mut self, child: impl IntoElement) -> Self {
+        self.footer = Some(child.into_any_element());
         self
     }
 
@@ -689,7 +707,9 @@ impl RenderOnce for NyaInputShell {
             search,
             framed,
             height,
+            fill_height,
             trailing,
+            footer,
             on_key_down,
             context_menu_labels,
         } = self;
@@ -702,6 +722,7 @@ impl RenderOnce for NyaInputShell {
         let focus_state = state.clone();
         let debug_selector = id.to_string();
         let prefix_debug_selector = format!("{}-prefix", id);
+        let has_footer = footer.is_some();
         let input = match state {
             ComponentState::Input(state) => {
                 let mut input = Input::new(&state)
@@ -728,17 +749,60 @@ impl RenderOnce for NyaInputShell {
                 }
                 input.into_any_element()
             }
+            ComponentState::Textarea(state) if has_footer => {
+                let theme = cx.theme();
+                let focused = state.read(cx).focus_handle(cx).is_focused(window);
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .h(if fill_height {
+                        gpui::relative(1.)
+                    } else {
+                        height.unwrap_or(px(88.)).into()
+                    })
+                    .when(framed, |this| {
+                        this.rounded(theme.radius)
+                            .border_1()
+                            .border_color(if focused { theme.ring } else { theme.input })
+                            .bg(theme.input.opacity(if theme.is_dark() { 0.3 } else { 0.0 }))
+                    })
+                    .child(
+                        div().flex_1().min_h_0().min_w_0().overflow_hidden().child(
+                            Textarea::new(&state)
+                                .appearance(false)
+                                .bordered(false)
+                                .disabled(disabled)
+                                .readonly(readonly)
+                                .h_full(),
+                        ),
+                    )
+                    .child(footer.unwrap())
+                    .into_any_element()
+            }
             ComponentState::Textarea(state) => Textarea::new(&state)
+                .appearance(framed)
+                .bordered(framed)
                 .disabled(disabled)
                 .readonly(readonly)
-                .h(height.unwrap_or(px(88.)))
+                .h(if fill_height {
+                    gpui::relative(1.)
+                } else {
+                    height.unwrap_or(px(88.)).into()
+                })
                 .into_any_element(),
             ComponentState::Editor(state) => Editor::new(&state)
                 .disabled(disabled)
                 .readonly(readonly)
                 // A script box needs more than the two-line note height a textarea
                 // gets; the gutter makes short boxes read as cramped.
-                .h(px(168.))
+                .h(if fill_height {
+                    gpui::relative(1.)
+                } else {
+                    height.unwrap_or(px(168.)).into()
+                })
                 .text_size(px(14.))
                 .into_any_element(),
         };
@@ -748,6 +812,7 @@ impl RenderOnce for NyaInputShell {
             .debug_selector(move || debug_selector.clone())
             .w_full()
             .min_w_0()
+            .when(fill_height, |this| this.h_full().min_h_0())
             .capture_any_mouse_down(move |event, window, cx| {
                 preserve_nya_input_focus_on_pointer_down(cx);
                 // ContextMenu captures the focus to restore before bubble handlers.
@@ -756,10 +821,12 @@ impl RenderOnce for NyaInputShell {
                     capture_focus_state.focus(window, cx);
                 }
             })
-            .on_any_mouse_down(move |_, window, cx| {
-                if !disabled {
-                    focus_state.focus(window, cx);
-                }
+            .when(!has_footer, |this| {
+                this.on_any_mouse_down(move |_, window, cx| {
+                    if !disabled {
+                        focus_state.focus(window, cx);
+                    }
+                })
             });
         if let Some(handler) = on_key_down {
             container = container.on_key_down(handler);
@@ -866,12 +933,120 @@ mod tests {
 
     use gpui::{
         AppContext as _, ClipboardItem, InteractiveElement as _, IntoElement, MouseButton,
-        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, div, point, px,
+        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, div, point,
+        prelude::FluentBuilder as _, px,
     };
 
     use gpui_kit::component::highlighter::LanguageRegistry;
 
-    use super::{NyaInputShell, NyaInputState, component_placeholder};
+    use super::{ComponentState, NyaInputShell, NyaInputState, component_placeholder};
+
+    struct InputHeightFixture {
+        height: f32,
+        footer: bool,
+        flexible: gpui::Entity<NyaInputState>,
+        fixed: gpui::Entity<NyaInputState>,
+        ordinary: gpui::Entity<NyaInputState>,
+    }
+
+    impl Render for InputHeightFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .w(px(320.))
+                .flex()
+                .flex_col()
+                .child(
+                    div().h(px(self.height)).flex_none().child(
+                        NyaInputShell::new("flexible-textarea", &self.flexible)
+                            .multi_line()
+                            .fill_height()
+                            .when(self.footer, |this| {
+                                this.footer(
+                                    div()
+                                        .id("textarea-footer")
+                                        .debug_selector(|| "textarea-footer".into())
+                                        .h(px(34.))
+                                        .flex_none()
+                                        .child("Send"),
+                                )
+                            }),
+                    ),
+                )
+                .child(NyaInputShell::new("fixed-textarea", &self.fixed).multi_line())
+                .child(NyaInputShell::new("ordinary-input", &self.ordinary))
+        }
+    }
+
+    #[gpui::test]
+    fn textarea_fills_resized_parent_without_changing_default_input_heights(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, cx| InputHeightFixture {
+            height: 68.,
+            footer: false,
+            flexible: cx.new(|cx| NyaInputState::new(cx, "draft\nsecond line").multi_line(Some(4))),
+            fixed: cx.new(|cx| NyaInputState::new(cx, "fixed").multi_line(Some(4))),
+            ordinary: cx.new(|cx| NyaInputState::new(cx, "ordinary")),
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.flexible.clone());
+        for (height, footer) in [
+            (68., false),
+            (128., false),
+            (468., false),
+            (68., false),
+            (68., true),
+            (128., true),
+            (468., true),
+            (68., true),
+        ] {
+            fixture.update(cx, |fixture, cx| {
+                fixture.height = height;
+                fixture.footer = footer;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+            assert_eq!(
+                cx.debug_bounds("flexible-textarea").unwrap().size.height,
+                px(height),
+            );
+            assert_eq!(
+                cx.debug_bounds("fixed-textarea").unwrap().size.height,
+                px(88.)
+            );
+            assert_eq!(
+                cx.debug_bounds("ordinary-input").unwrap().size.height,
+                px(32.)
+            );
+            let footer_bounds = footer.then(|| cx.debug_bounds("textarea-footer").unwrap());
+            field.read_with(cx, |field, cx| {
+                let Some(ComponentState::Textarea(component)) = field.state.as_ref() else {
+                    panic!("expected a rendered textarea");
+                };
+                // Check the editing engine, not just the shell hit target.
+                let bounds = component.read(cx).input_bounds();
+                let editing_height = height - if footer { 34. } else { 0. };
+                assert!(bounds.size.height > px((editing_height - 24.).max(0.)));
+                assert!(bounds.size.height <= px(height));
+                if let Some(footer_bounds) = footer_bounds {
+                    assert_eq!(footer_bounds.size.height, px(34.));
+                    assert!(
+                        bounds.bottom() <= footer_bounds.origin.y,
+                        "height {height}: editing bounds {bounds:?}, footer {footer_bounds:?}"
+                    );
+                    assert!(footer_bounds.bottom() <= px(height));
+                }
+                assert_eq!(field.value(cx), "draft\nsecond line");
+            });
+        }
+    }
 
     struct InputContextMenuFixture {
         field: gpui::Entity<NyaInputState>,

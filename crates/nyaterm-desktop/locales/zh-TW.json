@@ -2045,6 +2045,7 @@
     "submit": "繼續"
   },
   "serialSend": {
+    "clearAfterSend": "傳送後清除",
     "addHexByte": "新增位元組",
     "allSessions": "所有工作階段",
     "byteByByte": "逐位元組傳送",

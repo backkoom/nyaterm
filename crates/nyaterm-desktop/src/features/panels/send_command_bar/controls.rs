@@ -3,7 +3,7 @@ use rust_i18n::t;
 use super::state::SendCommandBarViewState;
 use gpui::{Context, IntoElement, div, prelude::*, px};
 use nyaterm_transport::SessionKind;
-use nyaterm_ui::{NyaNumberInputOptions, NyaSelectOption};
+use nyaterm_ui::{NyaNumberInput, NyaNumberInputOptions, NyaScrollable, NyaSelectOption};
 
 use super::super::send_command_control_group;
 use crate::features::NyaTermApp;
@@ -95,11 +95,15 @@ impl NyaTermApp {
         .to_string();
 
         div()
+            .id("bottom-command-controls")
+            .debug_selector(|| "bottom-command-controls".into())
+            .h(px(32.))
+            .min_w_0()
             .flex_none()
             .flex()
-            .flex_wrap()
             .items_center()
             .gap_1()
+            .overflow_x_scrollbar()
             .child(send_command_control_group(
                 palette,
                 t!("serialSend.dataType"),
@@ -136,34 +140,40 @@ impl NyaTermApp {
             .child(send_command_control_group(
                 palette,
                 t!("serialSend.count"),
-                div().w(px(112.)).child(
-                    self.number_input_box(
-                        "send-command.count",
-                        &state.send.count_input,
-                        NyaNumberInputOptions::default()
-                            .range(1.0, 9_999.0)
-                            .step(1.0)
-                            .allow_infinity(true)
-                            .disabled(is_sending),
-                        cx,
-                    ),
+                div().w(px(128.)).h(px(32.)).flex_none().child(
+                    NyaNumberInput::new(
+                        &self.number_input(
+                            "send-command.count",
+                            &state.send.count_input,
+                            NyaNumberInputOptions::default()
+                                .range(1.0, 9_999.0)
+                                .step(1.0)
+                                .allow_infinity(true)
+                                .disabled(is_sending),
+                            cx,
+                        ),
+                    )
+                    .appearance(false),
                 ),
             ))
             .child(send_command_control_group(
                 palette,
                 t!("serialSend.interval"),
-                div().w(px(136.)).child(
-                    self.number_input_box(
-                        "send-command.interval",
-                        &state.send.interval_input,
-                        NyaNumberInputOptions::default()
-                            .range(0.0, 60.0)
-                            .step(0.01)
-                            .decimal_places(2)
-                            .suffix(t!("serialSend.seconds"))
-                            .disabled(is_sending),
-                        cx,
-                    ),
+                div().w(px(160.)).h(px(32.)).flex_none().child(
+                    NyaNumberInput::new(
+                        &self.number_input(
+                            "send-command.interval",
+                            &state.send.interval_input,
+                            NyaNumberInputOptions::default()
+                                .range(0.0, 60.0)
+                                .step(0.01)
+                                .decimal_places(2)
+                                .suffix(t!("serialSend.seconds"))
+                                .disabled(is_sending),
+                            cx,
+                        ),
+                    )
+                    .appearance(false),
                 ),
             ))
             .when(state.is_serial_text_line, |this| {

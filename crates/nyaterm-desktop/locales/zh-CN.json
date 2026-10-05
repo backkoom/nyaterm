@@ -2045,6 +2045,7 @@
     "submit": "继续"
   },
   "serialSend": {
+    "clearAfterSend": "发送后清除",
     "addHexByte": "添加字节",
     "allSessions": "所有会话",
     "byteByByte": "逐字节发送",

@@ -10,6 +10,7 @@ pub(super) fn send_command_control_group(
     div()
         .relative()
         .h(px(32.))
+        .flex_none()
         .min_w(px(136.))
         .flex()
         .items_center()

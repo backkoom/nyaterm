@@ -337,6 +337,7 @@ impl RenderOnce for NyaNumberInput {
             })
             .child(
                 NumberInput::new(&state)
+                    .w_full()
                     .with_size(form_control_size())
                     .h(form_control_height())
                     .appearance(self.appearance)
@@ -415,13 +416,87 @@ fn format_number(value: f64, options: &NyaNumberInputOptions) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext as _, TestAppContext};
+    use gpui::{
+        AppContext as _, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext, div,
+        px,
+    };
 
     use super::{
-        NyaNumberInputOptions, NyaNumberInputState, NyaNumberStep, committed_number_text,
-        stepped_number_text,
+        NyaNumberInput, NyaNumberInputOptions, NyaNumberInputState, NyaNumberStep,
+        committed_number_text, stepped_number_text,
     };
     use crate::sizing::{NYA_FORM_CONTROL_HEIGHT_PX, form_control_size};
+
+    struct NumberLayoutFixture {
+        count: gpui::Entity<NyaNumberInputState>,
+        interval: gpui::Entity<NyaNumberInputState>,
+    }
+
+    impl Render for NumberLayoutFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().flex().children([
+                div()
+                    .w(px(128.))
+                    .h(px(32.))
+                    .flex_none()
+                    .child(NyaNumberInput::new(&self.count).appearance(false)),
+                div()
+                    .w(px(160.))
+                    .h(px(32.))
+                    .flex_none()
+                    .child(NyaNumberInput::new(&self.interval).appearance(false)),
+            ])
+        }
+    }
+
+    #[gpui::test]
+    fn borderless_number_inputs_leave_room_for_values_and_both_step_buttons(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, cx| NumberLayoutFixture {
+            count: cx.new(|cx| {
+                NyaNumberInputState::new(
+                    cx,
+                    "9999",
+                    NyaNumberInputOptions::default()
+                        .range(1., 9999.)
+                        .allow_infinity(true),
+                )
+            }),
+            interval: cx.new(|cx| {
+                NyaNumberInputState::new(
+                    cx,
+                    "60.00",
+                    NyaNumberInputOptions::default()
+                        .range(0., 60.)
+                        .decimal_places(2)
+                        .suffix("s"),
+                )
+            }),
+        });
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        fixture.read_with(cx, |fixture, cx| {
+            for (field, left, width, expected) in [
+                (&fixture.count, 0., 128., "9999"),
+                (&fixture.interval, 128., 160., "60.00"),
+            ] {
+                let input = field.read(cx).component_state().unwrap();
+                let bounds = input.read(cx).input_bounds();
+                assert!(bounds.size.width >= px(32.));
+                assert!(bounds.size.height > px(0.));
+                assert!(bounds.origin.x >= px(left + 32.));
+                assert!(bounds.right() <= px(left + width - 32.));
+                assert_eq!(field.read(cx).value(cx), expected);
+            }
+        });
+    }
 
     #[test]
     fn stepped_number_increments_decrements_and_clamps() {

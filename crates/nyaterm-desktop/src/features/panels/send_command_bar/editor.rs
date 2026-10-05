@@ -11,7 +11,7 @@ use gpui::{
 use super::super::{send_command_hex_byte_count, send_command_hex_guide_rows};
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::send_command::{SendCommandDataType, format_send_command_hex_display};
-use nyaterm_ui::{NyaScrollable, NyaTooltip};
+use nyaterm_ui::{NyaCheckbox, NyaScrollable, NyaTooltip};
 
 impl NyaTermApp {
     pub(super) fn send_command_bar_editor(
@@ -34,6 +34,44 @@ impl NyaTermApp {
             !send.draft.is_empty()
         };
         let send_disabled = !is_sending && (validation_error || !has_payload || !target_available);
+        // At the minimum panel height, keep one editable line above the action row.
+        let hex_header_height = if self.shell.command_send_height() < 160. {
+            0.
+        } else {
+            22.
+        };
+        let footer = div()
+            .h(px(34.))
+            .w_full()
+            .flex_none()
+            .px_2()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .child(
+                NyaCheckbox::new("send-command.clear-after-send")
+                    .label(t!("serialSend.clearAfterSend"))
+                    .checked(self.settings.summary().ui_serial_send_clear_after_send)
+                    .disabled(is_sending)
+                    .on_click(cx.listener(|this, enabled: &bool, _, cx| {
+                        this.set_send_command_clear_after_send(*enabled, cx);
+                    })),
+            )
+            .child(send_command_action_button(
+                palette,
+                is_sending,
+                send_disabled,
+                t!("serialSend.send"),
+                t!("serialSend.stop"),
+                cx.listener(|this, _, _, cx| {
+                    if this.send_command.is_sending() {
+                        this.stop_send_command(cx);
+                    } else {
+                        this.send_bottom_command(false, cx);
+                    }
+                }),
+            ));
         // Built before the panel, which reads `self` throughout: creating the
         // box needs it mutably. Wrapped, like Tauri's textarea — Enter is a
         // newline and Ctrl/Cmd+Enter is what sends.
@@ -44,23 +82,34 @@ impl NyaTermApp {
                 TextInputSetup::multi_line(input_hint),
                 cx,
             )
+            .fill_height()
+            .footer(footer)
+            .when(send.data_type == SendCommandDataType::Hex, |this| {
+                this.bare()
+            })
             .into_any_element();
         div()
             .relative()
             .flex_1()
-            .min_h(px(72.))
+            .min_h_0()
+            .min_w_0()
             .flex()
             .gap(px(6.))
-            .pr(px(40.))
-            .pb(px(40.))
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .min_w_0()
-                    .min_h(px(72.))
+                    .min_h_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
                     .when(send.data_type == SendCommandDataType::Hex, |this| {
-                        this.flex_none().flex_basis(gpui::relative(1.0 / 1.85))
+                        this.flex_1()
+                            .flex_basis(gpui::relative(1.0 / 1.85))
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(palette.border))
                     })
                     .when(send.data_type == SendCommandDataType::Hex, |this| {
                         // Tauri overlays dashed 4-byte guides per line above the hex textarea.
@@ -107,11 +156,9 @@ impl NyaTermApp {
                         ))
                         .child(
                             div()
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .right_0()
-                                .h(px(22.))
+                                .h(px(hex_header_height))
+                                .flex_none()
+                                .overflow_hidden()
                                 .px_2()
                                 .flex()
                                 .items_center()
@@ -145,7 +192,8 @@ impl NyaTermApp {
                             div()
                                 .absolute()
                                 .inset_0()
-                                .top(px(22.))
+                                .top(px(hex_header_height))
+                                .bottom(px(34.))
                                 .px_2()
                                 .py_1()
                                 .overflow_hidden()
@@ -180,6 +228,10 @@ impl NyaTermApp {
                         div()
                             .flex_1()
                             .min_w_0()
+                            .min_h_0()
+                            .relative()
+                            .flex()
+                            .flex_col()
                             .font_family(crate::features::shell::gpui_code_font_family())
                             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                                 if this.handle_send_command_key_down(event, cx) {
@@ -193,10 +245,11 @@ impl NyaTermApp {
                 let byte_count = send_command_hex_byte_count(&send.draft);
                 this.child(
                     div()
-                        .flex_none()
+                        .flex_1()
                         .flex_basis(gpui::relative(0.85 / 1.85))
-                        .min_w(px(140.))
-                        .min_h(px(72.))
+                        .min_w_0()
+                        .min_h_0()
+                        .h_full()
                         .rounded_md()
                         .border_1()
                         .border_color(rgb(palette.border))
@@ -208,6 +261,7 @@ impl NyaTermApp {
                         .gap_1()
                         .child(
                             div()
+                                .flex_none()
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -258,20 +312,6 @@ impl NyaTermApp {
                     progress_ratio,
                 ))
             })
-            .child(send_command_floating_action_button(
-                palette,
-                is_sending,
-                send_disabled,
-                t!("serialSend.send"),
-                t!("serialSend.stop"),
-                cx.listener(|this, _, _, cx| {
-                    if this.send_command.is_sending() {
-                        this.stop_send_command(cx);
-                    } else {
-                        this.send_bottom_command(false, cx);
-                    }
-                }),
-            ))
             .into_any_element()
     }
 }
@@ -285,7 +325,7 @@ fn send_command_progress_popover(
         .absolute()
         .top(px(8.))
         .left(px(8.))
-        .right(px(44.))
+        .right(px(8.))
         .rounded_md()
         .border_1()
         .border_color(rgb(0x1f6feb))
@@ -335,7 +375,7 @@ fn send_command_progress_popover(
         )
 }
 
-fn send_command_floating_action_button(
+fn send_command_action_button(
     palette: crate::theme::ThemePalette,
     is_sending: bool,
     disabled: bool,
@@ -348,9 +388,8 @@ fn send_command_floating_action_button(
     let tooltip = if is_sending { stop_label } else { send_label };
     div()
         .id(SharedString::from("bottom-command-floating-send"))
-        .absolute()
-        .right(px(8.))
-        .bottom(px(8.))
+        .debug_selector(|| "bottom-command-floating-send".into())
+        .flex_none()
         .size(px(28.))
         .rounded_md()
         .flex()

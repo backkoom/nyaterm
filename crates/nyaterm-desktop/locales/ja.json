@@ -2045,6 +2045,7 @@
     "submit": "続行"
   },
   "serialSend": {
+    "clearAfterSend": "送信後にクリア",
     "addHexByte": "バイトを追加",
     "allSessions": "すべてのセッション",
     "byteByByte": "1 バイトずつ",

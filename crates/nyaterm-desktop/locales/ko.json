@@ -2045,6 +2045,7 @@
     "submit": "계속"
   },
   "serialSend": {
+    "clearAfterSend": "전송 후 지우기",
     "addHexByte": "바이트 추가",
     "allSessions": "모든 세션",
     "byteByByte": "바이트 단위",

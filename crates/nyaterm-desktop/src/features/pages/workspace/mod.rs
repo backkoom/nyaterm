@@ -42,6 +42,7 @@ impl NyaTermApp {
         .inset_0();
         let mut workspace = div()
             .flex_1()
+            .min_h_0()
             .min_w_0()
             .flex()
             .flex_col()

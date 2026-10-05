@@ -2289,17 +2289,23 @@ fn save_ui_layout_bottom_panel_state_roundtrip_and_clamp() {
     summary.ui_quick_cmd_visible = false;
     summary.ui_serial_send_height = 284;
     summary.ui_serial_send_visible = true;
+    summary.ui_serial_send_clear_after_send = true;
 
     let saved = store.save_ui_layout_settings(&summary).expect("save");
     assert_eq!(saved.ui_quick_cmd_height, 312);
     assert!(!saved.ui_quick_cmd_visible);
     assert_eq!(saved.ui_serial_send_height, 284);
     assert!(saved.ui_serial_send_visible);
+    assert!(saved.ui_serial_send_clear_after_send);
     let raw = store.load_settings_value().expect("raw");
     assert_eq!(raw["ui"]["quick_cmd_height"], serde_json::json!(312));
     assert_eq!(raw["ui"]["show_quick_cmd_bar"], serde_json::json!(false));
     assert_eq!(raw["ui"]["serial_send_height"], serde_json::json!(284));
     assert_eq!(raw["ui"]["show_serial_send_panel"], serde_json::json!(true));
+    assert_eq!(
+        raw["ui"]["serial_send_clear_after_send"],
+        serde_json::json!(true)
+    );
 
     summary.ui_quick_cmd_height = 0;
     summary.ui_serial_send_height = 999;
@@ -2308,7 +2314,50 @@ fn save_ui_layout_bottom_panel_state_roundtrip_and_clamp() {
         .expect("save clamped");
     assert_eq!(clamped.ui_quick_cmd_height, 36);
     assert_eq!(clamped.ui_serial_send_height, 520);
+    summary.ui_serial_send_height = 60;
+    assert_eq!(
+        store
+            .save_ui_layout_settings(&summary)
+            .unwrap()
+            .ui_serial_send_height,
+        120
+    );
 
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn command_send_preferences_load_legacy_defaults_and_preserve_unknown_settings() {
+    let dir = unique_temp_dir("settings-command-send-compatibility");
+    let store = ConnectionStore::open(&dir).expect("store");
+    store
+        .save_settings_value(&serde_json::json!({
+            "ui": {"serial_send_height": 60, "future_option": {"enabled": true}}
+        }))
+        .unwrap();
+    let mut summary = store.load_app_settings_summary().unwrap();
+    assert_eq!(summary.ui_serial_send_height, 120);
+    assert!(!summary.ui_serial_send_clear_after_send);
+    store
+        .save_settings_value(&serde_json::json!({
+            "ui": {"serial_send_clear_after_send": true, "future_option": {"enabled": true}}
+        }))
+        .unwrap();
+    summary = store.load_app_settings_summary().unwrap();
+    assert!(summary.ui_serial_send_clear_after_send);
+    summary.ui_serial_send_clear_after_send = false;
+    store.save_ui_layout_settings(&summary).unwrap();
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(
+        raw["ui"]["future_option"],
+        serde_json::json!({"enabled": true})
+    );
+    assert!(
+        !store
+            .load_app_settings_summary()
+            .unwrap()
+            .ui_serial_send_clear_after_send
+    );
     std::fs::remove_dir_all(dir).ok();
 }
 

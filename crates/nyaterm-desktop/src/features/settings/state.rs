@@ -956,6 +956,10 @@ impl SettingsFeatureState {
         self.summary.interaction_tab_right_click_action = action;
     }
 
+    pub(in crate::features) fn set_send_command_clear_after_send(&mut self, enabled: bool) {
+        self.summary.ui_serial_send_clear_after_send = enabled;
+    }
+
     pub(in crate::features) fn apply_ui_layout(&mut self, update: UiLayoutSettingsUpdate) {
         self.summary.ui_left_panel_width = update.left_panel_width;
         self.summary.ui_right_panel_width = update.right_panel_width;

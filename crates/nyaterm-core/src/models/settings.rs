@@ -312,6 +312,8 @@ pub struct AppSettingsSummary {
     pub ui_quick_cmd_visible: bool,
     #[serde(default = "default_serial_send_height")]
     pub ui_serial_send_height: u32,
+    #[serde(default)]
+    pub ui_serial_send_clear_after_send: bool,
     /// Whether the Tauri-compatible Command Send bottom panel is visible.
     #[serde(default)]
     pub ui_serial_send_visible: bool,
@@ -548,6 +550,7 @@ impl Default for AppSettingsSummary {
             ui_quick_cmd_height: 180,
             ui_quick_cmd_visible: true,
             ui_serial_send_height: 180,
+            ui_serial_send_clear_after_send: false,
             ui_serial_send_visible: false,
             ui_active_left_panel: Some("fileExplorer".to_string()),
             ui_active_right_panel: Some("savedConnections".to_string()),

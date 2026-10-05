@@ -2045,6 +2045,7 @@
     "submit": "Continue"
   },
   "serialSend": {
+    "clearAfterSend": "Clear after send",
     "addHexByte": "Add byte",
     "allSessions": "All sessions",
     "byteByByte": "Byte by byte",

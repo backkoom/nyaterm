@@ -13,7 +13,6 @@ pub(super) struct SendCommandBarViewState {
     pub(super) send: SendCommandPresentationState,
     pub(super) palette: crate::theme::ThemePalette,
     pub(super) group_targets: Vec<(String, String, usize)>,
-    pub(super) target_kind: Cow<'static, str>,
     pub(super) is_serial_text_line: bool,
     pub(super) validation_error: bool,
     pub(super) preview: String,
@@ -29,14 +28,6 @@ impl NyaTermApp {
         let palette = self.theme_palette();
         let active_kind = self.active_session_kind();
         let group_targets = self.send_command_group_target_options();
-        let target_kind = match active_kind {
-            Some(SessionKind::Serial) => t!("serialSend.serialData"),
-            Some(SessionKind::RawTcp) => Cow::Borrowed("Raw TCP"),
-            Some(SessionKind::Telnet) => Cow::Borrowed("Telnet"),
-            Some(SessionKind::Ssh | SessionKind::LocalPty) => t!("serialSend.shellCommand"),
-            Some(SessionKind::Rdp | SessionKind::Vnc) => t!("serialSend.unavailable"),
-            None => t!("serialSend.unavailable"),
-        };
         let is_serial_text_line = matches!(active_kind, Some(SessionKind::Serial))
             && send.data_type == SendCommandDataType::Text
             && send.mode == SendCommandMode::Line;
@@ -106,7 +97,6 @@ impl NyaTermApp {
             send,
             palette,
             group_targets,
-            target_kind,
             is_serial_text_line,
             validation_error,
             preview,

@@ -250,7 +250,7 @@ impl NyaTermApp {
         seed: &str,
         setup: TextInputSetup,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<I> {
+    ) -> NyaInputShell {
         let id = id.into();
         let multi_line = setup.multi_line;
         let field = self.text_input(id.clone(), seed, setup, cx);

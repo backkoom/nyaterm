@@ -2045,6 +2045,7 @@
     "submit": "Continuer"
   },
   "serialSend": {
+    "clearAfterSend": "Effacer après envoi",
     "addHexByte": "Ajouter un octet",
     "allSessions": "Toutes les sessions",
     "byteByByte": "Octet par octet",

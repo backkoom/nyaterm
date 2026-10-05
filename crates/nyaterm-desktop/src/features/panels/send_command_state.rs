@@ -183,6 +183,22 @@ impl SendCommandFeatureState {
 
     pub(in crate::features) fn clear_draft(&mut self) {
         self.composer.draft.clear();
+        self.composer.hex_scroll_x = 0.;
+        self.composer.hex_scroll_y = 0.;
+    }
+
+    /// Never discard edits made while an earlier payload was being sent.
+    pub(in crate::features) fn clear_sent_draft(
+        &mut self,
+        enabled: bool,
+        completed_successfully: bool,
+        sent_draft: &str,
+    ) -> bool {
+        if !enabled || !completed_successfully || self.composer.draft != sent_draft {
+            return false;
+        }
+        self.clear_draft();
+        true
     }
 
     pub(in crate::features) fn apply_draft(&mut self, text: String) -> Option<String> {
@@ -510,6 +526,26 @@ mod tests {
             state.synced_control_input(SendCommandControlFocus::Interval),
             "60.00"
         );
+    }
+
+    #[test]
+    fn clear_after_send_keeps_failed_cancelled_disabled_and_edited_drafts() {
+        let cx = TestAppContext::single();
+        let mut state = send_command_state(&cx);
+        for data_type in [SendCommandDataType::Text, SendCommandDataType::Hex] {
+            state.set_data_type(data_type);
+            state.apply_draft("ABCD".to_string());
+            let sent_draft = state.presentation().draft;
+            assert!(!state.clear_sent_draft(false, true, &sent_draft));
+            assert!(!state.clear_sent_draft(true, false, &sent_draft));
+            assert_eq!(state.presentation().draft, sent_draft);
+            state.apply_draft("1234".to_string());
+            let edited = state.presentation().draft;
+            assert!(!state.clear_sent_draft(true, true, &sent_draft));
+            assert_eq!(state.presentation().draft, edited);
+            assert!(state.clear_sent_draft(true, true, &edited));
+            assert!(state.presentation().draft.is_empty());
+        }
     }
 
     #[test]
