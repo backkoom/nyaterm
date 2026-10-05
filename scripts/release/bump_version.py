@@ -180,7 +180,16 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 try:
                     # --only preserves unrelated staged changes in the user's index.
-                    git(ROOT_DIR, "diff", "--check", "--", *VERSION_FILES)
+                    # Files retain their original line endings. With autocrlf off,
+                    # diff --check otherwise treats the CR in CRLF as whitespace.
+                    whitespace = git(
+                        ROOT_DIR, "config", "--default", "trailing-space,space-before-tab",
+                        "--get", "core.whitespace",
+                    )
+                    git(
+                        ROOT_DIR, "-c", f"core.whitespace={whitespace},cr-at-eol",
+                        "diff", "--check", "--", *VERSION_FILES,
+                    )
                     git(ROOT_DIR, "commit", "--only", "-m", message, "--", *VERSION_FILES)
                 except (OSError, ValueError) as error:
                     raise ValueError(f"commit failed; version edits remain available for review: {error}") from error

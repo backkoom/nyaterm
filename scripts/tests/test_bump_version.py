@@ -55,12 +55,16 @@ class BumpVersionTests(unittest.TestCase):
         (self.root / "plugin.toml").write_text(f'host_version = ">={OLD}"\n', encoding="utf-8")
 
     def run_cli(self, *args: str) -> int:
+        output = io.StringIO()
+        error = io.StringIO()
         with (
             mock.patch.object(bump_version, "ROOT_DIR", self.root),
-            contextlib.redirect_stdout(io.StringIO()),
-            contextlib.redirect_stderr(io.StringIO()),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(error),
         ):
-            return bump_version.main(list(args))
+            result = bump_version.main(list(args))
+        self.cli_error = error.getvalue()
+        return result
 
     def snapshot(self) -> dict[Path, bytes]:
         return {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
@@ -70,6 +74,8 @@ class BumpVersionTests(unittest.TestCase):
         bump_version.git(self.root, "config", "user.name", "Version Script Test")
         bump_version.git(self.root, "config", "user.email", "version-test@example.invalid")
         bump_version.git(self.root, "config", "commit.gpgsign", "false")
+        # Exercise CRLF preservation without inheriting Windows autocrlf settings.
+        bump_version.git(self.root, "config", "core.autocrlf", "false")
         hooks = self.root / ".git" / "empty-hooks"
         hooks.mkdir()
         bump_version.git(self.root, "config", "core.hooksPath", str(hooks))
@@ -140,7 +146,7 @@ class BumpVersionTests(unittest.TestCase):
         bump_version.git(self.root, "add", "--", "plugin.toml")
         staged = bump_version.git(self.root, "diff", "--cached")
         (self.root / "notes.txt").write_text("unfinished work\n", encoding="utf-8")
-        self.assertEqual(self.run_cli(NEW, "--commit"), 0)
+        self.assertEqual(self.run_cli(NEW, "--commit"), 0, self.cli_error)
         self.assertEqual(
             bump_version.git(self.root, "log", "-1", "--format=%s"),
             f"chore(release): bump version to {NEW}",
@@ -153,6 +159,28 @@ class BumpVersionTests(unittest.TestCase):
         self.assertEqual((self.root / "notes.txt").read_text(), "unfinished work\n")
         head = bump_version.git(self.root, "rev-parse", "HEAD")
         self.assertEqual(self.run_cli(NEW, "--commit"), 0)
+        self.assertEqual(bump_version.git(self.root, "rev-parse", "HEAD"), head)
+
+    def test_commit_accepts_crlf_and_preserves_configured_whitespace_checks(self) -> None:
+        self.init_git()
+        bump_version.git(self.root, "config", "core.whitespace", "trailing-space,tab-in-indent")
+        self.assertEqual(self.run_cli(NEW, "--commit"), 0, self.cli_error)
+        self.assertEqual(
+            bump_version.git(self.root, "config", "--get", "core.whitespace"),
+            "trailing-space,tab-in-indent",
+        )
+        for filename in bump_version.VERSION_FILES:
+            data = (self.root / filename).read_bytes()
+            self.assertIn(b"\r\n", data)
+            self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
+        # A changed tab-indented version must still fail the configured check.
+        manifest = self.root / "Cargo.toml"
+        manifest.write_bytes(manifest.read_bytes().replace(b"version = '", b"\tversion = '"))
+        bump_version.git(self.root, "add", "--", "Cargo.toml")
+        bump_version.git(self.root, "commit", "-m", "test: add configured whitespace fixture")
+        head = bump_version.git(self.root, "rev-parse", "HEAD")
+        self.assertEqual(self.run_cli("2.0.0-preview.6", "--commit"), 1)
+        self.assertIn("tab in indent", self.cli_error)
         self.assertEqual(bump_version.git(self.root, "rev-parse", "HEAD"), head)
 
     def test_commit_dry_run_preserves_files_head_and_index(self) -> None:
