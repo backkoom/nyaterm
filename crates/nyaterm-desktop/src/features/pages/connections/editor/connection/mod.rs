@@ -2922,6 +2922,41 @@ mod tests {
         font_size: f32,
     }
 
+    struct AlgorithmListHost {
+        app: Entity<NyaTermApp>,
+        tab: crate::models::ConnectionEditorSshAlgorithmTab,
+    }
+
+    impl Render for AlgorithmListHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let tab = self.tab;
+            let list = self.app.update(cx, |app, cx| {
+                let supported = nyaterm_transport::supported_ssh_algorithms();
+                let (options, selected) = match tab {
+                    crate::models::ConnectionEditorSshAlgorithmTab::KeyExchange => {
+                        (&supported.kex, &supported.compatible.kex)
+                    }
+                    crate::models::ConnectionEditorSshAlgorithmTab::Ciphers => {
+                        (&supported.ciphers, &supported.compatible.ciphers)
+                    }
+                    crate::models::ConnectionEditorSshAlgorithmTab::Macs => {
+                        (&supported.macs, &supported.compatible.macs)
+                    }
+                    crate::models::ConnectionEditorSshAlgorithmTab::HostKeys => {
+                        (&supported.host_keys, &supported.compatible.host_keys)
+                    }
+                };
+                super::ssh::ssh_algorithm_list(app.theme_palette(), tab, options, selected, cx)
+                    .into_any_element()
+            });
+            div().w(px(340.)).text_size(px(12.)).child(list)
+        }
+    }
+
     impl Render for EditorHost {
         fn render(
             &mut self,
@@ -2997,6 +3032,57 @@ mod tests {
             _ = window.draw(cx);
         });
         vcx.run_until_parked();
+    }
+
+    #[test]
+    fn ssh_algorithm_lists_keep_rows_full_height_and_scroll_inside_the_viewport() {
+        use crate::models::ConnectionEditorSshAlgorithmTab;
+
+        for tab in [
+            ConnectionEditorSshAlgorithmTab::KeyExchange,
+            ConnectionEditorSshAlgorithmTab::Ciphers,
+            ConnectionEditorSshAlgorithmTab::Macs,
+            ConnectionEditorSshAlgorithmTab::HostKeys,
+        ] {
+            let test_dir = TestConfigDir::new("nyaterm-ssh-algorithm-list-scroll");
+            let mut cx = TestAppContext::single();
+            let app = test_app(&mut cx, test_dir.path());
+            cx.update_entity(&app, |app, cx| app.sync_component_theme(cx));
+            let host_app = app.clone();
+            let (_, vcx) = cx.add_window_view(move |_, _| AlgorithmListHost { app: host_app, tab });
+            let vcx: &mut VisualTestContext = vcx;
+            draw_editor(&app, vcx);
+
+            let viewport = vcx
+                .debug_bounds("connection-ssh-algorithm-viewport")
+                .unwrap();
+            let first = vcx.debug_bounds("connection-ssh-algorithm-row-0").unwrap();
+            let second = vcx.debug_bounds("connection-ssh-algorithm-row-1").unwrap();
+            assert_eq!(first.size.height, px(36.));
+            assert_eq!(second.top() - first.top(), px(36.));
+            assert!(viewport.size.height <= px(226.));
+            let overlay = vcx.debug_bounds("scrollbar-overlay").unwrap();
+            assert!(overlay.size.height >= viewport.size.height - px(2.));
+
+            vcx.simulate_event(ScrollWheelEvent {
+                position: viewport.center(),
+                delta: ScrollDelta::Pixels(point(px(0.), px(-108.))),
+                ..Default::default()
+            });
+            draw_editor(&app, vcx);
+            let after = vcx.debug_bounds("connection-ssh-algorithm-row-0").unwrap();
+            if tab == ConnectionEditorSshAlgorithmTab::Macs {
+                assert_eq!(after.top(), first.top(), "short lists should not scroll");
+            } else {
+                assert!(after.top() < first.top(), "{tab:?} must scroll its content");
+            }
+            assert_eq!(
+                vcx.debug_bounds("connection-ssh-algorithm-viewport")
+                    .unwrap(),
+                viewport
+            );
+            assert_eq!(vcx.debug_bounds("scrollbar-overlay").unwrap(), overlay);
+        }
     }
 
     fn protocol_selectors(kind: ConnectionKindTab) -> (&'static str, &'static str) {
