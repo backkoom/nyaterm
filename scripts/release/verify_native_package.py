@@ -395,22 +395,23 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
         version_files = list(output.rglob("VERSION"))
         if len(version_files) != 1 or version_files[0].read_text(encoding="utf-8").strip() != version:
             raise RuntimeError(f"{path.name} contains the wrong installed version")
-    required = {"NyaTerm.exe", "LICENSE", "VERSION", "Uninstall.exe"}
-    required.update(helper_filenames(target))
-    missing = required - names
-    if missing:
-        raise RuntimeError(f"{path.name} is missing installed files: {', '.join(sorted(missing))}")
-    conpty_required = [
-        f"conpty/{relative.as_posix()}" for relative in package_native.conpty_files(target)
-    ] + ["conpty/LICENSE.txt"]
-    missing_conpty = set(conpty_required) - files.keys()
-    if missing_conpty:
-        raise RuntimeError(f"{path.name} is missing ConPTY files: {', '.join(sorted(missing_conpty))}")
-    verify_conpty_machines(
-        {relative: pe_machine(files[f"conpty/{relative.as_posix()}"].read_bytes())
-         for relative in package_native.conpty_files(target)},
-        path.name,
-    )
+        required = {"NyaTerm.exe", "LICENSE", "VERSION", "Uninstall.exe"}
+        required.update(helper_filenames(target))
+        missing = required - names
+        if missing:
+            raise RuntimeError(f"{path.name} is missing installed files: {', '.join(sorted(missing))}")
+        conpty_required = [
+            f"conpty/{relative.as_posix()}" for relative in package_native.conpty_files(target)
+        ] + ["conpty/LICENSE.txt"]
+        missing_conpty = set(conpty_required) - files.keys()
+        if missing_conpty:
+            raise RuntimeError(f"{path.name} is missing ConPTY files: {', '.join(sorted(missing_conpty))}")
+        # Read extracted payloads while the temporary directory still exists.
+        verify_conpty_machines(
+            {relative: pe_machine(files[f"conpty/{relative.as_posix()}"].read_bytes())
+             for relative in package_native.conpty_files(target)},
+            path.name,
+        )
 
 
 def verify_macos_archive(path: Path, target: str, version: str) -> None:
