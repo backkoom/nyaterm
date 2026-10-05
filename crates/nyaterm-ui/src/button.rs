@@ -29,6 +29,7 @@ pub struct NyaButton {
     selected: bool,
     disabled: bool,
     loading: bool,
+    autofocus: bool,
     tooltip: Option<SharedString>,
     on_click: Option<NyaButtonClickHandler>,
 }
@@ -48,6 +49,7 @@ impl NyaButton {
             selected: false,
             disabled: false,
             loading: false,
+            autofocus: false,
             tooltip: None,
             on_click: None,
         }
@@ -103,6 +105,12 @@ impl NyaButton {
         self
     }
 
+    /// Focus this button when it first appears, without stealing focus on redraw.
+    pub fn autofocus(mut self) -> Self {
+        self.autofocus = true;
+        self
+    }
+
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
@@ -118,7 +126,17 @@ impl NyaButton {
 }
 
 impl RenderOnce for NyaButton {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        if self.autofocus && !self.disabled && !self.loading {
+            // Initialize the same keyed focus state used by gpui-kit's Button.
+            // Render it in this scope below so its focus ring and keyboard clicks
+            // use this handle too. Keyed state expires when the button disappears.
+            window.use_keyed_state(self.id.clone(), cx, |window, cx| {
+                let focus = cx.focus_handle();
+                window.focus(&focus, cx);
+                focus
+            });
+        }
         let mut button = Button::new(self.id).label(self.label).loading(self.loading);
         if let Some(icon_path) = self.icon_path {
             button = button.icon(Icon::default().path(icon_path));
@@ -153,7 +171,7 @@ impl RenderOnce for NyaButton {
         if let Some(height) = self.height {
             button = button.h(height);
         }
-        button.disabled(self.disabled)
+        button.disabled(self.disabled).render(window, cx)
     }
 }
 
@@ -231,7 +249,89 @@ impl RenderOnce for NyaIconButton {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{
+        Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
+        Keystroke, ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext,
+        Window, div,
+    };
+
     use super::NyaButton;
+
+    struct AutofocusHost {
+        show_button: bool,
+        other_focus: FocusHandle,
+        clicks: usize,
+    }
+
+    fn press_enter(cx: &mut VisualTestContext) {
+        let keystroke = Keystroke::parse("enter").unwrap();
+        cx.simulate_event(KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(KeyUpEvent { keystroke });
+    }
+
+    impl Render for AutofocusHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let mut root = div()
+                .size_full()
+                .child(div().track_focus(&self.other_focus));
+            if self.show_button {
+                root = root.child(NyaButton::new("paste", "Paste").autofocus().on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.clicks += 1;
+                        cx.notify();
+                    }),
+                ));
+            }
+            root
+        }
+    }
+
+    #[gpui::test]
+    fn autofocus_supports_enter_without_stealing_focus_on_redraw(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (host, cx) = cx.add_window_view(|_, cx| AutofocusHost {
+            show_button: true,
+            other_focus: cx.focus_handle(),
+            clicks: 0,
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(window.focused(cx).is_some());
+        });
+        press_enter(cx);
+        assert_eq!(host.read_with(cx, |host, _| host.clicks), 1);
+
+        cx.update(|window, cx| {
+            let other_focus = host.read(cx).other_focus.clone();
+            window.focus(&other_focus, cx);
+            host.update(cx, |_, cx| cx.notify());
+            let _ = window.draw(cx);
+            assert!(host.read(cx).other_focus.is_focused(window));
+        });
+        press_enter(cx);
+        assert_eq!(host.read_with(cx, |host, _| host.clicks), 1);
+
+        cx.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.show_button = false;
+                cx.notify();
+            });
+            let _ = window.draw(cx);
+        });
+        cx.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.show_button = true;
+                cx.notify();
+            });
+            let _ = window.draw(cx);
+        });
+        press_enter(cx);
+        assert_eq!(host.read_with(cx, |host, _| host.clicks), 2);
+    }
 
     #[test]
     fn ordinary_buttons_keep_content_width_and_no_icon_by_default() {

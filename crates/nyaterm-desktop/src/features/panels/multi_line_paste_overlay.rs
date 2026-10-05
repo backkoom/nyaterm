@@ -1,8 +1,7 @@
 use rust_i18n::t;
 
 use gpui::{
-    Context, Focusable, FontWeight, IntoElement, KeyDownEvent, SharedString, div, prelude::*, px,
-    rgb, rgba,
+    Context, FontWeight, IntoElement, KeyDownEvent, SharedString, div, prelude::*, px, rgb, rgba,
 };
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaDocumentEditor};
 
@@ -20,7 +19,6 @@ impl NyaTermApp {
             .terminal
             .paste_review_editor()
             .expect("paste review overlay requires an active editor");
-        let paste_focus = editor.read(cx).focus_handle(cx);
         let draft_text = editor.read(cx).value(cx);
         let normalized = normalize_paste_newlines(&draft_text);
         let stats = t!(
@@ -30,7 +28,6 @@ impl NyaTermApp {
         );
         let can_send = !draft_text.is_empty();
         let preview_height = (viewport_h - 160.).clamp(128., 288.);
-        let focus_editor = editor.clone();
 
         div()
             .id(SharedString::from("multi-line-paste-overlay"))
@@ -43,10 +40,6 @@ impl NyaTermApp {
             .flex()
             .items_center()
             .justify_center()
-            .track_focus(&paste_focus)
-            .on_click(move |_, window, cx| {
-                focus_editor.update(cx, |editor, cx| editor.focus(window, cx));
-            })
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.handle_multi_line_paste_key_down(event, window, cx) {
                     cx.stop_propagation();
@@ -120,6 +113,7 @@ impl NyaTermApp {
                                     t!("terminal.multiLinePasteDirect"),
                                 )
                                 .variant(NyaButtonVariant::Primary)
+                                .autofocus()
                                 .small()
                                 .compact()
                                 .disabled(!can_send)

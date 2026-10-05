@@ -96,7 +96,6 @@ impl NyaTermApp {
                 .set_status("multi-line paste confirmation opened".to_string());
             editor.update(cx, |editor, cx| {
                 editor.move_cursor_to_end(cx);
-                editor.focus(window, cx);
             });
             cx.notify();
             return;
