@@ -282,13 +282,13 @@ impl NyaTermApp {
             )
             .icon("icons/eye.svg"),
             NyaMenuItem::action(t!("settings.actionLinks"))
-                .icon("icons/fe/search.svg")
+                .icon("icons/conn/flash.svg")
                 .checked(self.settings.summary().terminal_action_links_enabled)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.toggle_terminal_action_links(cx);
                 })),
             NyaMenuItem::action(t!("settings.terminalZoomEnabled"))
-                .icon("icons/menu/reset.svg")
+                .icon("icons/menu/zoom-in.svg")
                 .checked(self.settings.summary().interaction_terminal_zoom_enabled)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.toggle_terminal_zoom_enabled(cx);

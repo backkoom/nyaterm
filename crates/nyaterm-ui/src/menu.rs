@@ -485,12 +485,11 @@ impl NyaMenuItem {
     }
 
     fn component_icon(&self, cx: &App) -> Option<Icon> {
-        let icon = if let Some(path) = self.icon_path.clone() {
-            Icon::default().path(path)
-        } else if self.checked {
+        // Checked state must remain visible even when the action has an icon.
+        let icon = if self.checked {
             Icon::new(IconName::Check)
         } else {
-            return None;
+            Icon::default().path(self.icon_path.clone()?)
         };
 
         let icon = if self.danger {
