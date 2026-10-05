@@ -68,13 +68,14 @@ impl NyaTermApp {
         let accel = keystroke.modifiers.platform || keystroke.modifiers.control;
 
         // The box owns the text and takes Enter as a newline, the way Tauri's
-        // textarea does; Ctrl/Cmd+Enter is what sends, and Escape clears.
+        // textarea does; Ctrl/Cmd+Enter sends the same payload as the button.
         match keystroke.key.as_str() {
-            "enter" if accel => self.send_bottom_command(true, cx),
-            "escape" if !accel => {
-                self.send_command.clear_draft();
-                self.reset_text_input("send-command.draft", "", cx);
-                self.shell.set_status("command send cleared".to_string());
+            "enter" if accel => self.send_bottom_command(false, cx),
+            "l" if accel => {
+                self.send_command.clear_draft(cx);
+                if self.send_command.presentation(cx).data_type == SendCommandDataType::Text {
+                    self.reset_text_input("send-command.draft", "", cx);
+                }
                 cx.notify();
             }
             _ => return false,
@@ -82,19 +83,13 @@ impl NyaTermApp {
         true
     }
 
-    /// Apply an edit from the command send box.
-    ///
-    /// Hex is normalised as it is typed — the digits are regrouped into pairs
-    /// and anything that is not a hex digit is dropped — so the box is written
-    /// back with what the draft actually holds.
+    /// Textarea edits belong only to the text draft; Hex edits its own bytes.
     pub(in crate::features) fn apply_send_command_draft(
         &mut self,
         text: String,
         cx: &mut Context<Self>,
     ) {
-        if let Some(formatted) = self.send_command.apply_draft(text) {
-            self.reset_text_input("send-command.draft", &formatted, cx);
-        }
+        self.send_command.apply_draft(text);
         cx.notify();
     }
 
@@ -109,8 +104,8 @@ impl NyaTermApp {
         }
 
         let session_kind = self.active_session_kind();
-        let draft = self.send_command.draft_for_send(append_enter);
-        let units = match self.build_send_command_units(&draft, session_kind) {
+        let draft = self.send_command.draft_for_send(append_enter, cx);
+        let units = match self.build_send_command_units(&draft, session_kind, cx) {
             Ok(units) => units,
             Err(message) => {
                 self.shell.set_status(message);
@@ -143,7 +138,7 @@ impl NyaTermApp {
         }
 
         let units_per_round = units.len() as u32;
-        let sent_draft = self.send_command.presentation().draft;
+        let sent_draft = self.send_command.presentation(cx).draft;
         let clear_after_send = self.settings.summary().ui_serial_send_clear_after_send;
         let failed_writes = Arc::new(AtomicUsize::new(0));
         let run = self.send_command.begin_send(units_per_round);
@@ -225,7 +220,8 @@ impl NyaTermApp {
                     !aborted && !cancel.load(Ordering::SeqCst) && !infinite && failed_writes == 0
                         && progress.completed == progress.total,
                     &sent_draft,
-                ) {
+                    cx,
+                ) && this.send_command.presentation(cx).data_type == SendCommandDataType::Text {
                     this.reset_text_input("send-command.draft", "", cx);
                 }
                 if aborted {
@@ -442,8 +438,9 @@ impl NyaTermApp {
         &self,
         draft: &str,
         session_kind: Option<SessionKind>,
+        cx: &gpui::App,
     ) -> Result<Vec<Vec<u8>>, String> {
-        self.send_command.build_units(draft, session_kind)
+        self.send_command.build_units(draft, session_kind, cx)
     }
 
     pub(in crate::features) fn active_session_kind(&self) -> Option<SessionKind> {

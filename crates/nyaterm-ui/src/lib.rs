@@ -8,6 +8,7 @@ mod command;
 mod dialog;
 mod document_editor;
 pub mod document_syntax;
+pub mod hex_editor;
 mod hover_card;
 mod input;
 mod input_focus;

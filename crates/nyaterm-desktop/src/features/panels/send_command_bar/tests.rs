@@ -83,19 +83,65 @@ fn command_panel_keeps_editor_and_action_inside_empty_workspace_at_all_sizes() {
                     _ = window.draw(cx);
                 });
                 let controls = cx.debug_bounds("bottom-command-controls").unwrap();
-                let editor = cx.debug_bounds("send-command.draft").unwrap();
-                let action = cx.debug_bounds("bottom-command-floating-send").unwrap();
+                let editor = cx
+                    .debug_bounds(if data_type == SendCommandDataType::Text {
+                        "send-command.draft"
+                    } else {
+                        "send-command.hex"
+                    })
+                    .unwrap();
+                let footer = cx.debug_bounds("send-command.footer").unwrap();
+                let action = cx.debug_bounds("bottom-command-send").unwrap();
                 assert_eq!(controls.size.height, px(32.));
                 assert!(editor.origin.y >= controls.bottom());
-                assert!(editor.size.height >= px(44.));
+                assert!(editor.size.height >= px(32.));
                 assert!(editor.bottom() <= px(760.));
                 assert!(action.bottom() <= px(760.));
-                assert!(action.origin.y >= editor.origin.y);
-                assert!(action.origin.x >= editor.origin.x);
-                assert!(action.right() <= editor.right());
-                assert!(action.bottom() <= editor.bottom());
+                assert!(editor.bottom() <= footer.origin.y);
+                assert!(action.origin.y >= footer.origin.y);
+                assert!(action.origin.x >= footer.origin.x);
+                assert!(action.right() <= footer.right());
+                assert!(action.bottom() <= footer.bottom());
                 assert!(action.right() <= px(width));
             }
+        }
+    }
+
+    app.update(cx, |app, cx| {
+        app.apply_send_command_draft("AT+CSQ".into(), cx);
+        app.reset_text_input("send-command.draft", "AT+CSQ", cx);
+        app.send_command
+            .presentation(cx)
+            .hex
+            .update(cx, |hex, cx| hex.set_bytes(vec![1, 255], cx));
+    });
+    for data_type in [SendCommandDataType::Hex, SendCommandDataType::Text] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.set_send_command_data_type(data_type, cx);
+                app.focus_send_command_composer(window, cx);
+            });
+        });
+        cx.simulate_keystrokes("escape");
+        app.read_with(cx, |app, cx| {
+            assert!(!app.send_command.presentation(cx).draft.is_empty())
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| app.focus_send_command_composer(window, cx))
+        });
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-l"
+        } else {
+            "ctrl-l"
+        });
+        app.read_with(cx, |app, cx| {
+            assert!(app.send_command.presentation(cx).draft.is_empty())
+        });
+        if data_type == SendCommandDataType::Hex {
+            app.update(cx, |app, cx| {
+                app.set_send_command_data_type(SendCommandDataType::Text, cx);
+                assert_eq!(app.send_command.presentation(cx).draft, "AT+CSQ");
+            });
         }
     }
 }

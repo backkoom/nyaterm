@@ -166,28 +166,6 @@ impl NyaTermApp {
     }
 
     /// A select with no chrome of its own, for a control strip that draws its own.
-    pub(in crate::features) fn bare_select_control<I>(
-        &mut self,
-        id: I,
-        options: Vec<NyaSelectOption>,
-        selected_value: Option<String>,
-        disabled: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<I>
-    where
-        I: Into<SharedString>,
-    {
-        let id = id.into();
-        let select = self.select_entity(id.clone(), options, selected_value, disabled, cx);
-
-        div()
-            .id(id)
-            .w_full()
-            .max_w(px(360.))
-            .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
-            .child(NyaSelect::new(&select).appearance(false))
-    }
-
     pub(in crate::features) fn form_select_control<I>(
         &mut self,
         id: I,

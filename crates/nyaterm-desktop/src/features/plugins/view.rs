@@ -1035,15 +1035,15 @@ mod tests {
             );
             let app = panel.app.upgrade().unwrap();
             assert_eq!(
-                app.read(cx).send_command.presentation().draft,
+                app.read(cx).send_command.presentation(cx).draft,
                 "existing user draft"
             );
             panel.fill(false, cx);
             assert_eq!(
-                app.read(cx).send_command.presentation().draft,
+                app.read(cx).send_command.presentation(cx).draft,
                 "existing user draft\nnslookup example.org\nping example.org"
             );
-            assert!(!app.read(cx).send_command.presentation().sending);
+            assert!(!app.read(cx).send_command.presentation(cx).sending);
         });
         block_on(
             service
@@ -1063,7 +1063,7 @@ mod tests {
                 .unwrap()
                 .read(cx)
                 .send_command
-                .presentation()
+                .presentation(cx)
                 .draft;
             panel.fill(true, cx);
             assert_eq!(
@@ -1073,7 +1073,7 @@ mod tests {
                     .unwrap()
                     .read(cx)
                     .send_command
-                    .presentation()
+                    .presentation(cx)
                     .draft,
                 before
             );

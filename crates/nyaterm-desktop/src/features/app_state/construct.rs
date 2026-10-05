@@ -32,7 +32,7 @@ use crate::features::notes::{NotesFeatureState, NotesPanel};
 use crate::features::pages::connections::panel::ConnectionPanel;
 use crate::features::pages::settings::panel::SettingsPanel;
 use crate::features::pages::transfers::panel::TransferPanel;
-use crate::features::panels::{SendCommandFeatureFocus, SendCommandFeatureState};
+use crate::features::panels::SendCommandFeatureState;
 use crate::features::recording::RecordingFeatureState;
 use crate::features::remote::{RemoteOpsFeatureFocus, RemoteOpsFeatureState};
 use crate::features::remote_desktop::RemoteDesktopFeatureState;
@@ -254,6 +254,9 @@ impl NyaTermApp {
         crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
 
         let blocking_jobs = crate::blocking_jobs::BlockingJobScheduler::new();
+        let send_command = SendCommandFeatureState::new(cx);
+        cx.observe(&send_command.presentation(cx).hex, |_, _, cx| cx.notify())
+            .detach();
         let mut app = Self {
             plugins: crate::features::plugins::PluginFeatureState::new(
                 app_entity.downgrade(),
@@ -301,9 +304,7 @@ impl NyaTermApp {
                 store: command_store,
                 scheduler: blocking_jobs,
             }),
-            send_command: SendCommandFeatureState::new(SendCommandFeatureFocus {
-                editor: cx.focus_handle(),
-            }),
+            send_command,
             terminal: TerminalFeatureState::new(
                 terminal_screen,
                 terminal_output_decoder,

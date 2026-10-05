@@ -6700,6 +6700,7 @@ dependencies = [
  "gpui",
  "gpui-base",
  "gpui-kit",
+ "nyaterm-core",
  "ropey",
  "rust-i18n",
  "url",

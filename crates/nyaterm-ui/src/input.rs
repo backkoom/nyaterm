@@ -6,8 +6,8 @@ use gpui::{
 };
 use gpui_base::input::InputContextMenuCapabilities;
 use gpui_kit::component::input::{
-    Copy, Cut, Editor, EditorState, Input, InputEvent, InputState, Paste, SelectAll, Textarea,
-    TextareaState,
+    Copy, Cut, Editor, EditorState, Enter, Input, InputEvent, InputState, Paste, SelectAll,
+    Textarea, TextareaState,
 };
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable, Size};
 
@@ -567,6 +567,7 @@ impl RenderOnce for NyaInput {
 }
 
 type KeyDownHandler = Box<dyn Fn(&KeyDownEvent, &mut Window, &mut App) + 'static>;
+type SecondaryEnterHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 
 fn prepare_input_component(
     input_state: &Entity<NyaInputState>,
@@ -614,6 +615,7 @@ pub struct NyaInputShell {
     trailing: Vec<AnyElement>,
     footer: Option<AnyElement>,
     on_key_down: Option<KeyDownHandler>,
+    on_secondary_enter: Option<SecondaryEnterHandler>,
     context_menu_labels: Option<[SharedString; 4]>,
 }
 
@@ -631,6 +633,7 @@ impl NyaInputShell {
             trailing: Vec::new(),
             footer: None,
             on_key_down: None,
+            on_secondary_enter: None,
             context_menu_labels: None,
         }
     }
@@ -695,6 +698,14 @@ impl NyaInputShell {
         self.on_key_down = Some(Box::new(handler));
         self
     }
+
+    /// Take Ctrl/Cmd+Enter before the field sees it. A multi-line field binds
+    /// that keystroke to a newline and stops propagation, so an `on_key_down`
+    /// on an ancestor never receives it.
+    pub fn on_secondary_enter(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_secondary_enter = Some(Box::new(handler));
+        self
+    }
 }
 
 impl RenderOnce for NyaInputShell {
@@ -711,6 +722,7 @@ impl RenderOnce for NyaInputShell {
             trailing,
             footer,
             on_key_down,
+            on_secondary_enter,
             context_menu_labels,
         } = self;
         let (state, disabled, readonly, state_multi_line) =
@@ -830,6 +842,14 @@ impl RenderOnce for NyaInputShell {
             });
         if let Some(handler) = on_key_down {
             container = container.on_key_down(handler);
+        }
+        if let Some(handler) = on_secondary_enter {
+            container = container.capture_action(move |action: &Enter, window, cx| {
+                if action.secondary {
+                    cx.stop_propagation();
+                    handler(window, cx);
+                }
+            });
         }
         let container = container.child(input);
         if let Some(labels) = context_menu_labels {

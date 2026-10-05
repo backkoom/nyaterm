@@ -34,7 +34,7 @@ impl NyaTermApp {
         replace: bool,
         cx: &mut Context<Self>,
     ) -> PluginResult<()> {
-        let state = self.send_command.presentation();
+        let state = self.send_command.presentation(cx);
         if state.sending || state.data_type != SendCommandDataType::Text {
             return Err(PluginError::new(
                 ErrorCode::InvalidResult,
@@ -82,9 +82,9 @@ mod tests {
             let session = app.session.active_id().map(str::to_owned);
             let commands = serde_json::to_string(app.commands.quick_commands()).unwrap();
             let history = serde_json::to_string(app.commands.command_history()).unwrap();
-            let target = app.send_command.presentation().target;
+            let target = app.send_command.presentation(cx).target;
             app.fill_plugin_draft("ping host", false, cx).unwrap();
-            let state = app.send_command.presentation();
+            let state = app.send_command.presentation(cx);
             assert_eq!(state.draft, "echo user\nping host");
             assert!(!state.sending);
             assert_eq!(state.target, target);
@@ -98,7 +98,7 @@ mod tests {
                 history
             );
             app.fill_plugin_draft("replacement", true, cx).unwrap();
-            assert_eq!(app.send_command.presentation().draft, "replacement");
+            assert_eq!(app.send_command.presentation(cx).draft, "replacement");
         });
     }
 }

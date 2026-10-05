@@ -6,7 +6,7 @@ use gpui::{
 use gpui_kit::component::Disableable;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::input::{
-    InputEvent, InputState, MaskPattern, NumberInput, NumberInputEvent, StepAction,
+    InputEvent, InputState, MaskPattern, NumberInput, NumberInputEvent, NumberStep, StepAction,
 };
 
 use crate::input_focus::{preserve_nya_input_focus_on_pointer_down, register_nya_input_focus};
@@ -192,19 +192,25 @@ impl NyaNumberInputState {
             .take()
             .unwrap_or_else(|| self.seed.clone());
         let placeholder = self.placeholder.clone();
-        let mask_pattern = (!self.options.allow_infinity).then_some(MaskPattern::Number {
-            separator: None,
-            fraction: self.options.decimal_places,
-        });
-        let state = cx.new(|cx| {
-            let state = InputState::new(window, cx)
-                .default_value(value)
-                .placeholder(placeholder);
-            if let Some(mask_pattern) = mask_pattern {
-                state.mask_pattern(mask_pattern)
-            } else {
-                state
+        // The component installs a numeric mask unless one is set explicitly,
+        // and that mask would reject the `∞` an infinity-capable field steps to.
+        let mask_pattern = if self.options.allow_infinity {
+            MaskPattern::None
+        } else {
+            MaskPattern::Number {
+                separator: None,
+                fraction: self.options.decimal_places,
             }
+        };
+        let state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .default_value(value)
+                .placeholder(placeholder)
+                .mask_pattern(mask_pattern);
+            // The component steps by 1 with no bounds unless told otherwise;
+            // stepping here keeps the range, decimals and the `∞` wrap.
+            state.set_step(None::<NumberStep>, window, cx);
+            state
         });
         register_nya_input_focus(&state.read(cx).focus_handle(cx), cx);
         self.subscriptions = vec![
