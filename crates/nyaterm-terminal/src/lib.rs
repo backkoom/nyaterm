@@ -216,6 +216,12 @@ pub struct TerminalSnapshotRow {
     pub hyperlinks: Box<[HyperlinkSpan]>,
     pub command_mark: Option<ShellCommandMark>,
     pub shell_input: Option<ShellInputLineKind>,
+    /// Proven input region for highlighting; columns are half-open. While editing,
+    /// only the OSC input anchor and its soft wraps qualify, since completion output
+    /// can appear before OSC 133 C. Submitted regions retain their column bounds.
+    pub shell_input_columns: Option<(usize, usize)>,
+    /// Disables prompt guessing even when integration marks are outside the viewport.
+    pub shell_integration: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,6 +384,8 @@ struct TerminalSnapshotRowCacheKey {
     command_mark: Option<ShellCommandMark>,
     line_id: Option<TerminalLineId>,
     shell_input: Option<ShellInputLineKind>,
+    shell_input_columns: Option<(usize, usize)>,
+    shell_integration: bool,
 }
 
 #[derive(Debug)]
@@ -482,6 +490,8 @@ struct LineMetadata {
     revision: Option<u64>,
     command_mark: Option<ShellCommandMark>,
     shell_input: bool,
+    input_start_col: Option<usize>,
+    input_end_col: Option<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -1267,6 +1277,7 @@ impl TerminalCore {
             &self.term,
             offset,
             self.active_line_state(),
+            self.shell_integration_enabled(),
             &self.snapshot_row_cache,
         );
         snapshot.images = self.graphics.viewport_images_for_screen(
@@ -1307,6 +1318,7 @@ impl TerminalCore {
                 newer_rows,
             },
             self.active_line_state(),
+            self.shell_integration_enabled(),
             &self.snapshot_row_cache,
         );
         snapshot.images = self
@@ -1907,6 +1919,8 @@ impl TerminalCore {
             }
             ShellBoundaryKind::InputStart => {
                 metadata.command_mark = Some(ShellCommandMark::Prompt);
+                metadata.input_start_col = Some(point.column.0);
+                metadata.input_end_col = None;
                 let state = self.active_line_state_mut();
                 state.input_anchor = Some(ShellInputAnchor {
                     line_id: TerminalLineId {
@@ -1920,6 +1934,7 @@ impl TerminalCore {
             }
             ShellBoundaryKind::OutputStart => {
                 metadata.command_mark = Some(ShellCommandMark::Output);
+                metadata.input_end_col = Some(point.column.0);
                 let state = self.active_line_state_mut();
                 if let Some(prompt) = state.pending_command_prompt.take() {
                     state.metadata.entry(prompt).or_default().command_anchor = true;
@@ -1984,6 +1999,7 @@ fn snapshot_from_term(
     term: &Term<NyaTermEventProxy>,
     requested_offset: usize,
     line_state: &ScreenLineState,
+    shell_integration: bool,
     row_cache: &Mutex<TerminalSnapshotRowCache>,
 ) -> (TerminalSnapshot, TerminalSnapshotBuildStats) {
     snapshot_window_from_term(
@@ -1994,8 +2010,39 @@ fn snapshot_from_term(
             newer_rows: 0,
         },
         line_state,
+        shell_integration,
         row_cache,
     )
+}
+
+fn active_input_soft_wrap_end(
+    term: &Term<NyaTermEventProxy>,
+    line_state: &ScreenLineState,
+) -> Option<i64> {
+    let anchor = line_state.input_anchor?;
+    let end = line_state.active_input_end?;
+    if anchor.line_id.epoch != line_state.epoch || end < anchor.line_id.logical_line {
+        return None;
+    }
+    let physical = anchor
+        .line_id
+        .logical_line
+        .checked_sub(line_state.logical_origin)?;
+    let mut line = Line(i32::try_from(physical).ok()?);
+    if line < term.topmost_line() || line > term.bottommost_line() || term.columns() == 0 {
+        return None;
+    }
+    // OSC B..C describes an editing phase, which can also contain Readline's
+    // completion pages. Hard newlines alone do not prove an editable continuation.
+    // Scan the connected soft wraps once per snapshot, not once per snapshot row.
+    let last_col = Column(term.columns() - 1);
+    while line < term.bottommost_line()
+        && line_state.logical_line(line) < end
+        && term.grid()[line][last_col].flags.contains(Flags::WRAPLINE)
+    {
+        line = Line(line.0 + 1);
+    }
+    Some(line_state.logical_line(line))
 }
 
 #[derive(Clone, Copy)]
@@ -2009,6 +2056,7 @@ fn snapshot_window_from_term(
     term: &Term<NyaTermEventProxy>,
     window: TerminalSnapshotWindow,
     line_state: &ScreenLineState,
+    shell_integration: bool,
     row_cache: &Mutex<TerminalSnapshotRowCache>,
 ) -> (TerminalSnapshot, TerminalSnapshotBuildStats) {
     let content = term.renderable_content();
@@ -2027,6 +2075,7 @@ fn snapshot_window_from_term(
 
     let topmost = term.topmost_line();
     let bottommost = term.bottommost_line();
+    let active_input_highlight_end = active_input_soft_wrap_end(term, line_state);
     for row in 0..rows {
         let line = Line(row as i32 - window.display_offset as i32 - window.older_rows as i32);
         let line_in_grid = (line >= topmost && line <= bottommost).then_some(line);
@@ -2046,6 +2095,24 @@ fn snapshot_window_from_term(
             logical_line: line_state.logical_line(line),
         });
         let shell_input = line_state.shell_input_kind(line_id.map(|id| id.logical_line));
+        let shell_input_columns = shell_input.and_then(|kind| {
+            if kind == ShellInputLineKind::Active
+                && !active_input_highlight_end
+                    .zip(line_id)
+                    .is_some_and(|(end, id)| id.logical_line <= end)
+            {
+                return None;
+            }
+            let start = metadata
+                .and_then(|m| m.input_start_col)
+                .unwrap_or(0)
+                .min(cols);
+            let end = metadata
+                .and_then(|m| m.input_end_col)
+                .unwrap_or(cols)
+                .min(cols);
+            Some((start, end.max(start)))
+        });
         let revision = metadata
             .and_then(|metadata| metadata.revision)
             .unwrap_or(signature);
@@ -2066,6 +2133,8 @@ fn snapshot_window_from_term(
             command_mark,
             line_id,
             shell_input,
+            shell_input_columns,
+            shell_integration,
         };
         let generation = row_cache.next_generation();
         let cached = row_cache.entries.get_mut(&key).and_then(|entry| {
@@ -2091,6 +2160,8 @@ fn snapshot_window_from_term(
                     command_mark,
                     line_id,
                     shell_input,
+                    shell_input_columns,
+                    shell_integration,
                 },
             ));
             row_cache.entries.insert(
@@ -2163,6 +2234,8 @@ struct SnapshotRowMetadata {
     command_mark: Option<ShellCommandMark>,
     line_id: Option<TerminalLineId>,
     shell_input: Option<ShellInputLineKind>,
+    shell_input_columns: Option<(usize, usize)>,
+    shell_integration: bool,
 }
 
 fn snapshot_row_from_term(
@@ -2179,6 +2252,8 @@ fn snapshot_row_from_term(
         command_mark,
         line_id,
         shell_input,
+        shell_input_columns,
+        shell_integration,
     } = metadata;
     let mut hyperlink_intern = HashMap::new();
     let cells = if let Some(line) = line {
@@ -2222,6 +2297,8 @@ fn snapshot_row_from_term(
         wrapped,
         command_mark,
         shell_input,
+        shell_input_columns,
+        shell_integration,
     }
 }
 

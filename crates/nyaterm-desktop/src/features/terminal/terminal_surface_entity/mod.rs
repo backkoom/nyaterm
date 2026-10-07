@@ -94,7 +94,15 @@ fn terminal_keyword_highlight_request_key(
     let rows = snapshot.rows().get(row_start..row_end).unwrap_or_default();
     rows.len().hash(&mut hasher);
     for row in rows {
-        (row.signature, row.wrapped).hash(&mut hasher);
+        (
+            row.signature,
+            row.wrapped,
+            row.command_mark,
+            row.shell_input,
+            row.shell_input_columns,
+            row.shell_integration,
+        )
+            .hash(&mut hasher);
     }
     TerminalKeywordHighlightRequestKey {
         rules_key,

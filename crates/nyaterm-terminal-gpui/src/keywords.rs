@@ -9,7 +9,9 @@ use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::{TerminalSnapshot, TerminalSnapshotRow, terminal_cell_col_for_byte_index};
 
 use crate::element::{TerminalBufferMatch, TerminalSearchFlags};
+use crate::semantic::{SemanticContext, SemanticHighlighter, extend_region};
 use crate::types::{TerminalHighlightSpan, TerminalKeywordRange};
+use nyaterm_core::keyword_highlight_presets::builtin_keyword_matcher;
 
 pub(super) type CompiledKeywordRules = Vec<CompiledKeywordRule>;
 
@@ -32,6 +34,7 @@ pub struct TerminalKeywordHighlighter {
     regex_rules: CompiledKeywordRules,
     literal_rules: Vec<CompiledLiteralKeywordRule>,
     literal_automaton: Option<AhoCorasick>,
+    semantic: SemanticHighlighter,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +55,7 @@ const MAX_KEYWORD_WRAPPED_GROUP_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum TerminalKeywordRowReuseKey {
-    Single { revision: u64 },
+    Single { revision: u64, semantic_key: u64 },
     Wrapped { group_key: u64, row_offset: usize },
 }
 
@@ -198,6 +201,7 @@ impl TerminalKeywordHighlightSnapshot {
             || self.scrollback_len != snapshot.scrollback_len
             || source.line_id.is_none()
             || source.line_id != snapshot_row.line_id
+            || row_semantic_key(source) != row_semantic_key(snapshot_row)
             || source.wrapped
             || snapshot_row.wrapped
             || self.wrapped_flags.get(row + 1).copied().unwrap_or(false)
@@ -506,6 +510,7 @@ pub(super) fn terminal_keyword_row_reuse_key(
             .row(row)
             .map(|row| TerminalKeywordRowReuseKey::Single {
                 revision: row.revision,
+                semantic_key: row_semantic_key(row),
             });
     }
 
@@ -515,6 +520,7 @@ pub(super) fn terminal_keyword_row_reuse_key(
             row.signature.hash(&mut hasher);
             row.revision.hash(&mut hasher);
             row.wrapped.hash(&mut hasher);
+            row_semantic_key(row).hash(&mut hasher);
         }
     });
     Some(TerminalKeywordRowReuseKey::Wrapped {
@@ -541,6 +547,7 @@ pub(super) fn terminal_keyword_row_reuse_keys(
                     .row(idx)
                     .map(|row| TerminalKeywordRowReuseKey::Single {
                         revision: row.revision,
+                        semantic_key: row_semantic_key(row),
                     });
             }
             row = group.end;
@@ -553,6 +560,7 @@ pub(super) fn terminal_keyword_row_reuse_keys(
                 row.signature.hash(&mut hasher);
                 row.revision.hash(&mut hasher);
                 row.wrapped.hash(&mut hasher);
+                row_semantic_key(row).hash(&mut hasher);
             }
         }
         let group_key = hasher.finish();
@@ -581,17 +589,25 @@ fn terminal_keyword_ranges_for_wrapped_group(
     let range_build_started = Instant::now();
     let row_count = rows.end.saturating_sub(rows.start);
     let mut row_ranges = vec![Vec::new(); row_count];
-    if highlighter.regex_rules.is_empty() && highlighter.literal_rules.is_empty() || row_count == 0
+    if row_count == 0
+        || (highlighter.regex_rules.is_empty()
+            && highlighter.literal_rules.is_empty()
+            && highlighter.semantic.is_empty())
     {
         return row_ranges;
     }
 
     let mut line = String::new();
     let mut byte_cells = Vec::new();
+    let mut context = SemanticContext {
+        continuation: snapshot.row(rows.start).is_some_and(|row| row.wrapped),
+        ..SemanticContext::default()
+    };
     for row in rows.clone() {
         let Some(snapshot_row) = snapshot.row(row) else {
             continue;
         };
+        context.integrated |= snapshot_row.shell_integration;
         for (col, cell) in snapshot_row.cells.iter().enumerate() {
             if cell.width == 0 {
                 continue;
@@ -607,6 +623,19 @@ fn terminal_keyword_ranges_for_wrapped_group(
             let start_byte = line.len();
             line.push_str(text);
             let end_byte = line.len();
+            if snapshot_row.command_mark == Some(nyaterm_terminal::ShellCommandMark::Prompt)
+                && snapshot_row.shell_input_columns.is_none()
+            {
+                extend_region(&mut context.prompt, start_byte, end_byte);
+            }
+            if let Some((start, end)) = snapshot_row.shell_input_columns {
+                if col >= start && col < end {
+                    extend_region(&mut context.input, start_byte, end_byte);
+                }
+                if col < start {
+                    extend_region(&mut context.prompt, start_byte, end_byte);
+                }
+            }
             byte_cells.push(TerminalKeywordByteCell {
                 row,
                 start_col,
@@ -630,7 +659,7 @@ fn terminal_keyword_ranges_for_wrapped_group(
     }
 
     let match_started = Instant::now();
-    let matches = keyword_matches_highlighter(&line, highlighter);
+    let matches = keyword_matches_with_context(&line, highlighter, &context);
     let match_duration = match_started.elapsed();
     let range_map_started = Instant::now();
     for (start, end, color) in matches {
@@ -676,7 +705,36 @@ fn duration_micros_u64(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
+#[cfg(test)]
 fn keyword_matches_highlighter(
+    line: &str,
+    highlighter: &TerminalKeywordHighlighter,
+) -> Vec<(usize, usize, u32)> {
+    keyword_matches_with_context(line, highlighter, &SemanticContext::default())
+}
+
+fn keyword_matches_with_context(
+    line: &str,
+    highlighter: &TerminalKeywordHighlighter,
+    context: &SemanticContext,
+) -> Vec<(usize, usize, u32)> {
+    let user_matches = user_keyword_matches(line, highlighter);
+    highlighter.semantic.ranges(line, context, &user_matches)
+}
+
+fn row_semantic_key(row: &TerminalSnapshotRow) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    (
+        row.command_mark,
+        row.shell_input,
+        row.shell_input_columns,
+        row.shell_integration,
+    )
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+fn user_keyword_matches(
     line: &str,
     highlighter: &TerminalKeywordHighlighter,
 ) -> Vec<(usize, usize, u32)> {
@@ -865,6 +923,7 @@ pub fn compile_terminal_keyword_highlighter(
         regex_rules,
         literal_rules,
         literal_automaton,
+        semantic: SemanticHighlighter::compile(rules),
     }
 }
 
@@ -953,6 +1012,7 @@ pub(super) fn keyword_highlight_spans_compiled(
     }
     spans
 }
+#[cfg(test)]
 pub(super) fn compile_keyword_rules(
     rules: &[ResolvedKeywordHighlightRule],
 ) -> CompiledKeywordRules {
@@ -968,7 +1028,10 @@ fn compile_keyword_rule_sets(
 ) {
     let mut regex_rules = Vec::new();
     let mut literal_rules = Vec::new();
-    for rule in rules.iter().filter(|rule| rule.enabled) {
+    for rule in rules
+        .iter()
+        .filter(|rule| rule.enabled && builtin_keyword_matcher(&rule.id).is_none())
+    {
         let color = parse_hex_rgb(&rule.color).unwrap_or(0x79c0ff);
         let alts = rule
             .patterns
@@ -1017,6 +1080,7 @@ fn compile_keyword_rule_sets(
     (regex_rules, literal_rules, literal_automaton)
 }
 
+#[cfg(test)]
 fn compile_keyword_rules_with_filter(
     rules: &[ResolvedKeywordHighlightRule],
     include: impl Fn(&[String]) -> bool,

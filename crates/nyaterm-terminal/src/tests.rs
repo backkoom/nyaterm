@@ -17,6 +17,58 @@ fn snapshot_text(snapshot: &TerminalSnapshot) -> String {
         .collect()
 }
 
+#[test]
+fn osc133_input_columns_rebuild_snapshot_without_changing_text_revision() {
+    let mut screen = TerminalScreen::new(40, 2);
+    screen.advance(b"prompt> input");
+    let before = screen.snapshot();
+    screen.advance(b"\r\x1b[8C\x1b]133;B\x07");
+    let active = screen.snapshot();
+    let row = active.row(0).unwrap();
+    assert_eq!(row.shell_input_columns, Some((8, 40)));
+    assert_eq!(row.revision, before.row(0).unwrap().revision);
+    assert_eq!(row.signature, before.row(0).unwrap().signature);
+    assert!(!Arc::ptr_eq(&before.rows()[0], &active.rows()[0]));
+    screen.advance(b"\x1b[5C\x1b]133;C\x07");
+    let submitted = screen.snapshot();
+    let row = submitted.row(0).unwrap();
+    assert_eq!(row.shell_input_columns, Some((8, 13)));
+    assert_eq!(row.shell_input, Some(ShellInputLineKind::Submitted));
+    assert!(submitted.shell_input_anchor.is_none());
+    assert_eq!(row.revision, before.row(0).unwrap().revision);
+    assert!(submitted.rows().iter().all(|row| row.shell_integration));
+    screen.advance(b"\r\n\x1b]133;A\x07new> \x1b]133;B\x07next");
+    let next = screen.snapshot();
+    assert_eq!(next.row(0).unwrap().shell_input_columns, Some((8, 13)));
+    assert_eq!(next.row(1).unwrap().shell_input_columns, Some((5, 40)));
+}
+
+#[test]
+fn active_input_highlight_columns_exclude_hard_line_completion_output() {
+    let mut screen = TerminalScreen::new(12, 3);
+    screen.advance(b"$ \x1b]133;B\x07abcdefghijklmn");
+    let wrapped = screen.snapshot();
+    assert_eq!(wrapped.row(0).unwrap().shell_input_columns, Some((2, 12)));
+    assert_eq!(wrapped.row(1).unwrap().shell_input_columns, Some((0, 12)));
+    assert!(wrapped.row(1).unwrap().wrapped);
+    screen.advance(b"\r\nAGENTS.md\r\n.bashrc\r\n--More--");
+    let page = screen.snapshot();
+    for row in page.rows() {
+        // The legacy editing-phase marker stays separate from the proven
+        // region used for semantic highlighting.
+        assert_eq!(row.shell_input, Some(ShellInputLineKind::Active));
+        assert!(row.shell_input_columns.is_none());
+    }
+    screen.advance(b"\r\x1b[2K$ \x1b]133;B\x07ls ");
+    let restored = screen.snapshot();
+    assert_eq!(restored.row(2).unwrap().shell_input_columns, Some((2, 12)));
+    assert!(
+        restored.rows()[..2]
+            .iter()
+            .all(|row| row.shell_input_columns.is_none())
+    );
+}
+
 fn search_query(pattern: &str) -> TerminalSearchQuery {
     TerminalSearchQuery {
         pattern: pattern.to_string(),
@@ -823,6 +875,8 @@ fn snapshot_row_cache_uses_revision_as_authoritative_invalidation() {
         command_mark: original.command_mark,
         line_id: original.line_id,
         shell_input: original.shell_input,
+        shell_input_columns: original.shell_input_columns,
+        shell_integration: original.shell_integration,
     };
     screen.snapshot_row_cache.lock().unwrap().entries.insert(
         key,
@@ -855,6 +909,8 @@ fn snapshot_row_cache_prunes_to_limit() {
                 command_mark: None,
                 line_id: None,
                 shell_input: None,
+                shell_input_columns: None,
+                shell_integration: false,
             },
             TerminalSnapshotRowCacheEntry {
                 row: Weak::new(),

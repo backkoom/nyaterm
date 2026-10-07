@@ -15,8 +15,7 @@ use nyaterm_terminal::{
 };
 
 use crate::keywords::{
-    CompiledKeywordRule, CompiledKeywordRules, TerminalKeywordHighlightLookup,
-    TerminalKeywordHighlightSnapshot, TerminalKeywordRowReuseKey, compile_keyword_rules,
+    TerminalKeywordHighlightLookup, TerminalKeywordHighlightSnapshot, TerminalKeywordRowReuseKey,
     terminal_keyword_row_reuse_key, terminal_keyword_row_reuse_keys, terminal_keyword_rules_key,
 };
 use crate::paint::{
@@ -187,8 +186,6 @@ pub struct NyaTerminalLayoutCache {
     cursor_glyph_order: VecDeque<u64>,
     keyword_rules_source: Option<Arc<Vec<ResolvedKeywordHighlightRule>>>,
     keyword_rules_key: u64,
-    compiled_keyword_key: Option<u64>,
-    compiled_keyword_rules: Arc<CompiledKeywordRules>,
     pub hits: u64,
     pub misses: u64,
     pub shape_calls: u64,
@@ -219,8 +216,6 @@ impl NyaTerminalLayoutCache {
         self.cursor_glyph_order.clear();
         self.keyword_rules_source = None;
         self.keyword_rules_key = 0;
-        self.compiled_keyword_key = None;
-        self.compiled_keyword_rules = Arc::default();
         self.hits = 0;
         self.misses = 0;
         self.shape_calls = 0;
@@ -240,19 +235,6 @@ impl NyaTerminalLayoutCache {
         self.keyword_rules_key = terminal_keyword_rules_key(rules);
         self.keyword_rules_source = Some(Arc::clone(rules));
         self.keyword_rules_key
-    }
-
-    fn compiled_keyword_rules(
-        &mut self,
-        key: u64,
-        rules: &[ResolvedKeywordHighlightRule],
-    ) -> Arc<CompiledKeywordRules> {
-        if self.compiled_keyword_key == Some(key) {
-            return Arc::clone(&self.compiled_keyword_rules);
-        }
-        self.compiled_keyword_key = Some(key);
-        self.compiled_keyword_rules = Arc::new(compile_keyword_rules(rules));
-        Arc::clone(&self.compiled_keyword_rules)
     }
 
     #[cfg(test)]
@@ -915,20 +897,18 @@ fn terminal_keyword_row_paint_style_key(
 ) -> u64 {
     match lookup {
         Some(lookup) if lookup.is_known_empty() => empty_key,
-        Some(TerminalKeywordHighlightLookup::Stale(ranges)) => {
-            // A provisional prefix is not equivalent to the final parse, and
-            // successive provisional snapshots may retain different ranges.
+        Some(lookup) => {
+            // OSC 133 can change colors without changing the text revision.
+            // A provisional prefix also differs from the final published parse.
             let mut hasher = DefaultHasher::new();
-            "terminal-stale-keyword-prefix".hash(&mut hasher);
             keyword_key.hash(&mut hasher);
-            for range in *ranges {
-                range.start_col.hash(&mut hasher);
-                range.end_col.hash(&mut hasher);
-                range.color.hash(&mut hasher);
+            lookup.is_stale().hash(&mut hasher);
+            for range in lookup.ranges().unwrap_or_default() {
+                (range.start_col, range.end_col, range.color).hash(&mut hasher);
             }
             hasher.finish()
         }
-        _ => keyword_key,
+        None => keyword_key,
     }
 }
 
@@ -1345,13 +1325,6 @@ impl Element for NyaTerminalElement {
         } else {
             self.keyword_rules_key()
         };
-        let compiled_keyword_rules = if self.keyword_rules.is_empty() {
-            Arc::default()
-        } else if let Some(cache) = layout_cache.as_deref_mut() {
-            cache.compiled_keyword_rules(keyword_rules_key, self.keyword_rules.as_slice())
-        } else {
-            Arc::new(compile_keyword_rules(self.keyword_rules.as_slice()))
-        };
         let keyword_paint_style_key = self.paint_style_key(keyword_rules_key);
         let empty_keyword_paint_style_key = if keyword_rules_key == 0 {
             keyword_paint_style_key
@@ -1590,16 +1563,11 @@ impl Element for NyaTerminalElement {
                         )
                     })
                     .unwrap_or_else(|| {
-                        let row_compiled_keyword_rules: &[CompiledKeywordRule] =
-                            if keyword_result_known_empty {
-                                &[]
-                            } else {
-                                compiled_keyword_rules.as_slice()
-                            };
+                        // Use ANSI until background parsing publishes this row.
                         terminal_highlight_spans_compiled(
                             display_line,
                             ansi,
-                            row_compiled_keyword_rules,
+                            &[],
                             &[],
                             &[],
                             &[],
