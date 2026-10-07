@@ -492,16 +492,20 @@ pub(crate) struct TransferJobResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct PromisedDownloadDestination {
+    pub raw_path_token: Option<String>,
+    pub local_path: PathBuf,
+    pub source: std::sync::Weak<nyaterm_transport::RemoteFileService>,
+    pub options: nyaterm_transport::SftpPathTransferOptions,
+}
+
+#[derive(Debug)]
 pub(crate) enum TransferJobEvent {
-    DragPrepared {
-        key: DragSelectionKey,
-        result: Result<Vec<(PathBuf, bool)>, String>,
-    },
     DragExportOpened {
         session_id: String,
         remote_path: String,
         control: SftpTransferControl,
-        destination: Option<(Option<String>, PathBuf)>,
+        destination: Option<PromisedDownloadDestination>,
     },
     Started {
         detail: String,
@@ -796,11 +800,4 @@ impl TransferBrowserColumnWidths {
             TransferBrowserSortColumn::Group => px(76.),
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct DragSelectionKey {
-    pub session_id: String,
-    pub source_identity: usize,
-    pub entries: Vec<(String, Option<u64>, Option<u32>, bool)>,
 }

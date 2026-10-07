@@ -15,6 +15,9 @@ pub(super) struct Files {
     pub(super) contents: HashMap<Vec<u8>, Vec<u8>>,
     pub(super) directories: HashSet<Vec<u8>>,
     pub(super) requests: usize,
+    pub(super) request_kinds: Vec<u8>,
+    pub(super) request_delay: HashMap<u8, std::time::Duration>,
+    pub(super) modified: Option<u32>,
     pub(super) reads: Vec<(u64, usize)>,
     pub(super) active_reads: usize,
     pub(super) max_active_reads: usize,
@@ -22,6 +25,8 @@ pub(super) struct Files {
     pub(super) read_limit: Option<usize>,
     pub(super) omit_size: bool,
     pub(super) fail_read_at: Option<u64>,
+    pub(super) fail_read_paths: HashSet<Vec<u8>>,
+    pub(super) transient_read_failure: bool,
 }
 
 fn number(input: &mut &[u8]) -> u32 {
@@ -51,16 +56,20 @@ fn status(id: u32, code: u32) -> Vec<u8> {
     packet
 }
 
-fn attributes(packet: &mut Vec<u8>, size: usize, directory: bool) {
-    packet.extend_from_slice(&5_u32.to_be_bytes());
+fn attributes(packet: &mut Vec<u8>, size: usize, directory: bool, modified: Option<u32>) {
+    packet.extend_from_slice(&(5_u32 | if modified.is_some() { 8 } else { 0 }).to_be_bytes());
     packet.extend_from_slice(&(size as u64).to_be_bytes());
     packet.extend_from_slice(&(if directory { 0o040755_u32 } else { 0o100644 }).to_be_bytes());
+    if let Some(modified) = modified {
+        packet.extend_from_slice(&modified.to_be_bytes());
+        packet.extend_from_slice(&modified.to_be_bytes());
+    }
 }
 
 fn reply(
     input: &[u8],
     files: &mut Files,
-    enumerated: &mut HashSet<Vec<u8>>,
+    enumerated: &mut HashMap<Vec<u8>, usize>,
     handles: &mut HashMap<Vec<u8>, Vec<u8>>,
 ) -> Vec<u8> {
     let kind = input[0];
@@ -72,6 +81,7 @@ fn reply(
         return version;
     }
     files.requests += 1;
+    files.request_kinds.push(kind);
     let mut packet = Vec::new();
     match kind {
         3 | 11 => {
@@ -101,7 +111,10 @@ fn reply(
             input = &input[8..];
             let length = number(&mut input) as usize;
             files.reads.push((offset as u64, length));
-            if files.fail_read_at == Some(offset as u64) {
+            if std::mem::take(&mut files.transient_read_failure) {
+                return status(id, 4);
+            }
+            if files.fail_read_at == Some(offset as u64) || files.fail_read_paths.contains(&path) {
                 return status(id, 4);
             }
             let length = files.read_limit.map_or(length, |limit| length.min(limit));
@@ -150,6 +163,7 @@ fn reply(
                     &mut packet,
                     files.contents.get(&path).map_or(0, Vec::len),
                     directory,
+                    files.modified,
                 );
             }
         }
@@ -160,10 +174,8 @@ fn reply(
             } else {
                 path
             };
-            if kind == 12 && !enumerated.insert(path.clone()) {
-                return status(id, 1);
-            }
-            let entries: Vec<(Vec<u8>, usize, bool)> = if kind == 16 {
+            let directory_path = path.clone();
+            let mut entries: Vec<(Vec<u8>, usize, bool)> = if kind == 16 {
                 vec![(path, 0, true)]
             } else {
                 let mut prefix = path;
@@ -185,13 +197,23 @@ fn reply(
                     }))
                     .collect()
             };
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            if kind == 12 {
+                let cursor = enumerated.entry(directory_path).or_default();
+                if *cursor >= entries.len() {
+                    return status(id, 1);
+                }
+                let end = (*cursor + 512).min(entries.len());
+                entries = entries[*cursor..end].to_vec();
+                *cursor = end;
+            }
             packet.push(104);
             packet.extend_from_slice(&id.to_be_bytes());
             packet.extend_from_slice(&(entries.len() as u32).to_be_bytes());
             for (name, size, directory) in entries {
                 push_string(&mut packet, &name);
                 push_string(&mut packet, b"");
-                attributes(&mut packet, size, directory);
+                attributes(&mut packet, size, directory, files.modified);
             }
         }
         13 => {
@@ -240,7 +262,7 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
             let (mut server, writer) = tokio::io::split(server);
             let writer = Arc::new(tokio::sync::Mutex::new(writer));
             tokio::spawn(async move {
-                let mut enumerated = HashSet::new();
+                let mut enumerated = HashMap::new();
                 let mut handles = HashMap::new();
                 while let Ok(length) = server.read_u32().await {
                     assert!(length < 1024 * 1024);
@@ -259,7 +281,13 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
                         files.max_active_reads = files.max_active_reads.max(files.active_reads);
                         files.read_delay
                     } else {
-                        std::time::Duration::ZERO
+                        peer_files
+                            .lock()
+                            .unwrap()
+                            .request_delay
+                            .get(&packet[0])
+                            .copied()
+                            .unwrap_or_default()
                     };
                     let writer = writer.clone();
                     let files = peer_files.clone();
@@ -298,6 +326,106 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
         .unwrap();
     *compatibility.cache.lock().unwrap() = Some(session);
     (service, files)
+}
+
+#[test]
+fn promised_directory_retry_keeps_completed_files_and_refuses_external_changes()
+-> anyhow::Result<()> {
+    use crate::{SftpFileType, SftpPathTransferOptions, SftpTransferControl, SftpTransferOptions};
+    let (service, files) = service("UTF-8");
+    {
+        let mut files = files.lock().unwrap();
+        files.modified = Some(42);
+        files.directories.insert(b"/folder".to_vec());
+        files
+            .contents
+            .insert(b"/folder/a".to_vec(), b"completed".to_vec());
+        files
+            .contents
+            .insert(b"/folder/b".to_vec(), b"unfinished".to_vec());
+        files.fail_read_paths.insert(b"/folder/b".to_vec());
+    }
+    let root = tempfile::tempdir()?;
+    let target = root.path().join("folder");
+    let options = SftpPathTransferOptions::for_promised_download(
+        SftpTransferOptions::default(),
+        SftpFileType::Directory,
+    );
+    let retry = || options.with_transfer_options(options.transfer_options().clone());
+    assert!(
+        service
+            .download_remote_path_with_progress_and_path_options(
+                &RemoteFilePath::new("/folder"),
+                &target,
+                SftpTransferControl::new(),
+                retry(),
+                |_| {}
+            )
+            .is_err()
+    );
+    assert_eq!(std::fs::read(target.join("a"))?, b"completed");
+    assert!(!target.join("b").exists());
+    let first_reads = files.lock().unwrap().reads.len();
+    files.lock().unwrap().fail_read_paths.clear();
+    service.download_remote_path_with_progress_and_path_options(
+        &RemoteFilePath::new("/folder"),
+        &target,
+        SftpTransferControl::new(),
+        retry(),
+        |_| {},
+    )?;
+    assert_eq!(
+        files.lock().unwrap().reads.len() - first_reads,
+        1,
+        "completed unchanged source must not be downloaded again"
+    );
+    assert_eq!(std::fs::read(target.join("b"))?, b"unfinished");
+    std::fs::write(target.join("a"), b"external change")?;
+    assert!(
+        service
+            .download_remote_path_with_progress_and_path_options(
+                &RemoteFilePath::new("/folder"),
+                &target,
+                SftpTransferControl::new(),
+                retry(),
+                |_| {}
+            )
+            .is_err()
+    );
+    assert_eq!(std::fs::read(target.join("a"))?, b"external change");
+    Ok(())
+}
+
+#[test]
+fn promised_directory_automatic_retry_reuses_its_exclusively_created_root() -> anyhow::Result<()> {
+    use crate::{SftpFileType, SftpPathTransferOptions, SftpTransferControl, SftpTransferOptions};
+    let (service, files) = service("UTF-8");
+    {
+        let mut files = files.lock().unwrap();
+        files.modified = Some(42);
+        files.directories.insert(b"/folder".to_vec());
+        files
+            .contents
+            .insert(b"/folder/file".to_vec(), b"contents".to_vec());
+        files.transient_read_failure = true;
+    }
+    let root = tempfile::tempdir()?;
+    let target = root.path().join("folder");
+    let options = SftpPathTransferOptions::for_promised_download(
+        SftpTransferOptions::default().with_max_retries(1),
+        SftpFileType::Directory,
+    );
+    let result = service.download_remote_path_with_progress_and_path_options(
+        &RemoteFilePath::new("/folder"),
+        &target,
+        SftpTransferControl::new(),
+        options,
+        |_| {},
+    )?;
+    assert!(!result.skipped);
+    assert_eq!(files.lock().unwrap().reads.len(), 2);
+    assert_eq!(std::fs::read(target.join("file"))?, b"contents");
+    Ok(())
 }
 
 #[test]

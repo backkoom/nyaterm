@@ -1911,3 +1911,46 @@ fn dummy_pdf_page() -> crate::models::PreviewPdfPage {
         height: 1,
     }
 }
+
+#[test]
+fn promised_retry_keeps_original_source_and_execution_contract_until_released() {
+    let cx = TestAppContext::single();
+    let mut transfer = transfer_state(&cx);
+    let source = std::sync::Arc::new(nyaterm_transport::RemoteFileService::new(
+        nyaterm_transport::SshSessionConfig::default(),
+    ));
+    transfer.bind_promised_download(
+        "promise",
+        SftpPathTransferOptions::for_promised_download(
+            SftpTransferOptions::default().with_max_retries(2),
+            nyaterm_transport::SftpFileType::Directory,
+        ),
+        std::sync::Arc::downgrade(&source),
+    );
+    let retry = transfer.transfer_job_retry_path_options(
+        "promise",
+        SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Overwrite,
+            None,
+            SftpTransferOptions::default().with_max_retries(9),
+        ),
+    );
+    assert!(retry.is_promised_download());
+    assert_eq!(retry.duplicate_policy(), SftpDuplicatePolicy::Skip);
+    assert_eq!(retry.transfer_options().max_retries(), 2);
+    let saved = transfer.promised_download_source("promise").unwrap();
+    assert!(std::sync::Weak::ptr_eq(
+        &saved,
+        &std::sync::Arc::downgrade(&source)
+    ));
+    drop(source);
+    assert!(
+        transfer
+            .promised_download_source("promise")
+            .unwrap()
+            .upgrade()
+            .is_none()
+    );
+    transfer.release_transfer_job_path_options("promise");
+    assert!(transfer.promised_download_source("promise").is_none());
+}

@@ -117,6 +117,29 @@ async fn speculative_error_is_deferred_until_its_range_is_consumed() {
 }
 
 #[tokio::test]
+async fn consumed_prefetch_failure_preserves_timeout_classification() {
+    let control = SftpTransferControl::new();
+    let mut prefetch = Prefetch::new(
+        Box::new(|_, _| {
+            Box::pin(async {
+                let elapsed = tokio::time::timeout(Duration::ZERO, std::future::pending::<()>())
+                    .await
+                    .unwrap_err();
+                Err(anyhow::Error::new(elapsed).context("injected SFTP timeout"))
+            })
+        }),
+        &control,
+        Some(64),
+        64,
+        1,
+    );
+    let error = prefetch.read(0, 1).await.unwrap_err();
+    assert!(crate::sftp::sftp_error_invalidates_compatibility_session(
+        &error
+    ));
+}
+
+#[tokio::test]
 async fn unknown_size_uses_one_cached_block_and_reports_eof_without_speculation() {
     let control = SftpTransferControl::new();
     let calls = Arc::new(Mutex::new(Vec::new()));

@@ -359,9 +359,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                                     rename_state: renaming.clone(),
                                     rename_input,
                                     local_backend: browser.local_backend,
-                                    virtual_drag_supported: (window.supports_virtual_file_drag()
-                                        || window.supports_file_promise_drag()
-                                        || cfg!(target_os = "linux")),
+                                    virtual_drag_supported: crate::features::transfers::drag_export::transfer_drag_supported(false, window.supports_virtual_file_drag(), window.supports_file_promise_drag()),
                                     app_handle: panel.app_handle(),
                                 },
                                 cx,

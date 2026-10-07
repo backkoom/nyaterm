@@ -1,8 +1,9 @@
 //! Deferred drag sources and the bounded synchronous-consumer/SFTP bridge.
 //! Source metadata never contains a local destination or saved credentials.
 
-pub mod staging;
+mod lifetime;
 pub mod tree;
+pub use lifetime::DragSourceLifetime;
 
 use crate::{RemoteFilePath, RemoteFileService, SftpTransferControl, SftpTransferOptions};
 use std::{
@@ -36,6 +37,12 @@ pub struct RemoteDragFile {
 
 pub enum ExportReadEvent {
     Opened(SftpTransferControl),
+    /// Delivered ranges allow a gesture to deduplicate independent native streams.
+    Delivered {
+        offset: u64,
+        length: u64,
+        total: Option<u64>,
+    },
     Progress {
         bytes: u64,
         total: Option<u64>,
@@ -65,6 +72,7 @@ pub struct SftpReadSource {
     observer: Arc<dyn Fn() -> ExportObserver + Send + Sync>,
     control: Arc<ExportControl>,
     options: SftpTransferOptions,
+    parent: Option<SftpTransferControl>,
 }
 
 impl SftpReadSource {
@@ -78,6 +86,7 @@ impl SftpReadSource {
             file,
             observer,
             options: SftpTransferOptions::default(),
+            parent: None,
             control: Arc::new(ExportControl {
                 cancelled: AtomicBool::new(false),
                 streams: Mutex::new(Vec::new()),
@@ -91,10 +100,19 @@ impl SftpReadSource {
         self
     }
 
+    pub fn with_parent_control(mut self, parent: SftpTransferControl) -> Self {
+        self.parent = Some(parent);
+        self
+    }
+
     /// Only allocates a bounded queue and schedules a task. SSH and file opens
     /// happen on the transport runtime after the first content request.
     pub fn open(&self) -> io::Result<SftpReadStream> {
-        let control = Arc::new(SftpTransferControl::new());
+        let control = Arc::new(
+            self.parent
+                .as_ref()
+                .map_or_else(SftpTransferControl::new, SftpTransferControl::child),
+        );
         let mut streams = self
             .control
             .streams
@@ -109,14 +127,16 @@ impl SftpReadSource {
         }
         streams.push(Arc::downgrade(&control));
         let (sender, receiver) = async_mpsc::channel(1);
+        let observer = (self.observer)();
         let task = crate::sftp::spawn_export_reader(
             self.service.clone(),
             self.file.clone(),
             self.options.clone(),
             control.clone(),
             receiver,
-            (self.observer)(),
-        )?;
+            observer.clone(),
+        )
+        .inspect_err(|error| observer(ExportReadEvent::Finished(Err(error.to_string()))))?;
         Ok(SftpReadStream {
             sender,
             control,

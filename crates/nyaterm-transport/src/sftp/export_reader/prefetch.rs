@@ -105,6 +105,10 @@ impl<'a> Prefetch<'a> {
         self.schedule();
     }
 
+    pub(super) fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub(super) async fn read(&mut self, offset: u64, length: usize) -> anyhow::Result<Vec<u8>> {
         let mut output = Vec::with_capacity(length);
         while output.len() < length {
@@ -124,12 +128,15 @@ impl<'a> Prefetch<'a> {
             }
             // A cached reply must obey pause/cancellation just like a network read.
             self.control.wait_if_paused().await?;
-            let Some(Some(block)) = self.blocks.get(&self.base) else {
+            let Some(Some(block)) = self.blocks.get_mut(&self.base) else {
                 unreachable!();
             };
-            let data = block
-                .as_ref()
-                .map_err(|_| anyhow::anyhow!("SFTP export read failed"))?;
+            if block.is_err() {
+                // The worker terminates on a consumed failure. Retain its typed
+                // cause so compatibility timeout/closed-session eviction works.
+                return Err(std::mem::replace(block, Ok(Vec::new())).unwrap_err());
+            }
+            let data = block.as_ref().unwrap();
             let start = (cursor - self.base) as usize;
             if start >= data.len() {
                 break;

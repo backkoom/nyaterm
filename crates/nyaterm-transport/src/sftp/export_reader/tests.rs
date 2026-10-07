@@ -178,6 +178,74 @@ fn cancellation_releases_compatibility_gate_for_following_operations() {
 }
 
 #[test]
+fn closed_export_session_is_evicted_before_releasing_gate_and_permit() {
+    let (service, file, _) = fixture(b"content");
+    let sftp = service.export_sftp_service();
+    let state = sftp.compatibility.as_ref().unwrap();
+    let session = state.cache.lock().unwrap().as_ref().unwrap().clone();
+    compatibility_runtime()
+        .unwrap()
+        .block_on(async { session.sftp.close().await.unwrap() });
+
+    let (observe, events) = observer();
+    let source = SftpReadSource::new(Arc::downgrade(&service), file, observe);
+    let mut stream = source.open().unwrap();
+    assert!(stream.read_at(0, &mut [0; 1]).is_err());
+    drop(stream);
+    assert!(finished(&events).is_err());
+    assert!(state.cache.lock().unwrap().is_none());
+    assert!(state.gate.try_lock().is_ok());
+    assert!(sftp.export_budget.clone().try_acquire_owned().is_ok());
+}
+
+#[test]
+fn idle_incomplete_native_streams_do_not_starve_later_reads() {
+    // A target can retain the original IStream while reading its Clone. More
+    // than the operation budget may stay open without occupying network slots.
+    let (service, file, _) = fixture(&vec![7; 1024 * 1024]);
+    let (observe, events) = observer();
+    let source = Arc::new(SftpReadSource::new(Arc::downgrade(&service), file, observe));
+    let (done, result) = mpsc::channel();
+    let worker = {
+        let source = source.clone();
+        std::thread::spawn(move || {
+            let mut streams = Vec::new();
+            for _ in 0..5 {
+                let mut stream = source.open().unwrap();
+                let read = stream.read_at(0, &mut [0; 1]);
+                if read.is_err() {
+                    return;
+                }
+                streams.push(stream);
+            }
+            // The first stream reacquires a slot after the others became idle.
+            assert_eq!(streams[0].read_at(800_000, &mut [0; 1]).unwrap(), 1);
+            done.send(()).unwrap();
+        })
+    };
+    let completed = result.recv_timeout(Duration::from_secs(2));
+    source.cancel();
+    worker.join().unwrap();
+    assert!(
+        completed.is_ok(),
+        "idle streams starved the next native read"
+    );
+    for _ in 0..5 {
+        assert!(finished(&events).is_err());
+    }
+    assert!(
+        service
+            .export_sftp_service()
+            .compatibility
+            .as_ref()
+            .unwrap()
+            .gate
+            .try_lock()
+            .is_ok()
+    );
+}
+
+#[test]
 fn concurrent_export_honors_options_and_compatibility_uses_one_read() {
     for compatibility in [false, true] {
         let content: Vec<u8> = (0..700_000).map(|i| (i % 251) as u8).collect();

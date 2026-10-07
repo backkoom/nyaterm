@@ -86,174 +86,223 @@ async fn serve(
         anyhow::bail!(super::SFTP_TRANSFER_CANCELLED);
     };
     observer(ExportReadEvent::Opened((*control).clone()));
-    let _compatibility_guard = if let Some(compatibility) = &service.compatibility {
+    let mut permit = Some(
+        control
+            .until_cancelled(service.export_budget.clone().acquire_owned())
+            .await??,
+    );
+    let mut compatibility_guard = if let Some(compatibility) = &service.compatibility {
         Some(control.until_cancelled(compatibility.gate.lock()).await?)
     } else {
         None
     };
-    let session = control
-        .until_cancelled(tokio::time::timeout(
-            Duration::from_secs(60),
-            open_sftp_session(&service.config, service.multiplex.as_ref()),
-        ))
-        .await???;
     let result = async {
-        let raw = remote_file_path_bytes(
-            &super::SftpPathCodec::from_ssh_config(&service.config)?,
-            &file.remote_path,
-        )?;
-        let attrs = control
+        let session = control
             .until_cancelled(tokio::time::timeout(
                 Duration::from_secs(60),
-                session.sftp.symlink_metadata_bytes(raw.clone()),
-            ))
-            .await???;
-        anyhow::ensure!(
-            attrs.file_type() == russh_sftp::protocol::FileType::File,
-            "export source is not a regular file"
-        );
-        let mut remote = control
-            .until_cancelled(tokio::time::timeout(
-                Duration::from_secs(60),
-                session.sftp.open_bytes(raw),
+                open_sftp_session(&service.config, service.multiplex.as_ref()),
             ))
             .await???;
         let result = async {
-            let metadata = control
+            let raw = remote_file_path_bytes(
+                &super::SftpPathCodec::from_ssh_config(&service.config)?,
+                &file.remote_path,
+            )?;
+            let attrs = control
                 .until_cancelled(tokio::time::timeout(
                     Duration::from_secs(60),
-                    remote.metadata(),
+                    session.sftp.symlink_metadata_bytes(raw.clone()),
                 ))
                 .await???;
             anyhow::ensure!(
-                metadata.file_type() == russh_sftp::protocol::FileType::File,
-                "opened export source is not a regular file"
+                attrs.file_type() == russh_sftp::protocol::FileType::File,
+                "export source is not a regular file"
             );
-            if let Some(expected) = file.size {
+            let mut remote = control
+                .until_cancelled(tokio::time::timeout(
+                    Duration::from_secs(60),
+                    session.sftp.open_bytes(raw),
+                ))
+                .await???;
+            let result = async {
+                let metadata = control
+                    .until_cancelled(tokio::time::timeout(
+                        Duration::from_secs(60),
+                        remote.metadata(),
+                    ))
+                    .await???;
                 anyhow::ensure!(
-                    metadata.size == Some(expected),
-                    "remote size changed before export"
+                    metadata.file_type() == russh_sftp::protocol::FileType::File,
+                    "opened export source is not a regular file"
                 );
-            }
-            let size = metadata.size;
-            let remote_ref = &remote;
-            let control_ref = control.as_ref();
-            let mut prefetch = Prefetch::new(
-                Box::new(move |offset, length| {
-                    Box::pin(async move {
-                        let mut bytes =
-                            super::read_transfer_range(remote_ref, control_ref, offset, length)
-                                .await?;
-                        anyhow::ensure!(bytes.len() <= length, "invalid export read length");
-                        if bytes.len() < length {
-                            // Do not let short packets grow a cached Vec past
-                            // the configured block size through geometric growth.
-                            bytes.reserve_exact(length - bytes.len());
-                        }
-                        // SFTP servers may return a short DATA packet without EOF.
-                        while bytes.len() < length {
-                            let part = super::read_transfer_range(
-                                remote_ref,
-                                control_ref,
-                                offset + bytes.len() as u64,
-                                length - bytes.len(),
-                            )
-                            .await?;
-                            if part.is_empty() {
-                                anyhow::ensure!(
-                                    size.is_none(),
-                                    "remote file ended before its advertised size"
-                                );
-                                break;
+                if let Some(expected) = file.size {
+                    anyhow::ensure!(
+                        metadata.size == Some(expected),
+                        "remote size changed before export"
+                    );
+                }
+                let size = metadata.size;
+                let remote_ref = &remote;
+                let control_ref = control.as_ref();
+                let mut prefetch = Prefetch::new(
+                    Box::new(move |offset, length| {
+                        Box::pin(async move {
+                            let mut bytes =
+                                super::read_transfer_range(remote_ref, control_ref, offset, length)
+                                    .await?;
+                            anyhow::ensure!(bytes.len() <= length, "invalid export read length");
+                            if bytes.len() < length {
+                                // Do not let short packets grow a cached Vec past
+                                // the configured block size through geometric growth.
+                                bytes.reserve_exact(length - bytes.len());
                             }
-                            anyhow::ensure!(
-                                part.len() <= length - bytes.len(),
-                                "invalid export read length"
-                            );
-                            bytes.extend_from_slice(&part);
-                        }
-                        Ok(bytes)
-                    })
-                }),
-                control_ref,
-                size,
-                options.buffer_size_bytes(),
-                options.download_threads(),
-            );
-            let mut coverage = Coverage::default();
-            let mut request = Some(first);
-            let mut last_progress = Instant::now() - Duration::from_secs(1);
-            loop {
-                let Some(next) = request.take() else {
-                    break;
-                };
-                control.wait_if_paused().await?;
-                let length = size.map_or(next.length, |size| {
-                    size.saturating_sub(next.offset).min(next.length as u64) as usize
-                });
-                let read = if length == 0 {
-                    Ok(Vec::new())
-                } else {
-                    prefetch.read(next.offset, length).await
-                };
-                match read {
-                    Ok(bytes) => {
-                        if bytes.is_empty() && size.is_some_and(|size| next.offset < size) {
-                            let _ = next.reply.send(Err(io::Error::other(
-                                "remote file ended before its advertised size",
-                            )));
-                            anyhow::bail!("remote file ended before its advertised size");
-                        }
-                        let delivered = bytes.len() as u64;
-                        if bytes.is_empty() && size.is_none() {
-                            coverage.eof = Some(next.offset);
-                        }
-                        if next.reply.send(Ok(bytes)).is_err() {
-                            anyhow::bail!(super::SFTP_TRANSFER_CANCELLED);
-                        }
-                        coverage.add(next.offset, delivered)?;
-                        if last_progress.elapsed() >= Duration::from_millis(50)
-                            || coverage.complete(size)
-                        {
-                            observer(ExportReadEvent::Progress {
-                                bytes: coverage.prefix(),
+                            // SFTP servers may return a short DATA packet without EOF.
+                            while bytes.len() < length {
+                                let part = super::read_transfer_range(
+                                    remote_ref,
+                                    control_ref,
+                                    offset + bytes.len() as u64,
+                                    length - bytes.len(),
+                                )
+                                .await?;
+                                if part.is_empty() {
+                                    anyhow::ensure!(
+                                        size.is_none(),
+                                        "remote file ended before its advertised size"
+                                    );
+                                    break;
+                                }
+                                anyhow::ensure!(
+                                    part.len() <= length - bytes.len(),
+                                    "invalid export read length"
+                                );
+                                bytes.extend_from_slice(&part);
+                            }
+                            Ok(bytes)
+                        })
+                    }),
+                    control_ref,
+                    size,
+                    options.buffer_size_bytes(),
+                    options.download_threads(),
+                );
+                let mut coverage = Coverage::default();
+                let mut request = Some(first);
+                let mut final_progress_sent = false;
+                let mut last_progress = Instant::now() - Duration::from_secs(1);
+                loop {
+                    let Some(next) = request.take() else {
+                        break;
+                    };
+                    control.wait_if_paused().await?;
+                    if permit.is_none() {
+                        permit = Some(
+                            control
+                                .until_cancelled(service.export_budget.clone().acquire_owned())
+                                .await??,
+                        );
+                        compatibility_guard = if let Some(state) = &service.compatibility {
+                            Some(control.until_cancelled(state.gate.lock()).await?)
+                        } else {
+                            None
+                        };
+                    }
+                    let length = size.map_or(next.length, |size| {
+                        size.saturating_sub(next.offset).min(next.length as u64) as usize
+                    });
+                    let read = if length == 0 {
+                        Ok(Vec::new())
+                    } else {
+                        prefetch.read(next.offset, length).await
+                    };
+                    match read {
+                        Ok(bytes) => {
+                            if bytes.is_empty() && size.is_some_and(|size| next.offset < size) {
+                                let _ = next.reply.send(Err(io::Error::other(
+                                    "remote file ended before its advertised size",
+                                )));
+                                anyhow::bail!("remote file ended before its advertised size");
+                            }
+                            let delivered = bytes.len() as u64;
+                            if bytes.is_empty() && size.is_none() {
+                                coverage.eof = Some(next.offset);
+                            }
+                            if next.reply.send(Ok(bytes)).is_err() {
+                                anyhow::bail!(super::SFTP_TRANSFER_CANCELLED);
+                            }
+                            coverage.add(next.offset, delivered)?;
+                            observer(ExportReadEvent::Delivered {
+                                offset: next.offset,
+                                length: delivered,
                                 total: size,
                             });
-                            last_progress = Instant::now();
-                        }
-                    }
-                    Err(error) => {
-                        let _ = next
-                            .reply
-                            .send(Err(io::Error::other("SFTP export read failed")));
-                        return Err(error);
-                    }
-                }
-                let following = control
-                    .until_cancelled(async {
-                        loop {
-                            tokio::select! {
-                                next = requests.recv() => break next,
-                                _ = prefetch.advance() => {},
+                            let complete = coverage.complete(size);
+                            if !final_progress_sent
+                                && (last_progress.elapsed() >= Duration::from_millis(50)
+                                    || complete)
+                            {
+                                observer(ExportReadEvent::Progress {
+                                    bytes: coverage.prefix(),
+                                    total: size,
+                                });
+                                final_progress_sent |= complete;
+                                last_progress = Instant::now();
                             }
                         }
-                    })
-                    .await;
-                match following {
-                    Ok(Some(next)) => request = Some(next),
-                    Ok(None) | Err(_) if coverage.complete(size) => return Ok(coverage.prefix()),
-                    _ => anyhow::bail!(super::SFTP_TRANSFER_CANCELLED),
+                        Err(error) => {
+                            let _ = next
+                                .reply
+                                .send(Err(io::Error::other("SFTP export read failed")));
+                            return Err(error);
+                        }
+                    }
+                    let following = control
+                        .until_cancelled(async {
+                            loop {
+                                // Idle native streams (including Clone) must not
+                                // occupy every permit while the consumer reads a
+                                // different stream. Drain the bounded prefetch
+                                // window, then admit another SFTP operation.
+                                if !prefetch.has_pending() {
+                                    compatibility_guard.take();
+                                    permit.take();
+                                    break requests.recv().await;
+                                }
+                                tokio::select! {
+                                    next = requests.recv() => break next,
+                                    _ = prefetch.advance() => {},
+                                }
+                            }
+                        })
+                        .await;
+                    match following {
+                        Ok(Some(next)) => request = Some(next),
+                        Ok(None) | Err(_) if coverage.complete(size) => {
+                            return Ok(coverage.prefix());
+                        }
+                        _ => anyhow::bail!(super::SFTP_TRANSFER_CANCELLED),
+                    }
                 }
+                anyhow::bail!(super::SFTP_TRANSFER_CANCELLED)
             }
-            anyhow::bail!(super::SFTP_TRANSFER_CANCELLED)
+            .await;
+            use tokio::io::AsyncWriteExt as _;
+            let _ = tokio::time::timeout(Duration::from_secs(5), remote.shutdown()).await;
+            result
         }
         .await;
-        use tokio::io::AsyncWriteExt as _;
-        let _ = tokio::time::timeout(Duration::from_secs(5), remote.shutdown()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), close_sftp_session(session)).await;
         result
     }
     .await;
-    let _ = tokio::time::timeout(Duration::from_secs(5), close_sftp_session(session)).await;
+    if result
+        .as_ref()
+        .err()
+        .is_some_and(super::sftp_error_invalidates_compatibility_session)
+        && let Some(state) = &service.compatibility
+    {
+        state.evict_failed_session().await;
+    }
     result
 }
 

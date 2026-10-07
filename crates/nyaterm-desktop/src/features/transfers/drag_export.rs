@@ -1,7 +1,4 @@
-use crate::{
-    features::NyaTermApp,
-    models::{DragSelectionKey, TransferJobEvent, TransferJobOutput, TransferJobResult},
-};
+use crate::{features::NyaTermApp, models::TransferJobResult};
 use futures::channel::mpsc::UnboundedSender;
 use gpui::{
     Context, DeferredVirtualFileDragPayload, ExternalDragPayload, FileDragPaths,
@@ -9,75 +6,18 @@ use gpui::{
     VirtualFileProvider, VirtualFileStream, VirtualFileTreeProvider,
 };
 use nyaterm_transport::drag_export::{
-    DragExportSource, ExportObserver, ExportReadEvent, RemoteDragFile, SftpReadSource,
-    SftpReadStream,
+    DragExportSource, RemoteDragFile, SftpReadSource, SftpReadStream,
 };
 use nyaterm_transport::{
     FileBrowserBackendKind, RemoteFileService, SftpFileEntry, SftpFileType, SftpTransferOptions,
-    SftpTransferProgress, SftpTransferSummary,
 };
 use std::{
     cell::OnceCell,
-    collections::HashMap,
     path::PathBuf,
     rc::Rc,
     sync::{Arc, Weak},
-    time::{Duration, Instant, UNIX_EPOCH},
+    time::{Duration, UNIX_EPOCH},
 };
-
-enum StagedDragState {
-    Preparing {
-        source: Weak<RemoteFileService>,
-    },
-    Ready {
-        created: Instant,
-        paths: Vec<(PathBuf, bool)>,
-        // Keep the allocation identity reserved without keeping the session alive.
-        // A reconnected service must not reuse this prepared export's pointer key.
-        _source: Weak<RemoteFileService>,
-    },
-}
-#[derive(Default)]
-pub(in crate::features) struct DragExportState {
-    entries: HashMap<DragSelectionKey, StagedDragState>,
-}
-impl DragExportState {
-    fn take_ready(&mut self, key: &DragSelectionKey) -> Option<Vec<(PathBuf, bool)>> {
-        self.entries.retain(|_, state| !matches!(state, StagedDragState::Ready { created, .. } if created.elapsed() >= Duration::from_secs(3600)));
-        if matches!(self.entries.get(key), Some(StagedDragState::Ready { .. }))
-            && let Some(StagedDragState::Ready { paths, .. }) = self.entries.remove(key)
-        {
-            return Some(paths);
-        }
-        None
-    }
-    fn is_preparing(&self, key: &DragSelectionKey) -> bool {
-        matches!(
-            self.entries.get(key),
-            Some(StagedDragState::Preparing { .. })
-        )
-    }
-    fn begin(&mut self, key: DragSelectionKey, source: Weak<RemoteFileService>) {
-        self.entries
-            .insert(key, StagedDragState::Preparing { source });
-    }
-    pub(super) fn discard(&mut self, key: &DragSelectionKey) {
-        self.entries.remove(key);
-    }
-    pub(super) fn complete(&mut self, key: DragSelectionKey, paths: Vec<(PathBuf, bool)>) {
-        if let Some(StagedDragState::Preparing { source }) = self.entries.get(&key) {
-            let source = source.clone();
-            self.entries.insert(
-                key,
-                StagedDragState::Ready {
-                    created: Instant::now(),
-                    paths,
-                    _source: source,
-                },
-            );
-        }
-    }
-}
 
 /// Immutable gesture snapshot: switching tabs or updating selection after the
 /// drag starts cannot redirect its source connection or remote path.
@@ -116,6 +56,14 @@ impl DraggedSelection {
             .get()
             .map_or(0, |selection| selection.entries.len())
     }
+}
+
+pub(in crate::features) fn transfer_drag_supported(
+    local: bool,
+    virtual_files: bool,
+    promises: bool,
+) -> bool {
+    local || !cfg!(target_os = "linux") && (virtual_files || promises)
 }
 
 pub(in crate::features) struct TransferDragExportService;
@@ -172,12 +120,27 @@ impl TransferDragExportService {
                 }),
             )));
         }
+        anyhow::ensure!(
+            !cfg!(target_os = "linux"),
+            "{}",
+            rust_i18n::t!("fileExplorer.dragPlatformUnsupported")
+        );
         if promise_supported {
             let service = service.ok_or_else(|| anyhow::anyhow!("source session is closed"))?;
+            let controls: Vec<_> = selection
+                .entries
+                .iter()
+                .map(|_| nyaterm_transport::SftpTransferControl::new())
+                .collect();
+            let lifetime = Arc::new(nyaterm_transport::drag_export::DragSourceLifetime::new(
+                service.clone(),
+                controls.clone(),
+            )?);
             let files = selection
                 .entries
                 .iter()
-                .map(|entry| PromisedFileDescriptor {
+                .zip(controls)
+                .map(|(entry, control)| PromisedFileDescriptor {
                     name: entry.name.clone().into(),
                     is_directory: entry.file_type == SftpFileType::Directory,
                     provider: Arc::new(super::drag_download::RemoteDownloadProvider::new(
@@ -186,7 +149,8 @@ impl TransferDragExportService {
                         entry.clone(),
                         selection.transfer_options.clone(),
                         sender.clone(),
-                        true,
+                        control,
+                        lifetime.clone(),
                     )),
                 })
                 .collect();
@@ -196,9 +160,23 @@ impl TransferDragExportService {
         }
         anyhow::ensure!(
             virtual_supported,
-            "Remote drag download is unavailable on this platform; use Download"
+            "{}",
+            rust_i18n::t!("fileExplorer.dragPlatformUnsupported")
         );
         let service = service.ok_or_else(|| anyhow::anyhow!("source session is closed"))?;
+        let aggregate = super::drag_aggregate::DragAggregate::new(
+            selection.session_id.clone(),
+            &selection.entries,
+            sender.clone(),
+        );
+        let controls = aggregate.controls();
+        let enumeration_control = nyaterm_transport::SftpTransferControl::new();
+        let mut watched = controls.clone();
+        watched.push(enumeration_control.clone());
+        let lifetime = Arc::new(nyaterm_transport::drag_export::DragSourceLifetime::new(
+            service.clone(),
+            watched,
+        )?);
         if selection
             .entries
             .iter()
@@ -208,86 +186,56 @@ impl TransferDragExportService {
                 DeferredVirtualFileDragPayload::new(Arc::new(RemoteTreeProvider {
                     selection: selection.clone(),
                     service,
-                    sender,
-                    control: nyaterm_transport::SftpTransferControl::new(),
-                })),
+                    aggregate: aggregate.clone(),
+                    controls,
+                    lifetime,
+                    control: enumeration_control,
+                }))
+                .with_observer(aggregate),
             ));
         }
         let mut files = Vec::with_capacity(sources.len());
-        for source in sources {
+        for (root_index, source) in sources.into_iter().enumerate() {
             let DragExportSource::RemoteFile(file) = source else {
                 anyhow::bail!("mixed local and remote selection is unsupported");
             };
+            aggregate.register(root_index, &file);
             files.push(Self::descriptor(
                 selection,
                 service.clone(),
-                sender.clone(),
+                aggregate.clone(),
+                controls[root_index].clone(),
+                lifetime.clone(),
+                root_index,
                 file,
             ));
         }
         Ok(ExternalDragPayload::VirtualFiles(
-            VirtualFileDragPayload::new(files)?,
+            VirtualFileDragPayload::new(files)?.with_observer(aggregate),
         ))
     }
     fn descriptor(
         selection: &TransferSelection,
         service: Weak<RemoteFileService>,
-        sender: UnboundedSender<TransferJobResult>,
+        aggregate: Arc<super::drag_aggregate::DragAggregate>,
+        parent: nyaterm_transport::SftpTransferControl,
+        lifetime: Arc<nyaterm_transport::drag_export::DragSourceLifetime>,
+        root_index: usize,
         file: RemoteDragFile,
     ) -> VirtualFileDescriptor {
-        let session_id = selection.session_id.clone();
-        let path = file.remote_path.clone();
-        let observer_tx = sender.clone();
-        let factory = Arc::new(move || {
-            // Each FILECONTENTS open has a distinct job and cancellation control.
-            let id = format!("drag-export-{}", nyaterm_core::uuid());
-            let tx = observer_tx.clone();
-            let session_id = session_id.clone();
-            let path = path.clone();
-            Arc::new(move |event| {
-                let event = match event {
-                    ExportReadEvent::Opened(control) => TransferJobEvent::DragExportOpened {
-                        session_id: session_id.clone(),
-                        remote_path: path.display_path.clone(),
-                        control,
-                        destination: None,
-                    },
-                    ExportReadEvent::Progress { bytes, total } => {
-                        TransferJobEvent::Progress(SftpTransferProgress {
-                            remote_path: path.display_path.clone(),
-                            local_path: PathBuf::new(),
-                            bytes_transferred: bytes,
-                            total_bytes: total,
-                            item_count_completed: None,
-                            item_count_total: None,
-                        })
-                    }
-                    ExportReadEvent::Finished(result) => {
-                        TransferJobEvent::Finished(result.map(|bytes| {
-                            TransferJobOutput::Summary(SftpTransferSummary {
-                                remote_path: path.display_path.clone(),
-                                local_path: PathBuf::new(),
-                                bytes,
-                                skipped: false,
-                            })
-                        }))
-                    }
-                };
-                let _ = tx.unbounded_send(TransferJobResult {
-                    id: id.clone(),
-                    event,
-                });
-            }) as ExportObserver
-        });
+        let observed_file = file.clone();
+        let factory = Arc::new(move || aggregate.observer(root_index, observed_file.clone()));
         VirtualFileDescriptor {
             name: file.display_name.clone(),
             is_directory: false,
             size: file.size,
             modified_at: file.modified_at,
-            provider: Arc::new(RemoteProvider(
-                SftpReadSource::new(service.clone(), file, factory)
-                    .with_transfer_options(selection.transfer_options.clone()),
-            )),
+            provider: Arc::new(RemoteProvider {
+                source: SftpReadSource::new(service, file, factory)
+                    .with_transfer_options(selection.transfer_options.clone())
+                    .with_parent_control(parent),
+                _lifetime: lifetime,
+            }),
         }
     }
 }
@@ -295,7 +243,9 @@ impl TransferDragExportService {
 struct RemoteTreeProvider {
     selection: TransferSelection,
     service: Weak<RemoteFileService>,
-    sender: UnboundedSender<TransferJobResult>,
+    aggregate: Arc<super::drag_aggregate::DragAggregate>,
+    controls: Vec<nyaterm_transport::SftpTransferControl>,
+    lifetime: Arc<nyaterm_transport::drag_export::DragSourceLifetime>,
     control: nyaterm_transport::SftpTransferControl,
 }
 impl VirtualFileTreeProvider for RemoteTreeProvider {
@@ -306,18 +256,26 @@ impl VirtualFileTreeProvider for RemoteTreeProvider {
             .ok_or_else(|| std::io::Error::other("source session is closed"))?;
         let source_snapshot = (*service).clone();
         drop(service);
-        let entries = nyaterm_transport::drag_export::tree::enumerate_remote_drag(
-            &source_snapshot,
-            self.selection.entries.clone(),
-            &self.control,
-        )
-        .map_err(std::io::Error::other)?;
+        let entries =
+            nyaterm_transport::drag_export::tree::enumerate_remote_drag_with_root_controls(
+                &source_snapshot,
+                self.selection.entries.clone(),
+                &self.control,
+                self.controls.clone(),
+            )
+            .map_err(std::io::Error::other)?;
         let mut files = Vec::with_capacity(entries.len());
         for entry in entries {
+            if !entry.is_directory {
+                self.aggregate.register(entry.root_index, &entry.file);
+            }
             let mut descriptor = TransferDragExportService::descriptor(
                 &self.selection,
                 self.service.clone(),
-                self.sender.clone(),
+                self.aggregate.clone(),
+                self.controls[entry.root_index].clone(),
+                self.lifetime.clone(),
+                entry.root_index,
                 entry.file,
             );
             descriptor.name = entry.relative_path.into_os_string();
@@ -328,16 +286,22 @@ impl VirtualFileTreeProvider for RemoteTreeProvider {
     }
     fn cancel(&self) {
         self.control.cancel();
+        for control in &self.controls {
+            control.cancel();
+        }
     }
 }
 
-struct RemoteProvider(SftpReadSource);
+struct RemoteProvider {
+    source: SftpReadSource,
+    _lifetime: Arc<nyaterm_transport::drag_export::DragSourceLifetime>,
+}
 impl VirtualFileProvider for RemoteProvider {
     fn open(&self) -> std::io::Result<Box<dyn VirtualFileStream>> {
-        Ok(Box::new(RemoteStream(self.0.open()?)))
+        Ok(Box::new(RemoteStream(self.source.open()?)))
     }
     fn cancel(&self) {
-        self.0.cancel();
+        self.source.cancel();
     }
 }
 struct RemoteStream(SftpReadStream);
@@ -351,100 +315,6 @@ impl VirtualFileStream for RemoteStream {
 }
 
 impl NyaTermApp {
-    fn resolve_staged_transfer_drag(
-        &mut self,
-        selection: &TransferSelection,
-        cx: &mut Context<Self>,
-    ) -> Option<ExternalDragPayload> {
-        let key = DragSelectionKey {
-            session_id: selection.session_id.clone(),
-            source_identity: selection
-                .source_service
-                .as_ref()
-                .map_or(0, |service| service.as_ptr() as usize),
-            entries: selection
-                .entries
-                .iter()
-                .map(|entry| {
-                    (
-                        entry.identity_key(),
-                        entry.size,
-                        entry.modified_at,
-                        entry.file_type == SftpFileType::Directory,
-                    )
-                })
-                .collect(),
-        };
-        if let Some(paths) = self.transfer.drag_export.take_ready(&key) {
-            return Some(ExternalDragPayload::Files(FileDragPaths::new(paths)));
-        }
-        if self.transfer.drag_export.is_preparing(&key) {
-            self.shell
-                .set_status(rust_i18n::t!("fileExplorer.dragPreparing").to_string());
-            cx.notify();
-            return None;
-        }
-        if let Err(error) = TransferDragExportService::sources(selection) {
-            self.shell.set_status(error.to_string());
-            cx.notify();
-            return None;
-        }
-        let service = selection.source_service.clone()?;
-        let selection = selection.clone();
-        let sender = self.transfer.transfer_event_sender();
-        let finish_sender = sender.clone();
-        let finish_key = key.clone();
-        self.transfer
-            .drag_export
-            .begin(key.clone(), service.clone());
-        let submitted = self
-            .blocking_jobs
-            .submit_detached("drag-stage-download", move |_| {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    || -> anyhow::Result<Vec<(PathBuf, bool)>> {
-                        let staging =
-                            nyaterm_transport::drag_export::staging::DragStagingDirectory::new()?;
-                        let targets = staging
-                            .targets(selection.entries.iter().map(|entry| entry.name.clone()))?;
-                        let mut paths = Vec::new();
-                        for (entry, target) in selection.entries.into_iter().zip(targets) {
-                            let directory = entry.file_type == SftpFileType::Directory;
-                            let provider = super::drag_download::RemoteDownloadProvider::new(
-                                selection.session_id.clone(),
-                                service.clone(),
-                                entry,
-                                selection.transfer_options.clone(),
-                                sender.clone(),
-                                false,
-                            );
-                            gpui::PromisedFileProvider::write_to(&provider, &target)?;
-                            paths.push((target, directory));
-                        }
-                        staging.retain();
-                        Ok(paths)
-                    },
-                ))
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("drag preparation failed")))
-                .map_err(|error| error.to_string());
-                let _ = finish_sender.unbounded_send(TransferJobResult {
-                    id: String::new(),
-                    event: TransferJobEvent::DragPrepared {
-                        key: finish_key,
-                        result,
-                    },
-                });
-            });
-        if let Err(error) = submitted {
-            self.transfer.drag_export.discard(&key);
-            self.shell.set_status(error.to_string());
-        } else {
-            self.shell
-                .set_status(rust_i18n::t!("fileExplorer.dragPreparing").to_string());
-        }
-        cx.notify();
-        None
-    }
-
     pub(in crate::features) fn capture_transfer_drag(
         &mut self,
         drag: &DraggedSelection,
@@ -521,12 +391,6 @@ impl NyaTermApp {
                 return None;
             }
         }
-        if selection.backend == FileBrowserBackendKind::Remote
-            && !virtual_supported
-            && !promise_supported
-        {
-            return self.resolve_staged_transfer_drag(selection, cx);
-        }
         match TransferDragExportService::resolve(
             selection,
             selection.source_service.clone(),
@@ -564,38 +428,30 @@ mod tests {
         }
     }
     #[test]
-    fn staged_drag_advertises_only_completed_paths_and_consumes_each_preparation_once() {
-        let service = std::sync::Arc::new(nyaterm_transport::RemoteFileService::new(
-            nyaterm_transport::SshSessionConfig::default(),
-        ));
-        let key = crate::models::DragSelectionKey {
-            session_id: "session".into(),
-            source_identity: std::sync::Arc::as_ptr(&service) as usize,
-            entries: Vec::new(),
-        };
-        let mut state = super::DragExportState::default();
-        state.begin(key.clone(), std::sync::Arc::downgrade(&service));
-        assert_eq!(std::sync::Arc::weak_count(&service), 1);
-        assert!(state.take_ready(&key).is_none());
-        assert!(state.is_preparing(&key));
-        let paths = vec![(std::path::PathBuf::from("staged/folder"), true)];
-        state.complete(key.clone(), paths.clone());
-        assert_eq!(std::sync::Arc::weak_count(&service), 1);
-        assert_eq!(std::sync::Arc::strong_count(&service), 1);
-        assert!(!state.is_preparing(&key));
-        let other_source = crate::models::DragSelectionKey {
-            source_identity: 2,
-            ..key.clone()
-        };
-        assert!(state.take_ready(&other_source).is_none());
-        assert_eq!(state.take_ready(&key), Some(paths.clone()));
-        assert_eq!(std::sync::Arc::weak_count(&service), 0);
-        assert!(state.take_ready(&key).is_none());
-        state.begin(key.clone(), std::sync::Weak::new());
-        state.discard(&key);
-        state.complete(key.clone(), paths);
-        assert!(state.take_ready(&key).is_none());
+    fn list_and_tree_capability_keep_local_drags_and_disable_linux_remote_drags() {
+        assert!(super::transfer_drag_supported(true, false, false));
+        assert!(!super::transfer_drag_supported(false, false, false));
+        assert_eq!(
+            super::transfer_drag_supported(false, true, true),
+            !cfg!(target_os = "linux")
+        );
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_resolver_rejects_remote_sources_even_when_native_flags_are_supplied() {
+        let selection = TransferSelection {
+            session_id: "session".into(),
+            source_service: None,
+            transfer_options: Default::default(),
+            backend: FileBrowserBackendKind::Remote,
+            entries: vec![entry("folder", SftpFileType::Directory)],
+        };
+        let (sender, mut receiver) = futures::channel::mpsc::unbounded();
+        assert!(TransferDragExportService::resolve(&selection, None, sender, true, true).is_err());
+        assert!(receiver.try_recv().is_err());
+    }
+
     #[test]
     fn remote_metadata_preserves_raw_path_and_has_no_destination() {
         let selection = TransferSelection {
@@ -634,6 +490,7 @@ mod tests {
             assert!(TransferDragExportService::sources(&selection).is_err());
         }
     }
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn directory_selection_uses_worker_tree_or_native_promise_without_touching_content() {
         let selection = TransferSelection {
@@ -647,9 +504,12 @@ mod tests {
             ],
         };
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
+        let service = std::sync::Arc::new(nyaterm_transport::RemoteFileService::new(
+            nyaterm_transport::SshSessionConfig::default(),
+        ));
         let gpui::ExternalDragPayload::VirtualFileTree(tree) = TransferDragExportService::resolve(
             &selection,
-            Some(std::sync::Weak::new()),
+            Some(std::sync::Arc::downgrade(&service)),
             sender.clone(),
             true,
             false,
@@ -663,7 +523,7 @@ mod tests {
         let gpui::ExternalDragPayload::PromisedFiles(promises) =
             TransferDragExportService::resolve(
                 &selection,
-                Some(std::sync::Weak::new()),
+                Some(std::sync::Arc::downgrade(&service)),
                 sender,
                 false,
                 true,
@@ -676,6 +536,7 @@ mod tests {
         assert!(promises.files()[0].is_directory);
         assert!(!promises.files()[1].is_directory);
         assert!(receiver.try_recv().is_err());
+        drop(service);
         promises.cancel();
         assert!(
             promises.files()[0]
@@ -706,6 +567,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn remote_selection_is_deferred_and_keeps_native_content_order() {
         let selection = TransferSelection {
@@ -719,9 +581,12 @@ mod tests {
             ],
         };
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
+        let service = std::sync::Arc::new(nyaterm_transport::RemoteFileService::new(
+            nyaterm_transport::SshSessionConfig::default(),
+        ));
         let gpui::ExternalDragPayload::VirtualFiles(files) = TransferDragExportService::resolve(
             &selection,
-            Some(std::sync::Weak::new()),
+            Some(std::sync::Arc::downgrade(&service)),
             sender,
             true,
             false,
@@ -733,6 +598,7 @@ mod tests {
         assert_eq!(files.files()[0].name, std::ffi::OsString::from("你好.txt"));
         assert_eq!(files.files()[1].name, std::ffi::OsString::from("second"));
         assert!(receiver.try_recv().is_err());
+        drop(service);
         // Closing the source before a consumer opens it fails without networking.
         assert!(files.files()[0].provider.open().is_err());
         files.cancel();

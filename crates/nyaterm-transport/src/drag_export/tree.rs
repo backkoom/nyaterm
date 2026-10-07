@@ -1,10 +1,6 @@
 use crate::drag_export::RemoteDragFile;
 use crate::{RemoteFileService, SftpFileEntry, SftpFileType, SftpTransferControl};
-use std::{
-    collections::HashSet,
-    path::PathBuf,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::path::PathBuf;
 
 /// Selecting an ancestor and its child in a tree exports the ancestor once.
 /// Compare wire identities so lossy display names cannot hide distinct sources.
@@ -43,6 +39,7 @@ pub fn prune_nested_roots(roots: Vec<SftpFileEntry>) -> anyhow::Result<Vec<SftpF
 #[derive(Clone, Debug)]
 pub struct RemoteDragEntry {
     pub relative_path: PathBuf,
+    pub root_index: usize,
     pub file: RemoteDragFile,
     pub is_directory: bool,
 }
@@ -54,71 +51,18 @@ pub fn enumerate_remote_drag(
     roots: Vec<SftpFileEntry>,
     control: &SftpTransferControl,
 ) -> anyhow::Result<Vec<RemoteDragEntry>> {
-    let mut pending: Vec<_> = roots
-        .into_iter()
-        .rev()
-        .map(|entry| {
-            let relative = PathBuf::from(&entry.name);
-            (entry, relative, 0_usize)
-        })
-        .collect();
-    let mut entries = Vec::new();
-    let mut visited = HashSet::new();
-    while let Some((entry, relative_path, depth)) = pending.pop() {
-        control.check_cancelled()?;
-        anyhow::ensure!(
-            depth <= 128 && entries.len() < 65536,
-            "drag directory tree is too large"
-        );
-        crate::download_path::validate_name(&entry.name)?;
-        anyhow::ensure!(
-            matches!(
-                entry.file_type,
-                SftpFileType::File | SftpFileType::Directory
-            ),
-            "links and special files cannot be dragged out"
-        );
-        let remote_path = entry.remote_path();
-        anyhow::ensure!(
-            visited.insert(remote_path.clone()),
-            "duplicate remote drag source"
-        );
-        let metadata = service.remote_file_properties(&remote_path)?;
-        anyhow::ensure!(
-            metadata.file_type == entry.file_type,
-            "remote drag source changed type"
-        );
-        let is_directory = entry.file_type == SftpFileType::Directory;
-        if is_directory {
-            let children = service.list_dir_path(&remote_path)?;
-            anyhow::ensure!(
-                children.len() + pending.len() + entries.len() <= 65536,
-                "drag directory tree is too large"
-            );
-            control.check_cancelled()?;
-            // Match ordinary directory downloads: do not follow links or copy devices.
-            for child in children.into_iter().rev() {
-                if crate::download_path::validate_directory_entry(&child.name, child.file_type)? {
-                    let child_relative = relative_path.join(&child.name);
-                    pending.push((child, child_relative, depth + 1));
-                }
-            }
-        }
-        entries.push(RemoteDragEntry {
-            relative_path,
-            is_directory,
-            file: RemoteDragFile {
-                display_name: entry.name.into(),
-                remote_path,
-                size: if is_directory { None } else { metadata.size },
-                modified_at: metadata
-                    .modified_at
-                    .map(|time| UNIX_EPOCH + Duration::from_secs(u64::from(time))),
-            },
-        });
-    }
-    anyhow::ensure!(!entries.is_empty(), "no files selected");
-    Ok(entries)
+    service.export_sftp_service().enumerate_drag(roots, control)
+}
+
+pub fn enumerate_remote_drag_with_root_controls(
+    service: &RemoteFileService,
+    roots: Vec<SftpFileEntry>,
+    control: &SftpTransferControl,
+    root_controls: Vec<SftpTransferControl>,
+) -> anyhow::Result<Vec<RemoteDragEntry>> {
+    service
+        .export_sftp_service()
+        .enumerate_drag_with_root_controls(roots, control, root_controls)
 }
 
 #[cfg(test)]

@@ -49,8 +49,12 @@ use crate::models::{
 
 use super::external_sync_runtime::ExternalEditorWatcher;
 
+struct TransferRetryContext {
+    options: SftpPathTransferOptions,
+    source: Option<std::sync::Weak<nyaterm_transport::RemoteFileService>>,
+}
+
 pub(in crate::features) struct TransferFeatureState {
-    pub(in crate::features) drag_export: super::drag_export::DragExportState,
     clipboard: Option<TransferFileClipboard>,
     clipboard_generation: u64,
     cut_jobs: HashMap<String, (u64, String)>,
@@ -72,7 +76,7 @@ pub(in crate::features) struct TransferFeatureState {
     external_sync: TransferExternalSyncState,
     panel: TransferPanelState,
     /// 失败和取消的 SFTP 任务保留原策略及 Ask 决定，供手动重试复用。
-    path_options_by_job: HashMap<String, SftpPathTransferOptions>,
+    path_options_by_job: HashMap<String, TransferRetryContext>,
     /// How many times the event drain has entered GPUI.
     ///
     /// The coalescing test needs the batch count, not the event count: the point
@@ -318,7 +322,6 @@ impl TransferFeatureState {
     ) -> Self {
         let (tx, rx) = unbounded();
         Self {
-            drag_export: Default::default(),
             clipboard: None,
             clipboard_generation: 0,
             cut_jobs: HashMap::new(),
@@ -445,9 +448,38 @@ impl TransferFeatureState {
     ) -> SftpPathTransferOptions {
         let retry_options =
             path_options.with_transfer_options(path_options.transfer_options().clone());
-        self.path_options_by_job
-            .insert(job_id.to_string(), retry_options);
+        self.path_options_by_job.insert(
+            job_id.to_string(),
+            TransferRetryContext {
+                options: retry_options,
+                source: None,
+            },
+        );
         path_options
+    }
+
+    pub(in crate::features) fn bind_promised_download(
+        &mut self,
+        job_id: &str,
+        options: SftpPathTransferOptions,
+        source: std::sync::Weak<nyaterm_transport::RemoteFileService>,
+    ) {
+        self.path_options_by_job.insert(
+            job_id.to_owned(),
+            TransferRetryContext {
+                options,
+                source: Some(source),
+            },
+        );
+    }
+
+    pub(in crate::features) fn promised_download_source(
+        &self,
+        job_id: &str,
+    ) -> Option<std::sync::Weak<nyaterm_transport::RemoteFileService>> {
+        self.path_options_by_job
+            .get(job_id)
+            .and_then(|context| context.source.clone())
     }
 
     /// 已有任务沿用原策略和 Ask 决定，只接受当前的执行参数；旧任务才使用回退值。
@@ -457,7 +489,13 @@ impl TransferFeatureState {
         fallback: SftpPathTransferOptions,
     ) -> SftpPathTransferOptions {
         if let Some(path_options) = self.path_options_by_job.get(job_id) {
-            return path_options.with_transfer_options(fallback.transfer_options().clone());
+            return path_options.options.with_transfer_options(
+                if path_options.options.is_promised_download() {
+                    path_options.options.transfer_options().clone()
+                } else {
+                    fallback.transfer_options().clone()
+                },
+            );
         }
         self.bind_transfer_job_path_options(job_id, fallback)
     }

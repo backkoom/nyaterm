@@ -193,6 +193,22 @@ impl NyaTermApp {
                     }
                 }
 
+                let mut latest = HashMap::new();
+                let mut coalesced: Vec<TransferJobResult> = Vec::with_capacity(batch.len());
+                for event in batch {
+                    if matches!(event.event, TransferJobEvent::Progress(_)) {
+                        if let Some(&index) = latest.get(&event.id) {
+                            coalesced[index] = event;
+                        } else {
+                            latest.insert(event.id.clone(), coalesced.len());
+                            coalesced.push(event);
+                        }
+                    } else {
+                        latest.remove(&event.id);
+                        coalesced.push(event);
+                    }
+                }
+                let batch = coalesced;
                 if this
                     .update_in(cx, |this, window, cx| {
                         // One transaction, one notify, however many events it took.
@@ -228,25 +244,6 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if let TransferJobEvent::DragPrepared { key, result } = event.event {
-            if self.session.metadata(&key.session_id).is_none() {
-                self.transfer.drag_export.discard(&key);
-                return false;
-            }
-            match result {
-                Ok(paths) => {
-                    self.transfer.drag_export.complete(key, paths);
-                    self.shell
-                        .set_status(rust_i18n::t!("fileExplorer.dragReady").to_string());
-                }
-                Err(error) => {
-                    self.transfer.drag_export.discard(&key);
-                    self.shell.set_status(error);
-                }
-            }
-            cx.notify();
-            return true;
-        }
         if let TransferJobEvent::DragExportOpened {
             session_id,
             remote_path,
@@ -258,18 +255,26 @@ impl NyaTermApp {
                 control.cancel();
                 return false;
             }
+            let kind = match destination {
+                Some(destination) => {
+                    self.transfer.bind_promised_download(
+                        &event.id,
+                        destination.options,
+                        destination.source,
+                    );
+                    TransferJobKind::Download {
+                        remote_path,
+                        raw_path_token: destination.raw_path_token,
+                        local_path: destination.local_path,
+                    }
+                }
+                None => TransferJobKind::DragExport { remote_path },
+            };
             self.transfer
                 .enqueue_transfer_job(crate::models::TransferJobState {
                     id: event.id,
                     session_id: Some(session_id),
-                    kind: match destination {
-                        Some((raw_path_token, local_path)) => TransferJobKind::Download {
-                            remote_path,
-                            raw_path_token,
-                            local_path,
-                        },
-                        None => TransferJobKind::DragExport { remote_path },
-                    },
+                    kind,
                     status: TransferJobStatus::Running,
                     detail: t!("fileExplorer.exportContent").to_string(),
                     created_at_ms: crate::models::TransferJobState::now_ms(),
@@ -388,7 +393,7 @@ impl NyaTermApp {
             && !job.is_user_transfer()
             && (!matches!(&job.kind, TransferJobKind::OpenExternal { .. }) || event_failed);
         match event.event {
-            TransferJobEvent::DragExportOpened { .. } | TransferJobEvent::DragPrepared { .. } => {
+            TransferJobEvent::DragExportOpened { .. } => {
                 unreachable!()
             }
             TransferJobEvent::Started { detail } => {
@@ -1095,10 +1100,13 @@ impl NyaTermApp {
                     local_path: summary.local_path.clone(),
                     bytes_transferred: summary.bytes,
                     total_bytes: Some(summary.bytes),
-                    item_count_completed: job
-                        .progress
-                        .as_ref()
-                        .and_then(|progress| progress.item_count_total),
+                    item_count_completed: job.progress.as_ref().and_then(|progress| {
+                        if matches!(job.kind, TransferJobKind::DragExport { .. }) {
+                            progress.item_count_completed
+                        } else {
+                            progress.item_count_total
+                        }
+                    }),
                     item_count_total: job
                         .progress
                         .as_ref()
@@ -1125,10 +1133,13 @@ impl NyaTermApp {
                     local_path: summary.local_path.clone(),
                     bytes_transferred: summary.bytes,
                     total_bytes: Some(summary.bytes),
-                    item_count_completed: job
-                        .progress
-                        .as_ref()
-                        .and_then(|progress| progress.item_count_total),
+                    item_count_completed: job.progress.as_ref().and_then(|progress| {
+                        if matches!(job.kind, TransferJobKind::DragExport { .. }) {
+                            progress.item_count_completed
+                        } else {
+                            progress.item_count_total
+                        }
+                    }),
                     item_count_total: job
                         .progress
                         .as_ref()
