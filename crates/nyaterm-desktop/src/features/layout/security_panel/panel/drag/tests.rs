@@ -42,7 +42,7 @@ fn hosted<'a>(
     width: f32,
 ) -> (Entity<NyaTermApp>, &'a mut VisualTestContext) {
     let store = ConnectionStore::open(root.join("config")).unwrap();
-    for (index, id) in ["a", "b"].into_iter().enumerate() {
+    for (index, id) in ["a", "b", "c", "d"].into_iter().enumerate() {
         let raw = serde_json::json!({
             "id":id, "name":id, "username":"user", "sort_order":index as i32
         });
@@ -159,7 +159,7 @@ fn all_security_lists_drag_and_save_in_regular_and_compact_layouts() {
                         .collect::<Vec<_>>(),
                     _ => unreachable!(),
                 };
-                assert_eq!(ids, vec!["b", "a"]);
+                assert_eq!(ids, vec!["b", "a", "c", "d"]);
             });
         }
     }
@@ -195,4 +195,89 @@ fn cancelled_drags_clear_insertion_marks_and_cross_tab_drops_do_not_sort() {
         assert!(!security.reorder_busy());
         assert_eq!(security.ssh_keys()[0].id, "a");
     });
+}
+
+#[test]
+fn insertion_mark_tracks_only_the_hovered_row_and_clears_on_source_or_outside() {
+    for tab in [
+        SecurityAuthTab::Passwords,
+        SecurityAuthTab::Keys,
+        SecurityAuthTab::Credentials,
+    ] {
+        for width in [180., 320.] {
+            let root = TestTempDir::new("nyaterm-security-drag-hover");
+            let mut cx = TestAppContext::single();
+            let (app, cx) = hosted(&mut cx, &root, tab, width);
+            let (source_id, second_id, third_id, last_id) = match tab {
+                SecurityAuthTab::Passwords => (
+                    "security-drag-Pwd-a",
+                    "security-row-Pwd-b",
+                    "security-row-Pwd-c",
+                    "security-row-Pwd-d",
+                ),
+                SecurityAuthTab::Keys => (
+                    "security-drag-Keys-a",
+                    "security-row-Keys-b",
+                    "security-row-Keys-c",
+                    "security-row-Keys-d",
+                ),
+                SecurityAuthTab::Credentials => (
+                    "security-drag-Cred-a",
+                    "security-row-Cred-b",
+                    "security-row-Cred-c",
+                    "security-row-Cred-d",
+                ),
+                _ => unreachable!(),
+            };
+            let source = cx.debug_bounds(source_id).unwrap().center();
+            cx.simulate_mouse_down(source, MouseButton::Left, Modifiers::none());
+            let start = source + point(px(8.), px(0.));
+            cx.simulate_mouse_move(start, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(
+                start + point(px(1.), px(0.)),
+                MouseButton::Left,
+                Modifiers::none(),
+            );
+            cx.read(|cx| {
+                assert!(cx.has_active_drag());
+                assert!(
+                    app.read(cx).security.drop_target().is_none(),
+                    "starting a drag over its source must not highlight the last row"
+                );
+            });
+            for (selector, id, fraction, after) in [
+                (second_id, "b", 0.25, false),
+                (second_id, "b", 0.75, true),
+                (third_id, "c", 0.25, false),
+                (last_id, "d", 0.75, true),
+                (second_id, "b", 0.25, false),
+            ] {
+                draw(cx);
+                let bounds = cx.debug_bounds(selector).unwrap();
+                let position = point(
+                    source.x + px(20.),
+                    bounds.top() + bounds.size.height * fraction,
+                );
+                cx.simulate_mouse_move(position, MouseButton::Left, Modifiers::none());
+                cx.read(|cx| {
+                    let target = app.read(cx).security.drop_target().unwrap();
+                    assert_eq!(target.tab, tab);
+                    assert_eq!(target.id, id);
+                    assert_eq!(target.after, after);
+                });
+            }
+            cx.simulate_mouse_move(source, MouseButton::Left, Modifiers::none());
+            cx.read(|cx| assert!(app.read(cx).security.drop_target().is_none()));
+            draw(cx);
+            let bounds = cx.debug_bounds(third_id).unwrap();
+            let position = point(source.x + px(20.), bounds.center().y);
+            cx.simulate_mouse_move(position, MouseButton::Left, Modifiers::none());
+            cx.read(|cx| assert_eq!(app.read(cx).security.drop_target().unwrap().id, "c"));
+            let outside = point(px(width + 40.), position.y);
+            cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+            cx.read(|cx| assert!(app.read(cx).security.drop_target().is_none()));
+            cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+            cx.read(|cx| assert!(!app.read(cx).security.reorder_busy()));
+        }
+    }
 }
