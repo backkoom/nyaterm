@@ -553,6 +553,11 @@ impl ShellFeatureState {
         self.panels.left_width
     }
 
+    #[cfg(test)]
+    pub(in crate::features) fn set_left_panel_width_for_test(&mut self, width: f32) {
+        self.panels.left_width = width;
+    }
+
     /// Set the stored right-panel width. Test-only: the real writers are the resize
     /// drag and the settings load.
     #[cfg(test)]

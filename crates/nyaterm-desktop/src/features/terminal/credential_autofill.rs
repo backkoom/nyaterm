@@ -1652,6 +1652,7 @@ mod tests {
 
         store
             .save_password(SavedPassword {
+                sort_order: 0,
                 id: "account-1".into(),
                 name: "Login account".into(),
                 username: "root".into(),
@@ -1836,6 +1837,7 @@ mod tests {
             .open_table(TableDefinition::<&str, &[u8]>::new("credentials"))
             .expect("credentials table");
         let corrupt = SavedPassword {
+            sort_order: 0,
             id: "account-1".into(),
             name: "Login account".into(),
             username: "root".into(),

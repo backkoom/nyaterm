@@ -178,6 +178,7 @@ fn accounts_preserve_masking_legacy_references_and_portable_snapshot_contracts()
     let source = ConnectionStore::open(&source_dir).unwrap();
     source
         .save_password(SavedPassword {
+            sort_order: 0,
             id: "account".into(),
             name: "Shared account".into(),
             username: "shared-user".into(),
@@ -246,6 +247,7 @@ fn connection_source_reads_account_username_without_decrypting_corrupt_password(
         CREDENTIALS_TABLE,
         &entity_key(super::PASSWORD_PREFIX, "metadata"),
         &SavedPassword {
+            sort_order: 0,
             id: "metadata".into(),
             name: "Metadata".into(),
             username: "metadata-user".into(),
@@ -716,6 +718,7 @@ fn exports_and_imports_portable_snapshot() {
             CREDENTIALS_TABLE,
             &entity_key(SSH_KEY_PREFIX, "key-1"),
             &SshKey {
+                sort_order: 0,
                 id: "key-1".to_string(),
                 name: "Deploy".to_string(),
                 key: Some("encrypted-key".to_string().into()),
@@ -1060,6 +1063,7 @@ fn legacy_tauri_snapshot_reencrypts_settings_and_rewraps_master_key() {
         .expect("save source cloud settings");
     source
         .save_password(nyaterm_core::SavedPassword {
+            sort_order: 0,
             id: "legacy-account".to_string(),
             name: "Legacy account".to_string(),
             username: "legacy-user".to_string(),
@@ -1183,6 +1187,7 @@ fn legacy_tauri_cloud_pull_rewraps_vault_key_and_preserves_local_master_password
         .expect("source master password");
     source
         .save_password(nyaterm_core::SavedPassword {
+            sort_order: 0,
             id: "legacy-secret".into(),
             name: "Legacy".into(),
             username: "user".into(),
@@ -1224,6 +1229,7 @@ fn current_gpui_cloud_pull_rewraps_vault_key_for_local_master_password() {
         .expect("source master password");
     source
         .save_password(nyaterm_core::SavedPassword {
+            sort_order: 0,
             id: "shared-account".into(),
             name: "Shared".into(),
             username: "user".into(),
@@ -1619,6 +1625,7 @@ fn load_decrypted_ssh_key_reads_legacy_key_store() {
     let master_key = test_key(7);
     let master_key_token = encrypt_for_test(master_key.as_slice(), &home_wrapping_key());
     let key = SshKey {
+        sort_order: 0,
         id: "key-1".to_string(),
         name: "Deploy Key".to_string(),
         key: Some(encrypt_for_test(b"-----BEGIN PRIVATE KEY-----", &master_key).into()),
@@ -1680,6 +1687,7 @@ fn save_ssh_key_rejects_oversized_key_file_import() {
     let store = ConnectionStore::open(&dir).expect("store");
     let error = store
         .save_ssh_key(SshKey {
+            sort_order: 0,
             id: "key-1".to_string(),
             name: "Large Key".to_string(),
             key: None,
@@ -1708,6 +1716,7 @@ fn save_ssh_key_rejects_oversized_cert_file_import() {
     let store = ConnectionStore::open(&dir).expect("store");
     let error = store
         .save_ssh_key(SshKey {
+            sort_order: 0,
             id: "key-1".to_string(),
             name: "Large Cert".to_string(),
             key: Some("-----BEGIN PRIVATE KEY-----\nsmall\n".to_string().into()),

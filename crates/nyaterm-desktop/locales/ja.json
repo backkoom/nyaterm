@@ -1700,6 +1700,8 @@
     }
   },
   "passwordManager": {
+    "reorderSuccess": "アカウントの順序を保存しました",
+    "reorderFailed": "アカウントの順序を保存できませんでした",
     "nameRequired": "アカウント名を入力してください。",
     "credentialsRequired": "ユーザー名またはパスワードを入力してください。",
     "missingAccount": "保存されたアカウントが見つかりません。",
@@ -2006,6 +2008,8 @@
     "wrongPassword": "パスワードが違います。もう一度お試しください。"
   },
   "securityAuth": {
+    "reorderSuccess": "鍵の順序を保存しました",
+    "reorderFailed": "鍵の順序を保存できませんでした",
     "copyPublicKey": "公開鍵をコピー",
     "publicKeyCopyFailed": "公開鍵を読み取れません: OpenSSH 秘密鍵が無効か、未対応の形式です。",
     "clearKnownHosts": "既知のホストを消去",

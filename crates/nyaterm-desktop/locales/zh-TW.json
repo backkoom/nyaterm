@@ -1700,6 +1700,8 @@
     }
   },
   "passwordManager": {
+    "reorderSuccess": "帳戶順序已儲存",
+    "reorderFailed": "帳戶排序儲存失敗",
     "nameRequired": "請輸入帳戶名稱。",
     "credentialsRequired": "請輸入使用者名稱或密碼。",
     "missingAccount": "找不到儲存的帳戶。",
@@ -2006,6 +2008,8 @@
     "wrongPassword": "主密碼錯誤，請重試。"
   },
   "securityAuth": {
+    "reorderSuccess": "金鑰順序已儲存",
+    "reorderFailed": "金鑰排序儲存失敗",
     "copyPublicKey": "複製公鑰",
     "publicKeyCopyFailed": "無法讀取公鑰：OpenSSH 私鑰無效或不受支援。",
     "addKey": "新增金鑰",

@@ -1700,6 +1700,8 @@
     }
   },
   "passwordManager": {
+    "reorderSuccess": "Ordre des comptes enregistré",
+    "reorderFailed": "Échec de l’enregistrement de l’ordre des comptes",
     "nameRequired": "Le nom du compte est requis.",
     "credentialsRequired": "Saisissez un nom d’utilisateur ou un mot de passe.",
     "missingAccount": "Compte enregistré introuvable.",
@@ -2006,6 +2008,8 @@
     "wrongPassword": "Mot de passe incorrect. Réessayez."
   },
   "securityAuth": {
+    "reorderSuccess": "Ordre des clés enregistré",
+    "reorderFailed": "Échec de l’enregistrement de l’ordre des clés",
     "copyPublicKey": "Copier la clé publique",
     "publicKeyCopyFailed": "Impossible de lire la clé publique : clé privée OpenSSH invalide ou non prise en charge.",
     "clearKnownHosts": "Effacer les hôtes connus",

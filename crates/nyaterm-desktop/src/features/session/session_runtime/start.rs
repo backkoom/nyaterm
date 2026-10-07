@@ -1631,6 +1631,7 @@ mod tests {
             .store
             .request_fn(StoreDomain::Security, |store| {
                 store.save_password(nyaterm_core::SavedPassword {
+                    sort_order: 0,
                     username: String::new(),
                     id: "pw-1".to_string(),
                     name: "Primary".to_string(),

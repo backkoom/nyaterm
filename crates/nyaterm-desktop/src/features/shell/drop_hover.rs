@@ -54,6 +54,7 @@ impl NyaTermApp {
         self.terminal.terminal_file_drop_hover_is_pending()
             || self.transfer.browser_external_drop_hover_is_pending()
             || self.session.tab_drag_is_pending()
+            || self.security.drop_target().is_some()
     }
 
     /// Returns whether the clock should keep running.
@@ -75,6 +76,7 @@ impl NyaTermApp {
         let transfer_dirty = self.transfer.set_browser_external_drop_hover(false);
         dirty |= transfer_dirty;
         dirty |= self.session.clear_tab_drag();
+        dirty |= self.security.clear_drop_target();
         if dirty {
             if transfer_dirty {
                 self.defer_transfer_panel_snapshot_flush(cx);

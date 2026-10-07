@@ -1700,6 +1700,8 @@
     }
   },
   "passwordManager": {
+    "reorderSuccess": "Account order saved",
+    "reorderFailed": "Failed to save account order",
     "nameRequired": "Account name is required.",
     "credentialsRequired": "Enter a username or password.",
     "missingAccount": "Saved account was not found.",
@@ -2006,6 +2008,8 @@
     "wrongPassword": "Wrong password. Try again."
   },
   "securityAuth": {
+    "reorderSuccess": "Key order saved",
+    "reorderFailed": "Failed to save key order",
     "copyPublicKey": "Copy public key",
     "publicKeyCopyFailed": "Cannot read the public key: invalid or unsupported OpenSSH private key.",
     "addKey": "Add Key",

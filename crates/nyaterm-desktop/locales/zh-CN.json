@@ -1700,6 +1700,8 @@
     }
   },
   "passwordManager": {
+    "reorderSuccess": "账户顺序已保存",
+    "reorderFailed": "账户排序保存失败",
     "nameRequired": "请输入账户名称。",
     "credentialsRequired": "请输入用户名或密码。",
     "missingAccount": "找不到保存的账户。",
@@ -2006,6 +2008,8 @@
     "wrongPassword": "主密码错误，请重试。"
   },
   "securityAuth": {
+    "reorderSuccess": "密钥顺序已保存",
+    "reorderFailed": "密钥排序保存失败",
     "copyPublicKey": "复制公钥",
     "publicKeyCopyFailed": "无法读取公钥：OpenSSH 私钥无效或不受支持。",
     "addKey": "添加密钥",

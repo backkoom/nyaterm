@@ -26,6 +26,7 @@ fn secret_bearing_model_debug_output_is_redacted() {
         format!(
             "{:?}",
             SshKey {
+                sort_order: 0,
                 id: "key-1".to_string(),
                 name: "Test key".to_string(),
                 key: Some(secret.to_string().into()),

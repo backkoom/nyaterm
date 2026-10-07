@@ -35,6 +35,8 @@ struct NyatermJsonPassword {
     ref_name: String,
     name: String,
     #[serde(default)]
+    sort_order: i32,
+    #[serde(default)]
     username: String,
     password: crate::SecretString,
 }
@@ -44,6 +46,8 @@ struct NyatermJsonSshKey {
     #[serde(rename = "ref")]
     ref_name: String,
     name: String,
+    #[serde(default)]
+    sort_order: i32,
     private_key: crate::SecretString,
     #[serde(default)]
     certificate: Option<crate::SecretString>,
@@ -225,6 +229,7 @@ fn prepare_nyaterm_json_import(file: NyatermJsonImportFile) -> AppResult<Prepare
         let id = uuid::Uuid::new_v4().to_string();
         password_ref_map.insert(ref_name, id.clone());
         passwords.push(SavedPassword {
+            sort_order: entry.sort_order,
             id,
             username: entry.username,
             name: required_string(entry.name, "password name", "passwords")?,
@@ -251,6 +256,7 @@ fn prepare_nyaterm_json_import(file: NyatermJsonImportFile) -> AppResult<Prepare
         let id = uuid::Uuid::new_v4().to_string();
         key_ref_map.insert(ref_name, id.clone());
         ssh_keys.push(SshKey {
+            sort_order: entry.sort_order,
             id,
             name: required_string(entry.name, "ssh key name", "ssh_keys")?,
             key: Some(entry.private_key),
