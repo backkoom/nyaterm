@@ -1102,8 +1102,6 @@
     "dragRemote": "Glisser les fichiers sélectionnés pour les télécharger",
     "dragDirectoryUnsupported": "Les liens et fichiers spéciaux ne peuvent pas être glissés ; utilisez Télécharger",
     "dragPlatformUnsupported": "Glisser des fichiers distants indisponible sur cette plateforme : utiliser Télécharger",
-    "dragPreparing": "Téléchargement de la sélection. Faites-la glisser à nouveau une fois la préparation terminée.",
-    "dragReady": "Téléchargement prêt. Faites glisser la sélection vers votre gestionnaire de fichiers.",
     "exportContent": "Transmission du contenu au destinataire du dépôt",
     "exportProvided": "%{size} transmis au destinataire du dépôt",
     "tree": "Arborescence",

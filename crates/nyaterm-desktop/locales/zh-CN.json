@@ -1102,8 +1102,6 @@
     "dragRemote": "拖出选中文件以下载",
     "dragDirectoryUnsupported": "链接和特殊文件暂不支持拖出，请使用下载",
     "dragPlatformUnsupported": "当前平台暂不支持远程拖出，请使用下载",
-    "dragPreparing": "正在下载选中项，准备完成后请再次拖出。",
-    "dragReady": "下载已准备好，请再次将选中项拖到文件管理器。",
     "exportContent": "正在向目标提供文件内容",
     "exportProvided": "已向目标提供 %{size}",
     "tree": "文件树",

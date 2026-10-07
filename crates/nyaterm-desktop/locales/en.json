@@ -1102,8 +1102,6 @@
     "dragRemote": "Drag selected files to download",
     "dragDirectoryUnsupported": "Links and special files cannot be dragged out; use Download",
     "dragPlatformUnsupported": "Remote drag download unavailable on this platform: use Download",
-    "dragPreparing": "Downloading the selection. Drag it out again when preparation finishes.",
-    "dragReady": "Download ready. Drag the selection to your file manager again.",
     "exportContent": "Providing file content to native destination",
     "exportProvided": "%{size} provided to native destination",
     "tree": "Tree",
