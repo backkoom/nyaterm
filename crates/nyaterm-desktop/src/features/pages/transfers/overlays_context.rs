@@ -398,24 +398,22 @@ impl NyaTermApp {
                     )
                     .icon("icons/fe/upload.svg")
                 }
-                Node::Action(Action::Download) => NyaMenuItem::submenu(
-                    t!("fileExplorer.cmDownload"),
-                    vec![
-                        NyaMenuItem::action(t!("fileExplorer.cmDownloadDefault"))
-                            .icon("icons/fe/download.svg")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.start_selected_sftp_download_jobs(window, cx);
-                                this.defer_transfer_panel_snapshot_flush(cx);
-                            })),
-                        NyaMenuItem::action(t!("fileExplorer.cmDownloadToDirectory"))
-                            .icon("icons/fe/download.svg")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.start_selected_sftp_download_to_directory(window, cx);
-                                this.defer_transfer_panel_snapshot_flush(cx);
-                            })),
-                    ],
-                )
-                .icon("icons/fe/download.svg"),
+                Node::Action(Action::Download) => {
+                    NyaMenuItem::action(t!("fileExplorer.cmDownload"))
+                        .icon("icons/fe/download.svg")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.start_selected_sftp_download_jobs(window, cx);
+                            this.defer_transfer_panel_snapshot_flush(cx);
+                        }))
+                }
+                Node::Action(Action::DownloadToDirectory) => {
+                    NyaMenuItem::action(t!("fileExplorer.cmDownloadToDirectory"))
+                        .icon("icons/fe/download.svg")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.start_selected_sftp_download_to_directory(window, cx);
+                            this.defer_transfer_panel_snapshot_flush(cx);
+                        }))
+                }
                 Node::Action(Action::Move) => NyaMenuItem::action(t!("fileExplorer.cmMove"))
                     .icon("icons/net/move.svg")
                     .on_click(cx.listener(|this, _, window, cx| {
