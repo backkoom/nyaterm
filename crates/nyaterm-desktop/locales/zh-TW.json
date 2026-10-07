@@ -1100,8 +1100,10 @@
   "fileExplorer": {
     "dragLocal": "將選取檔案拖到檔案管理員",
     "dragRemote": "拖出選取檔案以下載",
-    "dragDirectoryUnsupported": "遠端目錄和連結暫不支援拖出，請使用下載",
+    "dragDirectoryUnsupported": "連結和特殊檔案不支援拖出，請使用下載",
     "dragPlatformUnsupported": "目前平台暫不支援遠端拖出，請使用下載",
+    "dragPreparing": "正在下載選取項目，準備完成後請再次拖出。",
+    "dragReady": "下載已準備好，請再次將選取項目拖到檔案管理員。",
     "exportContent": "正在向目標提供檔案內容",
     "exportProvided": "已向目標提供 %{size}",
     "tree": "檔案樹",

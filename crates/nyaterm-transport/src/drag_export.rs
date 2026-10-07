@@ -1,6 +1,9 @@
 //! Deferred drag sources and the bounded synchronous-consumer/SFTP bridge.
 //! Source metadata never contains a local destination or saved credentials.
 
+pub mod staging;
+pub mod tree;
+
 use crate::{RemoteFilePath, RemoteFileService, SftpTransferControl, SftpTransferOptions};
 use std::{
     ffi::OsString,

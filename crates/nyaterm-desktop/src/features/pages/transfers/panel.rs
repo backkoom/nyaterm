@@ -520,6 +520,92 @@ mod tests {
     }
 
     #[test]
+    fn tree_drag_preserves_selected_files_and_directories_from_the_first_press() {
+        let test_dir = TestConfigDir::new("nyaterm-tree-file-drag");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let mut entries: Vec<_> = (0..2)
+            .map(super::super::tests_support::browser_entry)
+            .collect();
+        entries[1].file_type = nyaterm_transport::SftpFileType::Directory;
+        let root = nyaterm_transport::file_browser_root(
+            nyaterm_transport::FileBrowserBackendKind::Local,
+            &test_dir.path().display().to_string(),
+        );
+        for entry in &mut entries {
+            entry.path = Path::new(&root).join(&entry.name).display().to_string();
+        }
+        let row_key = vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let mut settings = app.settings.summary().clone();
+                settings.ui_file_explorer_view_mode = nyaterm_core::TransferBrowserViewMode::Tree;
+                app.settings.replace_summary(settings);
+                let path = nyaterm_transport::RemoteFilePath::new(root);
+                app.transfer.seed_tree_listing(
+                    "path-test",
+                    nyaterm_transport::FileBrowserBackendKind::Local,
+                    path.clone(),
+                    std::sync::Arc::new(entries.clone()),
+                );
+                app.transfer.reveal_tree_path(
+                    "path-test",
+                    nyaterm_transport::FileBrowserBackendKind::Local,
+                    path,
+                );
+                let rows = app.transfer.tree_presentation(Some("path-test"), true).rows;
+                let selected: Vec<_> = rows
+                    .iter()
+                    .filter(|row| row.entry.is_some())
+                    .map(|row| row.key.clone())
+                    .collect();
+                assert_eq!(selected.len(), 2);
+                for (index, key) in selected.iter().enumerate() {
+                    app.transfer
+                        .select_tree_row("path-test", key.clone(), index != 0, false);
+                }
+                let drag = crate::features::transfers::drag_export::DraggedSelection::new_tree(
+                    entries[0].clone(),
+                );
+                app.capture_transfer_drag(&drag, cx);
+                assert_eq!(drag.file_count(), 2);
+                let gpui::ExternalDragPayload::Files(paths) = app
+                    .resolve_transfer_drag(&drag, false, false, cx)
+                    .expect("local tree snapshot")
+                else {
+                    panic!("real local paths required");
+                };
+                assert_eq!(paths.entries().len(), 2);
+                assert!(paths.entries().iter().any(|(_, directory)| *directory));
+                app.flush_transfer_panel_snapshot(cx);
+                selected[0].clone()
+            })
+        });
+        draw_path_fixture(vcx);
+        let selector = Box::leak(format!("transfer-tree-row:{row_key}").into_boxed_str());
+        let row = vcx.debug_bounds(selector).expect("tree file row");
+        let start = gpui::point(row.left() + px(80.), row.top() + px(14.));
+        vcx.simulate_mouse_move(start, None, Modifiers::none());
+        vcx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_move(
+            start + gpui::point(px(20.), px(5.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw_path_fixture(vcx);
+        vcx.update(|_, cx| {
+            assert!(cx.has_active_drag());
+            assert_eq!(
+                app.read(cx)
+                    .transfer
+                    .selected_tree_entries("path-test")
+                    .len(),
+                2
+            );
+        });
+        assert!(vcx.debug_bounds("transfer-file-drag-preview").is_some());
+    }
+
+    #[test]
     fn path_edit_button_builds_a_focused_selected_input_and_preserves_editing_shortcuts() {
         let test_dir = TestConfigDir::new("nyaterm-path-edit");
         let mut cx = TestAppContext::single();

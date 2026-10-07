@@ -1100,8 +1100,10 @@
   "fileExplorer": {
     "dragLocal": "選択したファイルをファイルマネージャーにドラッグ",
     "dragRemote": "選択したファイルをドラッグしてダウンロード",
-    "dragDirectoryUnsupported": "リモートのフォルダーとリンクには「ダウンロード」を使用",
+    "dragDirectoryUnsupported": "リンクと特殊ファイルはドラッグできません。ダウンロードを使用してください",
     "dragPlatformUnsupported": "この環境ではリモートファイルのドラッグに非対応です。「ダウンロード」を使用",
+    "dragPreparing": "選択項目をダウンロード中です。準備完了後にもう一度ドラッグしてください。",
+    "dragReady": "ダウンロードの準備が完了しました。選択項目をもう一度ドラッグしてください。",
     "exportContent": "ドロップ先にファイルの内容を提供中",
     "exportProvided": "ドロップ先に %{size} を提供しました",
     "tree": "ファイルツリー",

@@ -228,10 +228,30 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let TransferJobEvent::DragPrepared { key, result } = event.event {
+            if self.session.metadata(&key.session_id).is_none() {
+                self.transfer.drag_export.discard(&key);
+                return false;
+            }
+            match result {
+                Ok(paths) => {
+                    self.transfer.drag_export.complete(key, paths);
+                    self.shell
+                        .set_status(rust_i18n::t!("fileExplorer.dragReady").to_string());
+                }
+                Err(error) => {
+                    self.transfer.drag_export.discard(&key);
+                    self.shell.set_status(error);
+                }
+            }
+            cx.notify();
+            return true;
+        }
         if let TransferJobEvent::DragExportOpened {
             session_id,
             remote_path,
             control,
+            destination,
         } = event.event
         {
             if self.session.metadata(&session_id).is_none() {
@@ -242,7 +262,14 @@ impl NyaTermApp {
                 .enqueue_transfer_job(crate::models::TransferJobState {
                     id: event.id,
                     session_id: Some(session_id),
-                    kind: TransferJobKind::DragExport { remote_path },
+                    kind: match destination {
+                        Some((raw_path_token, local_path)) => TransferJobKind::Download {
+                            remote_path,
+                            raw_path_token,
+                            local_path,
+                        },
+                        None => TransferJobKind::DragExport { remote_path },
+                    },
                     status: TransferJobStatus::Running,
                     detail: t!("fileExplorer.exportContent").to_string(),
                     created_at_ms: crate::models::TransferJobState::now_ms(),
@@ -361,7 +388,9 @@ impl NyaTermApp {
             && !job.is_user_transfer()
             && (!matches!(&job.kind, TransferJobKind::OpenExternal { .. }) || event_failed);
         match event.event {
-            TransferJobEvent::DragExportOpened { .. } => unreachable!(),
+            TransferJobEvent::DragExportOpened { .. } | TransferJobEvent::DragPrepared { .. } => {
+                unreachable!()
+            }
             TransferJobEvent::Started { detail } => {
                 job.status = TransferJobStatus::Running;
                 job.detail = detail;

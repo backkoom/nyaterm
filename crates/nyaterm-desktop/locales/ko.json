@@ -1100,8 +1100,10 @@
   "fileExplorer": {
     "dragLocal": "선택한 파일을 파일 관리자로 드래그",
     "dragRemote": "선택한 파일을 드래그하여 다운로드",
-    "dragDirectoryUnsupported": "원격 폴더와 링크는 다운로드를 사용하세요",
+    "dragDirectoryUnsupported": "링크와 특수 파일은 드래그할 수 없습니다. 다운로드를 사용하세요",
     "dragPlatformUnsupported": "이 플랫폼에서는 원격 파일 드래그를 지원하지 않습니다. 다운로드를 사용하세요",
+    "dragPreparing": "선택 항목을 다운로드하는 중입니다. 준비가 끝나면 다시 드래그하세요.",
+    "dragReady": "다운로드 준비가 완료되었습니다. 선택 항목을 다시 드래그하세요.",
     "exportContent": "드롭 대상에 파일 내용 제공 중",
     "exportProvided": "드롭 대상에 %{size} 제공됨",
     "tree": "파일 트리",

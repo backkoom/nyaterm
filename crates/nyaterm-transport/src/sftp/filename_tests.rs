@@ -13,7 +13,7 @@ use crate::session_config::{SftpSettings, SshSessionConfig};
 #[derive(Default)]
 pub(super) struct Files {
     pub(super) contents: HashMap<Vec<u8>, Vec<u8>>,
-    directories: HashSet<Vec<u8>>,
+    pub(super) directories: HashSet<Vec<u8>>,
     pub(super) requests: usize,
     pub(super) reads: Vec<(u64, usize)>,
     pub(super) active_reads: usize,
@@ -163,8 +163,8 @@ fn reply(
             if kind == 12 && !enumerated.insert(path.clone()) {
                 return status(id, 1);
             }
-            let entries: Vec<(Vec<u8>, usize)> = if kind == 16 {
-                vec![(path, 0)]
+            let entries: Vec<(Vec<u8>, usize, bool)> = if kind == 16 {
+                vec![(path, 0, true)]
             } else {
                 let mut prefix = path;
                 if !prefix.ends_with(b"/") {
@@ -176,17 +176,22 @@ fn reply(
                     .filter_map(|(path, content)| {
                         path.strip_prefix(prefix.as_slice())
                             .filter(|name| !name.contains(&b'/'))
-                            .map(|name| (name.to_vec(), content.len()))
+                            .map(|name| (name.to_vec(), content.len(), false))
                     })
+                    .chain(files.directories.iter().filter_map(|path| {
+                        path.strip_prefix(prefix.as_slice())
+                            .filter(|name| !name.is_empty() && !name.contains(&b'/'))
+                            .map(|name| (name.to_vec(), 0, true))
+                    }))
                     .collect()
             };
             packet.push(104);
             packet.extend_from_slice(&id.to_be_bytes());
             packet.extend_from_slice(&(entries.len() as u32).to_be_bytes());
-            for (name, size) in entries {
+            for (name, size, directory) in entries {
                 push_string(&mut packet, &name);
                 push_string(&mut packet, b"");
-                attributes(&mut packet, size, kind == 16);
+                attributes(&mut packet, size, directory);
             }
         }
         13 => {

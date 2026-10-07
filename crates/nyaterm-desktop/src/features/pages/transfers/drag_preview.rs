@@ -44,3 +44,43 @@ impl Render for TransferDragPreview {
             )
     }
 }
+
+pub(super) fn with_transfer_drag<E: gpui::StatefulInteractiveElement>(
+    element: E,
+    drag: crate::features::transfers::drag_export::DraggedSelection,
+    app: gpui::WeakEntity<crate::features::NyaTermApp>,
+    name: String,
+    palette: ThemePalette,
+) -> E {
+    let resolve_app = app.clone();
+    element
+        .on_drag(drag, move |drag, position, _, cx| {
+            if let Some(app) = app.upgrade() {
+                app.update(cx, |app, cx| app.capture_transfer_drag(drag, cx));
+            }
+            let count = drag.file_count();
+            let label = if count > 1 {
+                format!("{name} (+{})", count - 1)
+            } else {
+                name.clone()
+            };
+            cx.new(|_| TransferDragPreview {
+                label,
+                position,
+                palette,
+            })
+        })
+        .can_drag(|event, _, _| !event.modifiers.modified())
+        .external_drag_payload(
+            move |drag: &crate::features::transfers::drag_export::DraggedSelection, window, cx| {
+                resolve_app.upgrade()?.update(cx, |app, cx| {
+                    app.resolve_transfer_drag(
+                        drag,
+                        window.supports_virtual_file_drag(),
+                        window.supports_file_promise_drag(),
+                        cx,
+                    )
+                })
+            },
+        )
+}

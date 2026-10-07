@@ -125,11 +125,13 @@ pub(super) fn transfer_browser_entry_row(
     let drag =
         crate::features::transfers::drag_export::DraggedSelection::new(entry_identity.clone());
     let drag_app = app_handle;
-    let resolve_app = drag_app.clone();
     let drag_name = entry.name.clone();
     let drag_hint = if local_backend {
         rust_i18n::t!("fileExplorer.dragLocal")
-    } else if entry.file_type != SftpFileType::File {
+    } else if !matches!(
+        entry.file_type,
+        SftpFileType::File | SftpFileType::Directory
+    ) {
         rust_i18n::t!("fileExplorer.dragDirectoryUnsupported")
     } else if virtual_drag_supported {
         rust_i18n::t!("fileExplorer.dragRemote")
@@ -235,34 +237,13 @@ pub(super) fn transfer_browser_entry_row(
         .when(
             !is_renaming
                 && (local_backend
-                    || (virtual_drag_supported && entry.file_type == SftpFileType::File)),
+                    || (virtual_drag_supported
+                        && matches!(
+                            entry.file_type,
+                            SftpFileType::File | SftpFileType::Directory
+                        ))),
             |this| {
-                this.on_drag(drag, move |drag, position, _, cx| {
-                    if let Some(app) = drag_app.upgrade() {
-                        app.update(cx, |app, cx| app.capture_transfer_drag(drag, cx));
-                    }
-                    let count = drag.file_count();
-                    let label = if count > 1 {
-                        format!("{drag_name} (+{})", count - 1)
-                    } else {
-                        drag_name.clone()
-                    };
-                    cx.new(|_| super::drag_preview::TransferDragPreview {
-                        label,
-                        position,
-                        palette,
-                    })
-                })
-                .can_drag(|event, _, _| !event.modifiers.modified())
-                .external_drag_payload(
-                    move |drag: &crate::features::transfers::drag_export::DraggedSelection,
-                          window,
-                          cx| {
-                        resolve_app.upgrade()?.update(cx, |app, cx| {
-                            app.resolve_transfer_drag(drag, window.supports_virtual_file_drag(), cx)
-                        })
-                    },
-                )
+                super::drag_preview::with_transfer_drag(this, drag, drag_app, drag_name, palette)
             },
         )
         .on_mouse_down(

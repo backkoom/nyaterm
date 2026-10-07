@@ -50,6 +50,7 @@ use crate::models::{
 use super::external_sync_runtime::ExternalEditorWatcher;
 
 pub(in crate::features) struct TransferFeatureState {
+    pub(in crate::features) drag_export: super::drag_export::DragExportState,
     clipboard: Option<TransferFileClipboard>,
     clipboard_generation: u64,
     cut_jobs: HashMap<String, (u64, String)>,
@@ -317,6 +318,7 @@ impl TransferFeatureState {
     ) -> Self {
         let (tx, rx) = unbounded();
         Self {
+            drag_export: Default::default(),
             clipboard: None,
             clipboard_generation: 0,
             cut_jobs: HashMap::new(),

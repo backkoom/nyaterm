@@ -357,3 +357,76 @@ fn drag_prefetch_latency_benchmark() {
     }
     println!("speedup: {:.2}x", elapsed[0] / elapsed[1]);
 }
+
+#[test]
+fn directory_export_enumerates_raw_paths_and_empty_folders_without_reading_contents() {
+    use crate::{SftpFileEntry, SftpFileType};
+    let (service, _, files) = fixture(b"unrelated");
+    {
+        let mut files = files.lock().unwrap();
+        files.directories.insert(b"/tree-\xff".to_vec());
+        files.directories.insert(b"/tree-\xff/empty".to_vec());
+        files
+            .contents
+            .insert(b"/tree-\xff/raw-\xfe".to_vec(), b"nested".to_vec());
+    }
+    let root = SftpFileEntry {
+        name: "folder".into(),
+        path: "/display-only".into(),
+        file_type: SftpFileType::Directory,
+        size: None,
+        permissions: None,
+        owner: String::new(),
+        group: String::new(),
+        modified_at: None,
+        raw_path_token: RemoteFilePath::from_raw("/display-only", b"/tree-\xff").raw_path_token,
+        symlink_target_is_directory: false,
+    };
+    let entries = crate::drag_export::tree::enumerate_remote_drag(
+        &service,
+        vec![root.clone()],
+        &SftpTransferControl::new(),
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].relative_path, std::path::PathBuf::from("folder"));
+    assert!(entries[0].is_directory);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.is_directory && entry.relative_path.ends_with("empty"))
+    );
+    let file = entries.iter().find(|entry| !entry.is_directory).unwrap();
+    assert_eq!(
+        file.file.remote_path.raw_path().unwrap().unwrap(),
+        b"/tree-\xff/raw-\xfe"
+    );
+    assert_eq!(file.file.size, Some(6));
+    assert!(files.lock().unwrap().reads.is_empty());
+    let cancelled = SftpTransferControl::new();
+    cancelled.cancel();
+    let before = files.lock().unwrap().requests;
+    assert!(
+        crate::drag_export::tree::enumerate_remote_drag(&service, vec![root.clone()], &cancelled)
+            .is_err()
+    );
+    assert_eq!(files.lock().unwrap().requests, before);
+    files
+        .lock()
+        .unwrap()
+        .directories
+        .remove(b"/tree-\xff".as_slice());
+    files
+        .lock()
+        .unwrap()
+        .contents
+        .insert(b"/tree-\xff".to_vec(), b"changed type".to_vec());
+    assert!(
+        crate::drag_export::tree::enumerate_remote_drag(
+            &service,
+            vec![root],
+            &SftpTransferControl::new()
+        )
+        .is_err()
+    );
+}
