@@ -1098,6 +1098,12 @@
     "zoomOut": "Zoom Out"
   },
   "fileExplorer": {
+    "dragLocal": "Drag selected files to a file manager",
+    "dragRemote": "Drag selected files to download",
+    "dragDirectoryUnsupported": "Remote directories and links: use Download",
+    "dragPlatformUnsupported": "Remote drag download unavailable on this platform: use Download",
+    "exportContent": "Providing file content to native destination",
+    "exportProvided": "%{size} provided to native destination",
     "tree": "Tree",
     "toggleTree": "Toggle file tree",
     "switchToTreeView": "Switch to tree view",

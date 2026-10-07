@@ -1098,6 +1098,12 @@
     "zoomOut": "축소"
   },
   "fileExplorer": {
+    "dragLocal": "선택한 파일을 파일 관리자로 드래그",
+    "dragRemote": "선택한 파일을 드래그하여 다운로드",
+    "dragDirectoryUnsupported": "원격 폴더와 링크는 다운로드를 사용하세요",
+    "dragPlatformUnsupported": "이 플랫폼에서는 원격 파일 드래그를 지원하지 않습니다. 다운로드를 사용하세요",
+    "exportContent": "드롭 대상에 파일 내용 제공 중",
+    "exportProvided": "드롭 대상에 %{size} 제공됨",
     "tree": "파일 트리",
     "toggleTree": "파일 트리 표시 전환",
     "switchToTreeView": "트리 보기로 전환",

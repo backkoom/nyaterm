@@ -1098,6 +1098,12 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "dragLocal": "將選取檔案拖到檔案管理員",
+    "dragRemote": "拖出選取檔案以下載",
+    "dragDirectoryUnsupported": "遠端目錄和連結暫不支援拖出，請使用下載",
+    "dragPlatformUnsupported": "目前平台暫不支援遠端拖出，請使用下載",
+    "exportContent": "正在向目標提供檔案內容",
+    "exportProvided": "已向目標提供 %{size}",
     "tree": "檔案樹",
     "toggleTree": "顯示或隱藏檔案樹",
     "switchToTreeView": "切換到樹狀檢視",

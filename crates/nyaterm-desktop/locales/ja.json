@@ -1098,6 +1098,12 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "dragLocal": "選択したファイルをファイルマネージャーにドラッグ",
+    "dragRemote": "選択したファイルをドラッグしてダウンロード",
+    "dragDirectoryUnsupported": "リモートのフォルダーとリンクには「ダウンロード」を使用",
+    "dragPlatformUnsupported": "この環境ではリモートファイルのドラッグに非対応です。「ダウンロード」を使用",
+    "exportContent": "ドロップ先にファイルの内容を提供中",
+    "exportProvided": "ドロップ先に %{size} を提供しました",
     "tree": "ファイルツリー",
     "toggleTree": "ファイルツリーの表示切替",
     "switchToTreeView": "ツリービューに切り替え",

@@ -1098,6 +1098,12 @@
     "zoomOut": "Zoom arrière"
   },
   "fileExplorer": {
+    "dragLocal": "Glisser les fichiers sélectionnés vers un gestionnaire de fichiers",
+    "dragRemote": "Glisser les fichiers sélectionnés pour les télécharger",
+    "dragDirectoryUnsupported": "Dossiers et liens distants : utiliser Télécharger",
+    "dragPlatformUnsupported": "Glisser des fichiers distants indisponible sur cette plateforme : utiliser Télécharger",
+    "exportContent": "Transmission du contenu au destinataire du dépôt",
+    "exportProvided": "%{size} transmis au destinataire du dépôt",
     "tree": "Arborescence",
     "toggleTree": "Afficher ou masquer l’arborescence",
     "switchToTreeView": "Passer à l’arborescence",
