@@ -90,17 +90,37 @@ pub(super) fn security_sortable_row(
         let target_id = id.clone();
         move |this, event: &gpui::DragMoveEvent<SecurityDragPayload>, _, cx| {
             let payload = event.drag(cx);
-            if payload.tab != tab || tab != this.security.auth_tab() || this.security.reorder_busy()
+            // GPUI sends drag moves to every registered row, including rows
+            // outside the pointer. Only the hovered row may set an insertion mark.
+            if payload.tab != tab
+                || tab != this.security.auth_tab()
+                || this.security.reorder_busy()
+                || payload.id == target_id
+                || !event.bounds.contains(&event.event.position)
             {
+                // Clearing only this row's mark makes the result independent of
+                // whether GPUI visits the old target or the new target first.
+                if this
+                    .security
+                    .drop_target()
+                    .is_some_and(|target| target.tab == tab && target.id == target_id)
+                {
+                    this.security.clear_drop_target();
+                    cx.notify();
+                }
                 return;
             }
             let after =
                 event.event.position.y >= event.bounds.origin.y + event.bounds.size.height / 2.;
-            this.security.set_drop_target(Some(SecurityDropTarget {
+            let target = SecurityDropTarget {
                 tab,
                 id: target_id.clone(),
                 after,
-            }));
+            };
+            if this.security.drop_target() == Some(&target) {
+                return;
+            }
+            this.security.set_drop_target(Some(target));
             this.ensure_drop_hover_clock(cx);
             cx.notify();
         }
@@ -112,11 +132,16 @@ pub(super) fn security_sortable_row(
                 cx.notify();
                 return;
             }
-            let after = this
+            let Some(after) = this
                 .security
                 .drop_target()
                 .filter(|target| target.tab == tab && target.id == id)
-                .is_some_and(|target| target.after);
+                .map(|target| target.after)
+            else {
+                this.security.clear_drop_target();
+                cx.notify();
+                return;
+            };
             this.reorder_security_entries(tab, payload.id.clone(), id.clone(), after, cx);
         }),
     )
