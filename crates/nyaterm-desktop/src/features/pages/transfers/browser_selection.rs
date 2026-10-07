@@ -140,6 +140,28 @@ impl NyaTermApp {
         self.transfer
             .arm_browser_rename_click(&path, event.click_count == 1 && !event.modifiers.modified());
 
+        // A plain press on a selected entry preserves the multi-file selection
+        // for export. Modifier gestures retain the existing range-selection path.
+        let exportable = self.session.active_file_browser_backend()
+            == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+            || (window.supports_virtual_file_drag()
+                && self.transfer.browser_view().entries.iter().any(|entry| {
+                    entry.matches_identity(&path)
+                        && entry.file_type == nyaterm_transport::SftpFileType::File
+                }));
+        if exportable
+            && !event.modifiers.modified()
+            && (self.transfer.browser_view().selected_remote_path.as_deref() == Some(path.as_str())
+                || self
+                    .transfer
+                    .browser_view()
+                    .selected_remote_paths
+                    .contains(&path))
+        {
+            self.transfer.clear_browser_drag_selection();
+            return;
+        }
+
         let additive = event.modifiers.platform || event.modifiers.control;
         let range_anchor = event
             .modifiers

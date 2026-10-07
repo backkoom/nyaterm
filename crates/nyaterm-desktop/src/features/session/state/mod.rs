@@ -94,7 +94,7 @@ struct SessionCatalogTransferEntry {
     locked: bool,
     command_history: Option<Vec<String>>,
     busy_action: Option<String>,
-    remote_file: Option<RemoteFileService>,
+    remote_file: Option<std::sync::Arc<RemoteFileService>>,
     ssh_connection: Option<SshConnectionLease>,
     xymodem: Option<super::xymodem_runtime::XymodemSessionState>,
     zmodem: Option<ZmodemSessionState>,
@@ -1064,14 +1064,24 @@ impl SessionFeatureState {
             anyhow::bail!("reconnect the SSH session before browsing remote files");
         }
         if let Some(service) = self.protocols.remote_files.get(session_id) {
-            return Ok(service.clone());
+            return Ok(service.as_ref().clone());
         }
         let service =
             RemoteFileService::with_preference_store(config, multiplex, preference_store)?;
         self.protocols
             .remote_files
-            .insert(session_id.to_string(), service.clone());
+            .insert(session_id.to_string(), std::sync::Arc::new(service.clone()));
         Ok(service)
+    }
+
+    pub(in crate::features) fn weak_remote_file_service(
+        &self,
+        session_id: &str,
+    ) -> Option<std::sync::Weak<RemoteFileService>> {
+        self.protocols
+            .remote_files
+            .get(session_id)
+            .map(std::sync::Arc::downgrade)
     }
 
     pub(in crate::features) fn remove_remote_file_service(&mut self, session_id: &str) -> bool {

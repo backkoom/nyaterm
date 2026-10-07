@@ -191,7 +191,8 @@ fn transfer_job_file_name(job: &TransferJobRowSnapshot) -> String {
             })
         })
         .unwrap_or_else(|| match &job.kind {
-            TransferJobKind::Download { remote_path, .. }
+            TransferJobKind::DragExport { remote_path }
+            | TransferJobKind::Download { remote_path, .. }
             | TransferJobKind::OpenExternal { remote_path, .. }
             | TransferJobKind::LoadEditor { remote_path, .. }
             | TransferJobKind::SaveEditor { remote_path, .. }

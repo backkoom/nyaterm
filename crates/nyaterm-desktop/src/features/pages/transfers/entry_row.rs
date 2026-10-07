@@ -117,8 +117,26 @@ pub(super) fn transfer_browser_entry_row(
         column_widths,
         rename_state,
         rename_input,
+        local_backend,
+        virtual_drag_supported,
+        app_handle,
     } = presentation;
     let entry_identity = entry.identity_key();
+    let drag =
+        crate::features::transfers::drag_export::DraggedSelection::new(entry_identity.clone());
+    let drag_app = app_handle;
+    let resolve_app = drag_app.clone();
+    let drag_name = entry.name.clone();
+    let drag_hint = if local_backend {
+        rust_i18n::t!("fileExplorer.dragLocal")
+    } else if entry.file_type != SftpFileType::File {
+        rust_i18n::t!("fileExplorer.dragDirectoryUnsupported")
+    } else if virtual_drag_supported {
+        rust_i18n::t!("fileExplorer.dragRemote")
+    } else {
+        rust_i18n::t!("fileExplorer.dragPlatformUnsupported")
+    };
+
     let mouse_down_path = entry_identity.clone();
     let mouse_move_path = entry_identity.clone();
     let context_path = entry_identity.clone();
@@ -163,6 +181,7 @@ pub(super) fn transfer_browser_entry_row(
                 .whitespace_normal()
                 .child(entry.name.clone()),
         )
+        .child(drag_hint)
         .child(format!(
             "{}: {modified_display}",
             rust_i18n::t!("fileExplorer.mtime")
@@ -197,6 +216,10 @@ pub(super) fn transfer_browser_entry_row(
         .id(SharedString::from(format!(
             "transfer-browser-entry-{entry_identity}"
         )))
+        .debug_selector({
+            let entry_identity = entry_identity.clone();
+            move || format!("transfer-browser-entry-{entry_identity}")
+        })
         .h(px(30.))
         .flex()
         .items_center()
@@ -209,6 +232,39 @@ pub(super) fn transfer_browser_entry_row(
         .when(!is_marked_or_selected, |this| {
             this.hover(|this| this.bg(rgb(palette.hover)))
         })
+        .when(
+            !is_renaming
+                && (local_backend
+                    || (virtual_drag_supported && entry.file_type == SftpFileType::File)),
+            |this| {
+                this.on_drag(drag, move |drag, position, _, cx| {
+                    if let Some(app) = drag_app.upgrade() {
+                        app.update(cx, |app, cx| app.capture_transfer_drag(drag, cx));
+                    }
+                    let count = drag.file_count();
+                    let label = if count > 1 {
+                        format!("{drag_name} (+{})", count - 1)
+                    } else {
+                        drag_name.clone()
+                    };
+                    cx.new(|_| super::drag_preview::TransferDragPreview {
+                        label,
+                        position,
+                        palette,
+                    })
+                })
+                .can_drag(|event, _, _| !event.modifiers.modified())
+                .external_drag_payload(
+                    move |drag: &crate::features::transfers::drag_export::DraggedSelection,
+                          window,
+                          cx| {
+                        resolve_app.upgrade()?.update(cx, |app, cx| {
+                            app.resolve_transfer_drag(drag, window.supports_virtual_file_drag(), cx)
+                        })
+                    },
+                )
+            },
+        )
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |panel, event: &MouseDownEvent, window, cx| {
@@ -441,6 +497,9 @@ pub(super) struct TransferBrowserEntryRowPresentation<'a> {
     pub column_widths: TransferBrowserColumnWidths,
     pub rename_state: Option<TransferRenameState>,
     pub rename_input: Option<AnyElement>,
+    pub local_backend: bool,
+    pub virtual_drag_supported: bool,
+    pub app_handle: gpui::WeakEntity<crate::features::NyaTermApp>,
 }
 
 #[cfg(test)]

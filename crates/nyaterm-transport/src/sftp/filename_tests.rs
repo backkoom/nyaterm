@@ -11,10 +11,17 @@ use super::{OpenSftpConnection, OpenSftpSession, RemoteFilePath, SftpService};
 use crate::session_config::{SftpSettings, SshSessionConfig};
 
 #[derive(Default)]
-struct Files {
-    contents: HashMap<Vec<u8>, Vec<u8>>,
+pub(super) struct Files {
+    pub(super) contents: HashMap<Vec<u8>, Vec<u8>>,
     directories: HashSet<Vec<u8>>,
-    requests: usize,
+    pub(super) requests: usize,
+    pub(super) reads: Vec<(u64, usize)>,
+    pub(super) active_reads: usize,
+    pub(super) max_active_reads: usize,
+    pub(super) read_delay: std::time::Duration,
+    pub(super) read_limit: Option<usize>,
+    pub(super) omit_size: bool,
+    pub(super) fail_read_at: Option<u64>,
 }
 
 fn number(input: &mut &[u8]) -> u32 {
@@ -93,6 +100,11 @@ fn reply(
             let offset = u64::from_be_bytes(input[..8].try_into().unwrap()) as usize;
             input = &input[8..];
             let length = number(&mut input) as usize;
+            files.reads.push((offset as u64, length));
+            if files.fail_read_at == Some(offset as u64) {
+                return status(id, 4);
+            }
+            let length = files.read_limit.map_or(length, |limit| length.min(limit));
             let content = &files.contents[&path];
             if offset >= content.len() {
                 return status(id, 1);
@@ -128,11 +140,18 @@ fn reply(
             }
             packet.push(105);
             packet.extend_from_slice(&id.to_be_bytes());
-            attributes(
-                &mut packet,
-                files.contents.get(&path).map_or(0, Vec::len),
-                directory,
-            );
+            if files.omit_size {
+                packet.extend_from_slice(&4_u32.to_be_bytes());
+                packet.extend_from_slice(
+                    &(if directory { 0o040755_u32 } else { 0o100644 }).to_be_bytes(),
+                );
+            } else {
+                attributes(
+                    &mut packet,
+                    files.contents.get(&path).map_or(0, Vec::len),
+                    directory,
+                );
+            }
         }
         12 | 16 => {
             let path = string(&mut input);
@@ -197,7 +216,7 @@ fn reply(
     packet
 }
 
-fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
+pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
     let service = SftpService::new(SshSessionConfig {
         encoding: encoding.to_string(),
         sftp: SftpSettings {
@@ -212,7 +231,9 @@ fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
     let compatibility = service.compatibility.as_ref().unwrap();
     let session = compatibility
         .block_on(async move {
-            let (client, mut server) = tokio::io::duplex(65536);
+            let (client, server) = tokio::io::duplex(65536);
+            let (mut server, writer) = tokio::io::split(server);
+            let writer = Arc::new(tokio::sync::Mutex::new(writer));
             tokio::spawn(async move {
                 let mut enumerated = HashSet::new();
                 let mut handles = HashMap::new();
@@ -226,8 +247,41 @@ fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
                         &mut enumerated,
                         &mut handles,
                     );
-                    server.write_u32(response.len() as u32).await.unwrap();
-                    server.write_all(&response).await.unwrap();
+                    let is_read = packet[0] == 5;
+                    let delay = if is_read {
+                        let mut files = peer_files.lock().unwrap();
+                        files.active_reads += 1;
+                        files.max_active_reads = files.max_active_reads.max(files.active_reads);
+                        files.read_delay
+                    } else {
+                        std::time::Duration::ZERO
+                    };
+                    let writer = writer.clone();
+                    let files = peer_files.clone();
+                    // Responses have their own delay, rather than stalling the
+                    // peer parser. This exposes real concurrent SFTP requests.
+                    let send = async move {
+                        if !delay.is_zero() {
+                            tokio::time::sleep(delay).await;
+                        }
+                        let mut writer = writer.lock().await;
+                        let result = async {
+                            writer.write_u32(response.len() as u32).await?;
+                            writer.write_all(&response).await
+                        }
+                        .await;
+                        if is_read {
+                            files.lock().unwrap().active_reads -= 1;
+                        }
+                        result
+                    };
+                    if delay.is_zero() {
+                        if send.await.is_err() {
+                            break;
+                        }
+                    } else {
+                        tokio::spawn(send);
+                    }
                 }
             });
             Ok(OpenSftpSession {

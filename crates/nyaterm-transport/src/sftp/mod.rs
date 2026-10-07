@@ -32,6 +32,8 @@ use crate::remote_file::{
 };
 
 mod delete;
+mod export_reader;
+pub(crate) use export_reader::spawn_export_reader;
 mod path_codec;
 pub use path_codec::SftpPathCodec;
 mod contracts;
@@ -2816,6 +2818,24 @@ fn ensure_remote_download_source(file_type: russh_sftp::protocol::FileType) -> a
     }
 }
 
+/// Shared bounded range read for destination downloads and native consumers.
+async fn read_transfer_range(
+    remote: &russh_sftp::client::fs::File,
+    control: &SftpTransferControl,
+    offset: u64,
+    length: usize,
+) -> anyhow::Result<Vec<u8>> {
+    control.wait_if_paused().await?;
+    control
+        .until_cancelled(tokio::time::timeout(
+            Duration::from_secs(60),
+            remote.read_at(offset, length),
+        ))
+        .await?
+        .map_err(|_| anyhow::anyhow!("SFTP download stalled"))?
+        .map_err(anyhow::Error::from)
+}
+
 #[expect(clippy::too_many_arguments)]
 async fn download_remote_file_bytes<F>(
     sftp: &SftpSession,
@@ -2872,14 +2892,13 @@ where
                         let mut data = Vec::with_capacity(length);
                         while data.len() < length {
                             control.wait_if_paused().await?;
-                            let read = control
-                                .until_cancelled(tokio::time::timeout(
-                                    Duration::from_secs(60),
-                                    remote_ref
-                                        .read_at(offset + data.len() as u64, length - data.len()),
-                                ))
-                                .await?
-                                .map_err(|_| anyhow::anyhow!("SFTP download stalled"))??;
+                            let read = read_transfer_range(
+                                remote_ref,
+                                control,
+                                offset + data.len() as u64,
+                                length - data.len(),
+                            )
+                            .await?;
                             if read.is_empty() {
                                 anyhow::bail!("remote file ended before its advertised size");
                             }

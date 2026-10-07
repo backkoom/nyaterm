@@ -26,6 +26,10 @@ pub(crate) enum TransferJobKind {
     },
     ResolveHome,
     SyncCwd,
+    /// Native consumer owns the destination; there is no local target path.
+    DragExport {
+        remote_path: String,
+    },
     Download {
         remote_path: String,
         raw_path_token: Option<String>,
@@ -229,7 +233,8 @@ impl TransferJobState {
     pub(crate) fn display_name_for_kind(kind: &TransferJobKind) -> String {
         match kind {
             TransferJobKind::ListTree { path, .. } => remote_file_name(&path.display_path),
-            TransferJobKind::Download { remote_path, .. }
+            TransferJobKind::DragExport { remote_path }
+            | TransferJobKind::Download { remote_path, .. }
             | TransferJobKind::OpenExternal { remote_path, .. }
             | TransferJobKind::LoadEditor { remote_path, .. }
             | TransferJobKind::LoadPreview { remote_path, .. }
@@ -278,7 +283,8 @@ impl TransferJobState {
     pub(crate) fn is_user_transfer(&self) -> bool {
         matches!(
             &self.kind,
-            TransferJobKind::Download { .. }
+            TransferJobKind::DragExport { .. }
+                | TransferJobKind::Download { .. }
                 | TransferJobKind::Upload { .. }
                 | TransferJobKind::SendTo { .. }
                 | TransferJobKind::OpenExternal { .. }
@@ -487,6 +493,11 @@ pub(crate) struct TransferJobResult {
 
 #[derive(Debug)]
 pub(crate) enum TransferJobEvent {
+    DragExportOpened {
+        session_id: String,
+        remote_path: String,
+        control: SftpTransferControl,
+    },
     Started {
         detail: String,
     },

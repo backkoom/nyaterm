@@ -308,7 +308,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                 total_entries,
                 // Still only the visible range, and now built from the snapshot
                 // rather than by re-entering the app for every row on screen.
-                cx.processor(move |panel, range: std::ops::Range<usize>, _, cx| {
+                cx.processor(move |panel, range: std::ops::Range<usize>, window, cx| {
                     let mut items = Vec::with_capacity(range.len());
                     let Some(snapshot) = panel.snapshot() else {
                         return items;
@@ -358,6 +358,9 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                                     column_widths,
                                     rename_state: renaming.clone(),
                                     rename_input,
+                                    local_backend: browser.local_backend,
+                                    virtual_drag_supported: window.supports_virtual_file_drag(),
+                                    app_handle: panel.app_handle(),
                                 },
                                 cx,
                             )

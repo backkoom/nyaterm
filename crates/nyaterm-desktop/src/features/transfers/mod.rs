@@ -2,6 +2,7 @@
 
 mod cwd_sync_clock;
 mod delete_runtime;
+pub(in crate::features) mod drag_export;
 mod editor_window;
 mod external_sync_runtime;
 mod external_sync_window;

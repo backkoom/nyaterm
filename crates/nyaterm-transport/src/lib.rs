@@ -1,5 +1,6 @@
 pub mod connection_attempt;
 pub mod download_path;
+pub mod drag_export;
 #[cfg(windows)]
 pub mod local_conpty;
 pub mod network_route;

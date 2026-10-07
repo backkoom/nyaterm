@@ -26,7 +26,7 @@ struct SessionProtocolRuntimeState {
     xymodem: HashMap<String, xymodem_runtime::XymodemSessionState>,
     zmodem: HashMap<String, zmodem_runtime::ZmodemSessionState>,
     trzsz: HashMap<String, trzsz_runtime::TrzszSessionState>,
-    remote_files: HashMap<String, RemoteFileService>,
+    remote_files: HashMap<String, std::sync::Arc<RemoteFileService>>,
     ssh_connections: HashMap<String, SshConnectionLease>,
 }
 

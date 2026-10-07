@@ -419,6 +419,107 @@ mod tests {
     }
 
     #[test]
+    fn file_row_starts_visible_export_from_first_press_and_preserves_multiselection() {
+        for remote in [false, true] {
+            let test_dir = TestConfigDir::new("nyaterm-file-drag");
+            let mut cx = TestAppContext::single();
+            let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+            let entries: Vec<_> = (0..3)
+                .map(super::super::tests_support::browser_entry)
+                .collect();
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    if remote {
+                        let config = nyaterm_transport::SshSessionConfig::default();
+                        app.session.register_session_metadata(
+                            "path-test",
+                            crate::models::SessionRuntimeMetadata {
+                                ssh_config: Some(config.clone()),
+                                ssh_multiplex_key: None,
+                                source_connection_id: None,
+                                ai_execution_profile: nyaterm_core::AiExecutionProfile::Posix,
+                                launch_config: crate::models::SessionLaunchConfig::Ssh(Box::new(
+                                    config,
+                                )),
+                                disconnected: false,
+                            },
+                        );
+                    }
+                    app.transfer
+                        .replace_browser_entries_for_test(entries.clone());
+                    assert_eq!(
+                        app.session.active_file_browser_backend(),
+                        Some(if remote {
+                            nyaterm_transport::FileBrowserBackendKind::Remote
+                        } else {
+                            nyaterm_transport::FileBrowserBackendKind::Local
+                        })
+                    );
+                    app.flush_transfer_panel_snapshot(cx);
+                });
+            });
+            draw_path_fixture(vcx);
+            let row = vcx
+                .debug_bounds("transfer-browser-entry-/remote/entry-0000")
+                .expect("file row");
+            let start = gpui::point(row.left() + px(80.), row.top() + px(15.));
+            vcx.simulate_mouse_move(start, None, Modifiers::none());
+            vcx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+            draw_path_fixture(vcx);
+            vcx.simulate_mouse_move(
+                start + gpui::point(px(20.), px(5.)),
+                MouseButton::Left,
+                Modifiers::none(),
+            );
+            draw_path_fixture(vcx);
+            vcx.update(|_, cx| {
+                assert!(
+                    cx.has_active_drag(),
+                    "first press must start drag without a prior click"
+                )
+            });
+            let preview = vcx
+                .debug_bounds("transfer-file-drag-preview")
+                .expect("visible file preview");
+            assert!(preview.size.width > px(0.) && preview.size.height > px(0.));
+            vcx.simulate_mouse_up(start, MouseButton::Left, Modifiers::none());
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.transfer.replace_browser_selection(
+                        entries
+                            .iter()
+                            .take(2)
+                            .map(nyaterm_transport::SftpFileEntry::identity_key)
+                            .collect(),
+                        Some(entries[0].identity_key()),
+                    );
+                    app.flush_transfer_panel_snapshot(cx);
+                });
+            });
+            draw_path_fixture(vcx);
+            vcx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+            vcx.simulate_mouse_move(
+                start + gpui::point(px(20.), px(5.)),
+                MouseButton::Left,
+                Modifiers::none(),
+            );
+            draw_path_fixture(vcx);
+            vcx.update(|_, cx| {
+                assert!(cx.has_active_drag());
+                assert_eq!(
+                    app.read(cx)
+                        .transfer
+                        .browser_view()
+                        .selected_remote_paths
+                        .len(),
+                    2
+                );
+            });
+            vcx.simulate_mouse_up(start, MouseButton::Left, Modifiers::none());
+        }
+    }
+
+    #[test]
     fn path_edit_button_builds_a_focused_selected_input_and_preserves_editing_shortcuts() {
         let test_dir = TestConfigDir::new("nyaterm-path-edit");
         let mut cx = TestAppContext::single();

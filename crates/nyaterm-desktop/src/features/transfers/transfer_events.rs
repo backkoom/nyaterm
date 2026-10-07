@@ -228,6 +228,33 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let TransferJobEvent::DragExportOpened {
+            session_id,
+            remote_path,
+            control,
+        } = event.event
+        {
+            if self.session.metadata(&session_id).is_none() {
+                control.cancel();
+                return false;
+            }
+            self.transfer
+                .enqueue_transfer_job(crate::models::TransferJobState {
+                    id: event.id,
+                    session_id: Some(session_id),
+                    kind: TransferJobKind::DragExport { remote_path },
+                    status: TransferJobStatus::Running,
+                    detail: t!("fileExplorer.exportContent").to_string(),
+                    created_at_ms: crate::models::TransferJobState::now_ms(),
+                    display_name: String::new(),
+                    entries: Vec::new(),
+                    summary: None,
+                    progress: None,
+                    control: Some(control),
+                    speed: Default::default(),
+                });
+            return true;
+        }
         let Some((job_index, mut job)) = self.transfer.take_transfer_job_for_event(&event.id)
         else {
             // The job was cancelled or removed while its worker was still running.
@@ -334,6 +361,7 @@ impl NyaTermApp {
             && !job.is_user_transfer()
             && (!matches!(&job.kind, TransferJobKind::OpenExternal { .. }) || event_failed);
         match event.event {
+            TransferJobEvent::DragExportOpened { .. } => unreachable!(),
             TransferJobEvent::Started { detail } => {
                 job.status = TransferJobStatus::Running;
                 job.detail = detail;
@@ -1023,6 +1051,12 @@ impl NyaTermApp {
                 };
                 job.detail = if summary.skipped {
                     "Cancelled (duplicate skipped)".to_string()
+                } else if matches!(job.kind, TransferJobKind::DragExport { .. }) {
+                    t!(
+                        "fileExplorer.exportProvided",
+                        size = format_file_size(Some(summary.bytes))
+                    )
+                    .to_string()
                 } else {
                     format!("{} transferred", format_file_size(Some(summary.bytes)))
                 };
