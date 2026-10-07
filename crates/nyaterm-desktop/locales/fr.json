@@ -1137,7 +1137,7 @@
     "cmCopyName": "Copier le nom",
     "cmCopyPath": "Copier le chemin",
     "cmDelete": "Supprimer",
-    "cmDownload": "Télécharger…",
+    "cmDownload": "Télécharger",
     "cmDownloadToDirectory": "Télécharger vers un dossier…",
     "cmDownloadDefault": "Télécharger vers le dossier par défaut",
     "cmMove": "Déplacer vers…",

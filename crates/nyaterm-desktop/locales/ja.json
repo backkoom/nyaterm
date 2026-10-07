@@ -1137,7 +1137,7 @@
     "cmCopyName": "名前をコピー",
     "cmCopyPath": "パスをコピー",
     "cmDelete": "削除",
-    "cmDownload": "ダウンロード...",
+    "cmDownload": "ダウンロード",
     "cmDownloadToDirectory": "指定フォルダーにダウンロード...",
     "cmDownloadDefault": "既定のフォルダーにダウンロード",
     "cmMove": "移動...",

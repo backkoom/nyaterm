@@ -1137,7 +1137,7 @@
     "cmCopyName": "이름 복사",
     "cmCopyPath": "경로 복사",
     "cmDelete": "삭제",
-    "cmDownload": "다운로드...",
+    "cmDownload": "다운로드",
     "cmDownloadToDirectory": "지정 폴더에 다운로드...",
     "cmDownloadDefault": "기본 폴더에 다운로드",
     "cmMove": "이동...",
