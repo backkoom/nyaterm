@@ -67,12 +67,12 @@ const EXTENSION_ICONS: &[(&[&str], &str, u32)] = &[
 fn muted_extension_icon(extension: &str, palette: ThemePalette) -> Option<IconDef> {
     match extension {
         "ini" | "env" | "conf" | "config" => {
-            Some(IconDef::mono_verbatim("icons/settings.svg", palette.text_muted))
+            Some(IconDef::mono("icons/settings.svg", palette.text_muted))
         }
         "md" | "mdx" | "txt" | "rtf" => {
-            Some(IconDef::mono_verbatim("icons/file/text.svg", palette.text_dimmed))
+            Some(IconDef::mono("icons/file/text.svg", palette.text_dimmed))
         }
-        "lock" => Some(IconDef::mono_verbatim("icons/lock.svg", palette.text_muted)),
+        "lock" => Some(IconDef::mono("icons/lock.svg", palette.text_muted)),
         _ => None,
     }
 }
@@ -85,10 +85,10 @@ pub(in crate::features) fn file_entry_icon(
     palette: ThemePalette,
 ) -> IconDef {
     if is_symlink {
-        return IconDef::mono_verbatim("icons/conn/symlink.svg", 0x67e8f9);
+        return IconDef::mono("icons/conn/symlink.svg", 0x67e8f9);
     }
     if is_directory {
-        return IconDef::mono_verbatim("icons/conn/folder.svg", 0xfbbf24);
+        return IconDef::mono("icons/conn/folder.svg", 0xfbbf24);
     }
 
     // Only a name that actually contains a dot has an extension. Without this,
@@ -104,15 +104,15 @@ pub(in crate::features) fn file_entry_icon(
             .iter()
             .find(|(extensions, _, _)| extensions.contains(&extension.as_str()))
         {
-            return IconDef::mono_verbatim(path, *color);
+            return IconDef::mono(path, *color);
         }
     }
 
     // Dotfiles are configuration by convention, even without a known extension.
     if name.starts_with('.') {
-        return IconDef::mono_verbatim("icons/settings.svg", palette.text_muted);
+        return IconDef::mono("icons/settings.svg", palette.text_muted);
     }
-    IconDef::mono_verbatim("icons/conn/file.svg", palette.text_muted)
+    IconDef::mono("icons/conn/file.svg", palette.text_muted)
 }
 
 #[cfg(test)]

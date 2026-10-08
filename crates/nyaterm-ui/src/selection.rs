@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use crate::sizing::{form_control_height, form_control_size};
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Font,
-    FontFallbacks, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
-    RenderOnce, SharedString, Styled as _, Subscription, Window, div, prelude::FluentBuilder as _,
-    px,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, RenderOnce,
+    SharedString, Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_kit::component::{
     Disableable, IndexPath, Sizable,
@@ -199,12 +198,6 @@ pub struct NyaSelectOption {
     search_text: Option<SharedString>,
     subtitle: Option<SharedString>,
     font_family: Option<SharedString>,
-    /// Ordered families tried when `font_family` has no glyph for a character.
-    ///
-    /// A preview label rendered in its own family still needs to stay readable when that
-    /// family cannot draw every character of the label, which is the common case for
-    /// localized family names such as Chinese Windows font names.
-    font_fallbacks: Option<FontFallbacks>,
 }
 
 impl NyaSelectOption {
@@ -215,7 +208,6 @@ impl NyaSelectOption {
             search_text: None,
             subtitle: None,
             font_family: None,
-            font_fallbacks: None,
         }
     }
 
@@ -229,15 +221,9 @@ impl NyaSelectOption {
         self
     }
 
+    /// Font used by the glyph sample. The option name always inherits the UI font.
     pub fn font_family(mut self, font_family: impl Into<SharedString>) -> Self {
         self.font_family = Some(font_family.into());
-        self
-    }
-
-    /// Sets the ordered fallback families used to render `label` when the preview family
-    /// is missing a glyph. Without this, a label in a non-latin family renders as tofu.
-    pub fn font_fallbacks(mut self, fallbacks: Vec<String>) -> Self {
-        self.font_fallbacks = (!fallbacks.is_empty()).then(|| FontFallbacks::from_fonts(fallbacks));
         self
     }
 
@@ -248,11 +234,6 @@ impl NyaSelectOption {
     pub fn label(&self) -> &SharedString {
         &self.label
     }
-
-    /// Returns the fallback families attached to this option's preview, if any.
-    pub fn preview_font_fallbacks(&self) -> Option<&FontFallbacks> {
-        self.font_fallbacks.as_ref()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -262,38 +243,6 @@ struct NyaSelectItem {
     search_text: Option<SharedString>,
     subtitle: Option<SharedString>,
     font_family: Option<SharedString>,
-    font_fallbacks: Option<FontFallbacks>,
-}
-
-impl NyaSelectItem {
-    /// Builds the preview font for this row.
-    ///
-    /// The preview uses the row's own family, which is the point of a family picker. But
-    /// rendering a name in its own family only works while that family can draw the name:
-    /// a localized family name such as a Chinese Windows font name needs glyphs the named
-    /// family may not ship, and a single-family text style then paints tofu boxes.
-    /// `Font::fallbacks` cannot rescue that here, because gpui only reads that field when
-    /// it resolves a font that failed to load, not per glyph.
-    ///
-    /// So a name that is not ASCII is rendered in the caller's preview family instead, and
-    /// only the labels a family can actually draw get the preview treatment.
-    fn preview_font(&self) -> Option<Font> {
-        let family = self.font_family.as_ref()?;
-        if !self.label.is_ascii() {
-            // The name contains characters the previewed family may lack; let the caller
-            // decide which family draws it.
-            return self
-                .font_fallbacks
-                .as_ref()
-                .and_then(|fallbacks| fallbacks.fallback_list().first())
-                .map(|fallback| gpui::font(SharedString::from(fallback.clone())));
-        }
-        let mut font = gpui::font(family.clone());
-        if let Some(fallbacks) = self.font_fallbacks.clone() {
-            font.fallbacks = Some(fallbacks);
-        }
-        Some(font)
-    }
 }
 
 impl gpui_kit::component::select::SelectItem for NyaSelectItem {
@@ -304,18 +253,32 @@ impl gpui_kit::component::select::SelectItem for NyaSelectItem {
     }
 
     fn display_title(&self) -> Option<AnyElement> {
-        self.preview_font().map(|preview| {
-            div()
-                .font(preview)
-                .child(self.label.clone())
-                .into_any_element()
-        })
+        // The closed selector uses the ordinary UI font even for font options.
+        None
     }
 
     fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
         div()
-            .when_some(self.preview_font(), |this, preview| this.font(preview))
-            .child(self.label.clone())
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(self.label.clone()),
+            )
+            .when_some(self.font_family.clone(), |this, font_family| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .font_family(font_family)
+                        .child("AaBb 0123"),
+                )
+            })
     }
 
     fn value(&self) -> &Self::Value {
@@ -517,7 +480,6 @@ impl NyaSelectState {
                 search_text: option.search_text.clone(),
                 subtitle: option.subtitle.clone(),
                 font_family: option.font_family.clone(),
-                font_fallbacks: option.font_fallbacks.clone(),
             })
             .collect()
     }
@@ -721,8 +683,9 @@ mod tests {
 
     use gpui::{AppContext as _, TestAppContext};
 
-    use super::{NyaSelectItem, NyaSelectOption, NyaSelectState};
+    use super::{NyaSelectOption, NyaSelectState};
     use crate::sizing::{NYA_FORM_CONTROL_HEIGHT_PX, form_control_size};
+    use gpui_kit::component::select::SelectItem as _;
 
     #[test]
     fn selected_value_tracks_pre_render_updates() {
@@ -814,103 +777,19 @@ mod tests {
     }
 
     #[test]
-    fn font_preview_option_keeps_own_family_and_records_fallbacks() {
-        // A family row previews its own family, so an ASCII name stays in that family.
-        let option = NyaSelectOption::new("Inter", "Inter")
-            .font_family("Inter")
-            .font_fallbacks(vec!["Microsoft YaHei UI".to_string()]);
-
-        let item = NyaSelectItem {
-            value: option.value().to_string(),
-            label: option.label().clone(),
-            search_text: None,
-            subtitle: None,
-            font_family: option.font_family.clone(),
-            font_fallbacks: option.font_fallbacks.clone(),
-        };
-
-        let preview = item
-            .preview_font()
-            .expect("preview font is built for a family row");
-        assert_eq!(preview.family.as_ref(), "Inter");
-        let fallbacks = preview
-            .fallbacks
-            .expect("fallbacks are attached for the resolved family");
-        assert_eq!(fallbacks.fallback_list(), ["Microsoft YaHei UI"]);
-    }
-
-    #[test]
-    fn non_ascii_family_name_is_not_drawn_in_its_own_family() {
-        // A localized family name may name characters the family itself cannot draw, and
-        // gpui does not fall back per glyph. Drawing the label in the caller's family
-        // keeps it readable instead of painting tofu.
-        let option = NyaSelectOption::new("宋体", "宋体")
-            .font_family("宋体")
-            .font_fallbacks(vec!["Microsoft YaHei UI".to_string()]);
-
-        let item = NyaSelectItem {
-            value: option.value().to_string(),
-            label: option.label().clone(),
-            search_text: None,
-            subtitle: None,
-            font_family: option.font_family.clone(),
-            font_fallbacks: option.font_fallbacks.clone(),
-        };
-
-        let preview = item.preview_font().expect("preview font");
-        assert_eq!(
-            preview.family.as_ref(),
-            "Microsoft YaHei UI",
-            "a non-ASCII family name must not be drawn in the family it names"
-        );
-    }
-
-    #[test]
-    fn non_ascii_family_name_without_fallbacks_gets_no_preview() {
-        let option = NyaSelectOption::new("宋体", "宋体").font_family("宋体");
-        let item = NyaSelectItem {
-            value: option.value().to_string(),
-            label: option.label().clone(),
-            search_text: None,
-            subtitle: None,
-            font_family: option.font_family.clone(),
-            font_fallbacks: option.font_fallbacks.clone(),
-        };
-
-        assert!(
-            item.preview_font().is_none(),
-            "without a caller family there is no safe way to draw the name"
-        );
-    }
-
-    #[test]
-    fn font_preview_option_without_fallbacks_still_builds_own_family() {
-        let option = NyaSelectOption::new("Inter", "Inter").font_family("Inter");
-        let item = NyaSelectItem {
-            value: option.value().to_string(),
-            label: option.label().clone(),
-            search_text: None,
-            subtitle: None,
-            font_family: option.font_family.clone(),
-            font_fallbacks: option.font_fallbacks.clone(),
-        };
-
-        let preview = item.preview_font().expect("preview font");
-        assert_eq!(preview.family.as_ref(), "Inter");
-        assert!(preview.fallbacks.is_none());
-    }
-
-    #[test]
-    fn empty_fallback_list_is_not_recorded() {
-        let option = NyaSelectOption::new("Inter", "Inter")
-            .font_family("Inter")
-            .font_fallbacks(Vec::new());
-        assert!(option.font_fallbacks.is_none());
-    }
-
-    #[test]
-    fn option_without_font_family_has_no_preview_font() {
-        let option = NyaSelectOption::new("light", "Light");
-        assert!(option.font_family.is_none());
+    fn font_names_use_ui_titles_regardless_of_their_script() {
+        let mut cx = TestAppContext::single();
+        let options = ["Inter", "宋体", "微软雅黑"]
+            .map(|family| NyaSelectOption::new(family, family).font_family(family));
+        let select = cx.new(|cx| NyaSelectState::new(cx, options.to_vec(), None));
+        let items = cx.read_entity(&select, |select, _| select.items());
+        for item in items {
+            assert_eq!(item.title().as_ref(), item.value());
+            assert!(
+                item.display_title().is_none(),
+                "font names inherit the UI font"
+            );
+            assert_eq!(item.font_family.as_deref(), Some(item.value().as_str()));
+        }
     }
 }

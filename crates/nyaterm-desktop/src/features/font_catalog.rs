@@ -553,31 +553,24 @@ fn is_user_selectable_font_family(family: &str, kind: FontCatalogKind) -> bool {
                 | "serif"
         )
         && !is_internal_font_family(&family, kind)
-        && !is_symbol_icon_font_family(&family, kind)
+        && !is_symbol_icon_font_family(&family)
 }
 
-/// Icon and symbol faces that only ship glyphs in the private use area.
-///
-/// Their own family name is unspellable in the face itself, so a family picker that
-/// previews each row in its own family shows rows of tofu boxes. They are also never a
-/// useful terminal face, since a terminal needs readable text rather than pictographs.
-fn is_symbol_icon_font_family(family: &str, kind: FontCatalogKind) -> bool {
-    // Icon faces are still legitimate for the application chrome, so only keep them out
-    // of the terminal list where they cannot help.
-    if !matches!(kind, FontCatalogKind::Terminal) {
-        return false;
-    }
+/// Symbol faces cannot serve as the primary font for ordinary UI or terminal text.
+/// This only filters user options; the font catalog retains them for internal use.
+fn is_symbol_icon_font_family(family: &str) -> bool {
     matches!(
         family,
         "wingdings"
+            | "wingdings 2"
+            | "wingdings 3"
             | "webdings"
             | "marlett"
             | "symbol"
             | "segoe fluent icons"
             | "segoe mdl2 assets"
             | "segoe ui symbol"
-            | "holomd"
-            | "himalaya"
+            | "hololens mdl2 assets"
             | "segmdl2"
     )
 }
@@ -636,7 +629,8 @@ mod tests {
     }
 
     #[test]
-    fn generic_families_are_internal_and_not_user_options() {        let snapshot = FontCatalogSnapshot::from_entries(
+    fn generic_families_are_internal_and_not_user_options() {
+        let snapshot = FontCatalogSnapshot::from_entries(
             0,
             [
                 super::FontCatalogEntry::new(
@@ -672,32 +666,52 @@ mod tests {
     }
 
     #[test]
-    fn icon_faces_are_kept_out_of_the_terminal_family_list() {
-        // An icon face only ships private-use glyphs, so its own name cannot be drawn in
-        // itself and a family picker previewing each row would show tofu boxes. It is also
-        // useless as a terminal face.
-        let available = |family: &str| super::FontCatalogEntry::new(
-            family.to_string(),
-            FontAvailability::Available {
-                resolved_family: family.into(),
-            },
-            FontAvailability::Available {
-                resolved_family: family.into(),
-            },
-        );
+    fn icon_faces_are_kept_out_of_both_user_font_lists() {
+        let available = |family: &str| {
+            super::FontCatalogEntry::new(
+                family.to_string(),
+                FontAvailability::Available {
+                    resolved_family: family.into(),
+                },
+                FontAvailability::Available {
+                    resolved_family: family.into(),
+                },
+            )
+        };
         let snapshot = FontCatalogSnapshot::from_entries(
             0,
             [
                 available("Segoe Fluent Icons"),
                 available("Segoe MDL2 Assets"),
+                available("HoloLens MDL2 Assets"),
                 available("Wingdings"),
+                available("Wingdings 2"),
+                available("Wingdings 3"),
                 available("Cascadia Mono"),
             ],
         );
 
         assert_eq!(snapshot.terminal_options(), ["Cascadia Mono"]);
-        // The application chrome can still use an icon face, so the UI list keeps them.
-        assert!(snapshot.ui_options().contains(&"Segoe MDL2 Assets".to_string()));
+        assert_eq!(snapshot.ui_options(), ["Cascadia Mono"]);
+        assert!(
+            snapshot
+                .availability("Segoe MDL2 Assets", FontCatalogKind::Ui)
+                .is_available()
+        );
+    }
+
+    #[test]
+    fn localized_and_non_latin_text_fonts_remain_user_options() {
+        for family in ["宋体", "微软雅黑", "Microsoft Himalaya", "Himalaya"] {
+            assert!(super::is_user_selectable_font_family(
+                family,
+                FontCatalogKind::Ui
+            ));
+            assert!(super::is_user_selectable_font_family(
+                family,
+                FontCatalogKind::Terminal
+            ));
+        }
     }
 
     #[test]

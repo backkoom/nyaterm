@@ -39,14 +39,6 @@ use crate::theme::ThemePalette;
 pub(in crate::features) enum IconPaint {
     /// Monochrome mask, tinted with this vendor brand color.
     Mono(u32),
-    /// Monochrome mask whose color is used exactly as authored, skipping the
-    /// contrast rescue in [`legible_on`].
-    ///
-    /// For curated palettes rather than vendor brand values: these entries were
-    /// chosen against a specific surface, and several sit close enough to it that
-    /// the rescue would visibly shift them. The old app painted them through
-    /// react-icons with no correction at all.
-    MonoVerbatim(u32),
     /// Full-color raster, painted as authored. The old UI rendered these through
     /// an `<img>` whose `color` was inert, so losing the tint is parity, not loss.
     FullColor,
@@ -64,14 +56,6 @@ impl IconDef {
         Self {
             path,
             paint: IconPaint::Mono(color),
-        }
-    }
-
-    /// A monochrome mask painted with `color` verbatim, with no contrast rescue.
-    pub(in crate::features) const fn mono_verbatim(path: &'static str, color: u32) -> Self {
-        Self {
-            path,
-            paint: IconPaint::MonoVerbatim(color),
         }
     }
 
@@ -93,7 +77,6 @@ impl IconDef {
     pub(in crate::features) fn tint(self, palette: ThemePalette) -> Option<u32> {
         match self.paint {
             IconPaint::Mono(color) => Some(legible_on(color, palette)),
-            IconPaint::MonoVerbatim(color) => Some(color),
             IconPaint::FullColor => None,
         }
     }
@@ -125,14 +108,6 @@ fn blend(from: u32, to: u32, amount: f32) -> u32 {
 /// Contrast ratio floor below which a brand color is blended toward the theme's
 /// text color. 1.6 is deliberately low: it rescues `#000000` on a dark surface
 /// without washing out colors that merely look dim, such as `debian`'s `#a81d33`.
-///
-/// The rescue only makes sense for colors that carry meaning on their own. The
-/// curated palette used by the file browser and the family rows is already a
-/// deliberate choice, and several of its entries sit close to the surface — the
-/// old app's folder amber `#fbbf24` measures 1.45 against a `#eceff4` list
-/// background. Blending it 65% toward the text color turned that yellow into a
-/// muddy olive (`#aba68a` on screen), so those entries opt out via
-/// [`IconPaint::MonoVerbatim`].
 const MIN_CONTRAST_RATIO: f32 = 1.6;
 
 fn legible_on(color: u32, palette: ThemePalette) -> u32 {
@@ -219,34 +194,5 @@ mod tests {
             IconDef::full_color("color/os/ubuntu.svg").tint(dark()),
             None
         );
-    }
-
-    #[test]
-    fn verbatim_icons_skip_the_contrast_rescue() {
-        // The file browser's folder amber sits at 1.45 against a light list surface,
-        // below MIN_CONTRAST_RATIO, so the rescue would blend it into olive. The old
-        // app painted it through react-icons with no correction, so it opts out.
-        for palette in [light(), dark()] {
-            for color in [0xfbbf24, 0xf59e0b, 0x4ade80, 0x14b8a6] {
-                assert_eq!(
-                    IconDef::mono_verbatim("icons/conn/folder.svg", color).tint(palette),
-                    Some(color),
-                    "{color:#08x} must be painted exactly as authored"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn mono_icons_still_receive_the_rescue() {
-        // Vendor brand colors keep the contrast lift; only curated palettes opt out.
-        assert_ne!(
-            IconDef::mono("color/os/rust.svg", 0x000000).tint(dark()),
-            Some(0x000000)
-        );
-    }
-
-    fn light() -> ThemePalette {
-        crate::theme::theme_palette("github-light")
     }
 }

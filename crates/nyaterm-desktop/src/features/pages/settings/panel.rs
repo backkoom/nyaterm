@@ -427,13 +427,7 @@ impl FontSelectOptionCache {
         }
     }
 
-    fn update(
-        &mut self,
-        state: FontCatalogLoadState,
-        generation: u64,
-        source: &[String],
-        preview_fallbacks: &[String],
-    ) {
+    fn update(&mut self, state: FontCatalogLoadState, generation: u64, source: &[String]) {
         // Settings snapshots can change for unrelated fields while the system font catalog stays
         // the same. Reuse the descriptors across those renders instead of rebuilding them per
         // configured fallback row.
@@ -444,13 +438,7 @@ impl FontSelectOptionCache {
         let options: Arc<[NyaSelectOption]> = source
             .iter()
             .map(|option| {
-                // Each row previews its own family, so a localized family name such as a
-                // Chinese Windows font name would render as tofu when that family has no
-                // glyph for its own name. The preview keeps the family first and falls back
-                // for the characters it cannot draw.
-                NyaSelectOption::new(option.clone(), option.clone())
-                    .font_family(option.clone())
-                    .font_fallbacks(preview_fallbacks.to_vec())
+                NyaSelectOption::new(option.clone(), option.clone()).font_family(option.clone())
             })
             .collect::<Vec<_>>()
             .into();
@@ -698,15 +686,7 @@ impl SettingsPanel {
         } else {
             &mut self.ui_font_select_options
         };
-        // A row previews its own family, but a family that cannot draw every character of its
-        // own name would render as tofu. Fall back to the platform UI font, which covers the
-        // localized family names shipped by Chinese Windows.
-        let mut preview_fallbacks =
-            vec![crate::features::shell::gpui_ui_font_fallback().to_string()];
-        if terminal {
-            preview_fallbacks.push(crate::features::shell::gpui_code_font_family().to_string());
-        }
-        cache.update(state, generation, source, &preview_fallbacks);
+        cache.update(state, generation, source);
         (
             Arc::clone(&cache.options),
             Arc::clone(&cache.normalized_options),
@@ -1984,40 +1964,14 @@ mod tests {
     #[test]
     fn font_select_option_cache_rebuilds_after_catalog_load() {
         let mut cache = FontSelectOptionCache::empty();
-        cache.update(
-            FontCatalogLoadState::Loading,
-            1,
-            &["Inter".to_string()],
-            &["Microsoft YaHei UI".to_string()],
-        );
+        cache.update(FontCatalogLoadState::Loading, 1, &["Inter".to_string()]);
         cache.update(
             FontCatalogLoadState::Loaded,
             1,
             &["JetBrains Mono".to_string()],
-            &["Microsoft YaHei UI".to_string()],
         );
 
         assert_eq!(cache.options[0].value(), "JetBrains Mono");
-    }
-
-    #[test]
-    fn font_select_options_carry_preview_fallbacks() {
-        // A family row previews its own family, so a localized family name needs a fallback
-        // to stay readable when that family cannot draw the characters of its own name.
-        let mut cache = FontSelectOptionCache::empty();
-        cache.update(
-            FontCatalogLoadState::Loaded,
-            1,
-            &["宋体".to_string()],
-            &["Microsoft YaHei UI".to_string()],
-        );
-
-        let item = &cache.options[0];
-        assert_eq!(item.value(), "宋体");
-        assert!(
-            item.preview_font_fallbacks().is_some(),
-            "the preview row keeps fallbacks so CJK family names are not tofu"
-        );
     }
 
     fn app(cx: &mut TestAppContext, root: &Path) -> Entity<NyaTermApp> {
