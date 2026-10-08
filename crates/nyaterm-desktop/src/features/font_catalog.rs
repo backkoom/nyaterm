@@ -553,6 +553,33 @@ fn is_user_selectable_font_family(family: &str, kind: FontCatalogKind) -> bool {
                 | "serif"
         )
         && !is_internal_font_family(&family, kind)
+        && !is_symbol_icon_font_family(&family, kind)
+}
+
+/// Icon and symbol faces that only ship glyphs in the private use area.
+///
+/// Their own family name is unspellable in the face itself, so a family picker that
+/// previews each row in its own family shows rows of tofu boxes. They are also never a
+/// useful terminal face, since a terminal needs readable text rather than pictographs.
+fn is_symbol_icon_font_family(family: &str, kind: FontCatalogKind) -> bool {
+    // Icon faces are still legitimate for the application chrome, so only keep them out
+    // of the terminal list where they cannot help.
+    if !matches!(kind, FontCatalogKind::Terminal) {
+        return false;
+    }
+    matches!(
+        family,
+        "wingdings"
+            | "webdings"
+            | "marlett"
+            | "symbol"
+            | "segoe fluent icons"
+            | "segoe mdl2 assets"
+            | "segoe ui symbol"
+            | "holomd"
+            | "himalaya"
+            | "segmdl2"
+    )
 }
 
 #[cfg(test)]
@@ -609,8 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_families_are_internal_and_not_user_options() {
-        let snapshot = FontCatalogSnapshot::from_entries(
+    fn generic_families_are_internal_and_not_user_options() {        let snapshot = FontCatalogSnapshot::from_entries(
             0,
             [
                 super::FontCatalogEntry::new(
@@ -643,6 +669,35 @@ mod tests {
         ));
         assert!(snapshot.terminal_options().is_empty());
         assert!(snapshot.ui_options().is_empty());
+    }
+
+    #[test]
+    fn icon_faces_are_kept_out_of_the_terminal_family_list() {
+        // An icon face only ships private-use glyphs, so its own name cannot be drawn in
+        // itself and a family picker previewing each row would show tofu boxes. It is also
+        // useless as a terminal face.
+        let available = |family: &str| super::FontCatalogEntry::new(
+            family.to_string(),
+            FontAvailability::Available {
+                resolved_family: family.into(),
+            },
+            FontAvailability::Available {
+                resolved_family: family.into(),
+            },
+        );
+        let snapshot = FontCatalogSnapshot::from_entries(
+            0,
+            [
+                available("Segoe Fluent Icons"),
+                available("Segoe MDL2 Assets"),
+                available("Wingdings"),
+                available("Cascadia Mono"),
+            ],
+        );
+
+        assert_eq!(snapshot.terminal_options(), ["Cascadia Mono"]);
+        // The application chrome can still use an icon face, so the UI list keeps them.
+        assert!(snapshot.ui_options().contains(&"Segoe MDL2 Assets".to_string()));
     }
 
     #[test]
