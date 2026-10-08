@@ -18,6 +18,7 @@ use crate::features::{
     connections::ConnectionDropTarget, icons::resolve_connection_icon,
     text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX, text_inputs::ordinary_input_focus_ring,
     text_inputs::ordinary_input_shell_border_color, view_widgets::connection_type_icon,
+    view_widgets::mono_icon,
 };
 
 use super::super::list::{
@@ -25,6 +26,11 @@ use super::super::list::{
 };
 use super::super::panel::{ConnectionListSnapshot, ConnectionPanel};
 use super::CONNECTION_ACTION_CLEARANCE_PX;
+
+fn connection_group_icon() -> gpui::Svg {
+    // Tauri GroupNodeItem uses Tailwind 4's text-amber-500/70.
+    mono_icon("icons/conn/folder.svg", rgb(0xfe9a00).into(), 16.).opacity(0.7)
+}
 
 /// Interactive label/value card shown after hovering a saved connection.
 ///
@@ -343,12 +349,7 @@ pub(in crate::features::pages::connections) fn connection_section(
                 })
                 .text_color(rgb(palette.text_muted)),
         )
-        .child(connection_type_icon(
-            palette,
-            resolve_connection_icon(Some("folder"), "SSH"),
-            false,
-            16.,
-        ))
+        .child(connection_group_icon())
         .child(if editing_group {
             connection_group_editor_input_box(snapshot, cx)
         } else {
@@ -420,12 +421,7 @@ pub(in crate::features::pages::connections) fn connection_inline_group_editor_ro
                 .path("icons/fe/forward.svg")
                 .text_color(rgb(palette.text_muted)),
         )
-        .child(connection_type_icon(
-            palette,
-            resolve_connection_icon(Some("folder"), "SSH"),
-            false,
-            16.,
-        ))
+        .child(connection_group_icon())
         .child(connection_group_editor_input_box(snapshot, cx))
         .when_some(editor_error, |this, error| {
             this.child(
