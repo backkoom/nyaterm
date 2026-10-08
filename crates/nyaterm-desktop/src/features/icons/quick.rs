@@ -14,7 +14,7 @@ const GENERIC_ICONS: &[(&str, IconDef)] = &[
         IconDef::mono("icons/conn/terminal.svg", 0x4ade80),
     ),
     ("code", IconDef::mono("icons/file/code.svg", 0x58a6ff)),
-    ("server", IconDef::mono("icons/brand/server.svg", 0x60a5fa)),
+    ("server", IconDef::mono("icons/brand/server-legacy.svg", 0x60a5fa)),
     ("folder", IconDef::mono("icons/conn/folder.svg", 0xfbbf24)),
     ("sparkles", IconDef::mono("icons/ai.svg", 0xa78bfa)),
     ("bolt", IconDef::mono("icons/commands.svg", 0xfbbf24)),

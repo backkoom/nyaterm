@@ -15,31 +15,39 @@ pub(in crate::features) const DEFAULT_CONNECTION_ICON: &str = "server";
 
 /// The default glyph in seven theme-friendly hues. One asset, seven tints — this
 /// is exactly what a monochrome alpha mask is for.
+///
+/// `server-legacy.svg` is the Font Awesome 5 `FaServer` mark the old app rendered
+/// through `react-icons/fa6` — the three-bay rack. This build originally shipped
+/// `icons/brand/server.svg`, which is the Font Awesome 7 rewrite: a different,
+/// two-bay shape. The tints are unchanged; only the outline is restored.
 const SERVER_ICONS: &[(&str, IconDef)] = &[
-    ("server", IconDef::mono("icons/brand/server.svg", 0x60a5fa)),
+    (
+        "server",
+        IconDef::mono_verbatim("icons/brand/server-legacy.svg", 0x60a5fa),
+    ),
     (
         "server-emerald",
-        IconDef::mono("icons/brand/server.svg", 0x34d399),
+        IconDef::mono_verbatim("icons/brand/server-legacy.svg", 0x34d399),
     ),
     (
         "server-amber",
-        IconDef::mono("icons/brand/server.svg", 0xfbbf24),
+        IconDef::mono_verbatim("icons/brand/server-legacy.svg", 0xfbbf24),
     ),
     (
         "server-rose",
-        IconDef::mono("icons/brand/server.svg", 0xfb7185),
+        IconDef::mono_verbatim("icons/brand/server-legacy.svg", 0xfb7185),
     ),
     (
         "server-violet",
-        IconDef::mono("icons/brand/server.svg", 0xa78bfa),
+        IconDef::mono_verbatim("icons/brand/server-legacy.svg", 0xa78bfa),
     ),
     (
         "server-cyan",
-        IconDef::mono("icons/brand/server.svg", 0x22d3ee),
+        IconDef::mono_verbatim("icons/brand/server-legacy.svg", 0x22d3ee),
     ),
     (
         "server-slate",
-        IconDef::mono("icons/brand/server.svg", 0x94a3b8),
+        IconDef::mono_verbatim("icons/brand/server-legacy.svg", 0x94a3b8),
     ),
 ];
 
@@ -171,8 +179,15 @@ const LEGACY_ICONS: &[(&str, IconDef)] = &[
     ),
     ("telnet", IconDef::mono("icons/conn/telnet.svg", 0xd29922)),
     ("serial", IconDef::mono("icons/conn/serial.svg", 0xbc8cff)),
-    ("folder", IconDef::mono("icons/conn/folder.svg", 0xfbbf24)),
-    ("group", IconDef::mono("icons/conn/folder.svg", 0xfbbf24)),
+    // Group rows in the sidebar tree. The old app drew these with react-icons'
+    // `MdFolder` / `MdFolderOpen` in `text-amber-500/70`, i.e. Tailwind's
+    // `#f59e0b` at 70% opacity. `f59e0b` is therefore the parity value here, not
+    // the lighter `fbbf24` this build originally shipped.
+    ("folder", IconDef::mono_verbatim("icons/conn/folder.svg", 0xf59e0b)),
+    ("group", IconDef::mono_verbatim("icons/conn/folder.svg", 0xf59e0b)),
+    // The tree swaps in the open variant while a group is expanded. The old app
+    // used `MdFolderOpen` for the same branch.
+    ("folder-open", IconDef::mono_verbatim("icons/session/folder-open.svg", 0xf59e0b)),
     // The old app had no FreeBSD entry; the GPUI picker offered one backed by the
     // generic Tux glyph. Keep it resolving for anyone who picked it.
     ("freebsd", IconDef::mono("icons/brand/linux.svg", 0xab2b28)),
@@ -235,7 +250,7 @@ pub(in crate::features) fn default_connection_icon_for_kind(kind: &str) -> IconD
         "Local" => IconDef::mono("icons/conn/terminal.svg", 0x4ade80),
         "Telnet" => IconDef::mono("icons/conn/telnet.svg", 0xd29922),
         "Serial" => IconDef::mono("icons/conn/serial.svg", 0xbc8cff),
-        _ => IconDef::mono("icons/brand/server.svg", 0x60a5fa),
+        _ => IconDef::mono_verbatim("icons/brand/server-legacy.svg", 0x60a5fa),
     }
 }
 
