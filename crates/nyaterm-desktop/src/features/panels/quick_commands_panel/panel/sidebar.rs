@@ -10,6 +10,8 @@ use crate::features::{
 
 use super::{QuickCommandDragKind, QuickCommandDragPayload, QuickCommandDragPreview};
 
+const ROOT_DROP_TARGET: &str = "quick-command.category-root-drop";
+
 impl NyaTermApp {
     pub(super) fn quick_command_category_sidebar(
         &mut self,
@@ -17,17 +19,39 @@ impl NyaTermApp {
         palette: crate::theme::ThemePalette,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let insertion_marker = self
+            .commands
+            .quick_drop_target()
+            .filter(|_| cx.has_active_drag())
+            .and_then(|target| {
+                let index = categories
+                    .iter()
+                    .position(|option| option.id == target.id)?;
+                let depth = categories[index].depth;
+                let anchor = match target.position {
+                    QuickCommandDropPosition::Before => index,
+                    // "After" means after the whole subtree, rather than a line
+                    // between a parent and its first child.
+                    QuickCommandDropPosition::After => categories
+                        .iter()
+                        .enumerate()
+                        .skip(index + 1)
+                        .take_while(|(_, option)| option.depth > depth)
+                        .last()
+                        .map_or(index, |(index, _)| index),
+                    QuickCommandDropPosition::Inside => return None,
+                };
+                Some((categories[anchor].id.clone(), target.position, depth))
+            });
         let mut category_sidebar = div()
             .id(SharedString::from("quick-command-category-scroll"))
-            .w(px(176.))
-            .h_full()
-            .flex_shrink_0()
+            .w_full()
+            .flex_1()
+            .min_h_0()
             // Vertical only. Scrolling both axes lets the rows size to their
             // intrinsic width, which pushed every count pill past the 176px clip.
             .overflow_y_scrollbar()
             .p(px(6.))
-            .border_r_1()
-            .border_color(rgb(palette.border))
             .flex()
             .flex_col()
             .gap_1();
@@ -38,6 +62,15 @@ impl NyaTermApp {
             let selected = self.commands.quick_selected_category() == option.id;
             let manageable = option.manageable;
             let depth = option.depth;
+            let drop_position = self
+                .commands
+                .quick_drop_target()
+                .filter(|target| cx.has_active_drag() && target.id == option.id)
+                .map(|target| target.position);
+            let insertion = insertion_marker
+                .as_ref()
+                .filter(|(id, _, _)| *id == option.id)
+                .map(|(_, position, depth)| (*position, *depth));
             // Real categories get the full menu; `all` / `uncategorized` get the two
             // add actions only, since there is nothing there to rename or delete.
             let menu_items = if manageable {
@@ -51,7 +84,12 @@ impl NyaTermApp {
                     option.id
                 )))
                 .relative()
+                .debug_selector({
+                    let id = option.id.clone();
+                    move || format!("quick-command-category-{id}")
+                })
                 .h(px(32.))
+                .flex_shrink_0()
                 .w_full()
                 .px_2()
                 .flex()
@@ -72,6 +110,31 @@ impl NyaTermApp {
                 })
                 .cursor_pointer()
                 .hover(move |this| this.bg(rgb(palette.hover)))
+                .when(
+                    drop_position == Some(QuickCommandDropPosition::Inside),
+                    |row| {
+                        row.bg(rgba((palette.primary << 8) | 0x24))
+                            .border_1()
+                            .border_color(rgb(palette.link))
+                    },
+                )
+                .when_some(insertion, |row, (position, depth)| {
+                    let before = position == QuickCommandDropPosition::Before;
+                    row.child(
+                        div()
+                            .debug_selector({
+                                let id = option.id.clone();
+                                move || format!("quick-command-category-insertion-{id}")
+                            })
+                            .absolute()
+                            .left(px(8. + depth as f32 * 12.))
+                            .right(px(0.))
+                            .h(px(2.))
+                            .bg(rgb(palette.link))
+                            .when(before, |line| line.top(px(0.)))
+                            .when(!before, |line| line.bottom(px(0.))),
+                    )
+                })
                 .child(
                     div()
                         .size(px(6.))
@@ -139,7 +202,23 @@ impl NyaTermApp {
                                   event: &gpui::DragMoveEvent<QuickCommandDragPayload>,
                                   _,
                                   cx| {
-                                let _ = event.drag(cx);
+                                let payload = event.drag(cx);
+                                if !event.bounds.contains(&event.event.position)
+                                    || (payload.kind == QuickCommandDragKind::Category
+                                        && !this
+                                            .commands
+                                            .can_move_quick_category(&payload.id, &move_target))
+                                {
+                                    if this
+                                        .commands
+                                        .quick_drop_target()
+                                        .is_some_and(|target| target.id == move_target)
+                                    {
+                                        this.commands.clear_quick_drop_target();
+                                        cx.notify();
+                                    }
+                                    return;
+                                }
                                 let relative = if event.bounds.size.height > px(0.) {
                                     ((event.event.position.y - event.bounds.origin.y)
                                         / event.bounds.size.height)
@@ -147,7 +226,9 @@ impl NyaTermApp {
                                 } else {
                                     0.5
                                 };
-                                let position = if relative < 0.25 {
+                                let position = if payload.kind == QuickCommandDragKind::Command {
+                                    QuickCommandDropPosition::Inside
+                                } else if relative < 0.25 {
                                     QuickCommandDropPosition::Before
                                 } else if relative > 0.75 {
                                     QuickCommandDropPosition::After
@@ -158,12 +239,14 @@ impl NyaTermApp {
                                     id: move_target.clone(),
                                     position,
                                 }) {
+                                    this.ensure_drop_hover_clock(cx);
                                     cx.notify();
                                 }
                             },
                         ))
                         .on_drop(cx.listener(
                             move |this, payload: &QuickCommandDragPayload, _, cx| {
+                                cx.stop_propagation();
                                 let position = this
                                     .commands
                                     .quick_drop_target()
@@ -188,6 +271,7 @@ impl NyaTermApp {
                 .when(option.id == "uncategorized", |this| {
                     this.on_drop(cx.listener(
                         move |this, payload: &QuickCommandDragPayload, _, cx| {
+                            cx.stop_propagation();
                             let config = (payload.kind == QuickCommandDragKind::Command)
                                 .then(|| {
                                     this.commands
@@ -201,16 +285,111 @@ impl NyaTermApp {
             category_sidebar =
                 category_sidebar.child(NyaContextMenu::new(row, menu_items).into_any_element());
         }
-        // This sibling fills only the unused space, so its menu never overlaps a row.
-        category_sidebar
+        // Keep the root target outside the scroll viewport so it remains reachable
+        // even when the category tree fills the sidebar.
+        let root_hover = cx.has_active_drag()
+            && self
+                .commands
+                .quick_drop_target()
+                .is_some_and(|target| target.id == ROOT_DROP_TARGET);
+        let drop_hint = self
+            .commands
+            .quick_drop_target()
+            .filter(|_| cx.has_active_drag())
+            .and_then(|target| {
+                self.commands
+                    .quick_command_categories()
+                    .iter()
+                    .find(|item| item.id == target.id)
+                    .map(|category| match target.position {
+                        QuickCommandDropPosition::Before => t!(
+                            "quickCommands.dropBeforeCategory",
+                            category = category.name.clone()
+                        )
+                        .to_string(),
+                        QuickCommandDropPosition::After => t!(
+                            "quickCommands.dropAfterCategory",
+                            category = category.name.clone()
+                        )
+                        .to_string(),
+                        QuickCommandDropPosition::Inside => t!(
+                            "quickCommands.dropInsideCategory",
+                            category = category.name.clone()
+                        )
+                        .to_string(),
+                    })
+            });
+        div()
+            .w(px(176.))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .border_r_1()
+            .border_color(rgb(palette.border))
+            .child(category_sidebar)
             .child(
                 NyaContextMenu::new(
                     div()
                         .id("quick-command-category-blank")
                         .debug_selector(|| "quick-command-category-blank".to_string())
-                        .w_full()
-                        .min_h(px(32.))
-                        .flex_1(),
+                        .m(px(6.))
+                        .h(px(80.))
+                        .flex_shrink_0()
+                        .p_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(if root_hover {
+                            rgb(palette.link)
+                        } else {
+                            rgb(palette.border)
+                        })
+                        .when(root_hover, |target| {
+                            target.bg(rgba((palette.primary << 8) | 0x24))
+                        })
+                        .text_size(px(10.))
+                        .text_color(rgb(palette.text_dimmed))
+                        .child(t!("quickCommands.dropRootCategory").to_string())
+                        .child(
+                            div()
+                                .mt_2()
+                                .text_color(rgb(palette.link))
+                                .child(drop_hint.unwrap_or_default()),
+                        )
+                        .on_drag_move(cx.listener(
+                            |this, event: &gpui::DragMoveEvent<QuickCommandDragPayload>, _, cx| {
+                                let payload = event.drag(cx);
+                                if payload.kind != QuickCommandDragKind::Category
+                                    || !event.bounds.contains(&event.event.position)
+                                {
+                                    if this
+                                        .commands
+                                        .quick_drop_target()
+                                        .is_some_and(|target| target.id == ROOT_DROP_TARGET)
+                                    {
+                                        this.commands.clear_quick_drop_target();
+                                        cx.notify();
+                                    }
+                                    return;
+                                }
+                                if this.commands.set_quick_drop_target(QuickCommandDropTarget {
+                                    id: ROOT_DROP_TARGET.to_string(),
+                                    position: QuickCommandDropPosition::Inside,
+                                }) {
+                                    this.ensure_drop_hover_clock(cx);
+                                    cx.notify();
+                                }
+                            },
+                        ))
+                        .on_drop(
+                            cx.listener(|this, payload: &QuickCommandDragPayload, _, cx| {
+                                cx.stop_propagation();
+                                let config = (payload.kind == QuickCommandDragKind::Category)
+                                    .then(|| this.commands.move_quick_category_to_root(&payload.id))
+                                    .flatten();
+                                this.finish_quick_command_reorder(config, cx);
+                            }),
+                        ),
                     [NyaMenuItem::action(t!("quickCommands.addCategory"))
                         .icon("icons/fe/new-folder.svg")
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -233,6 +412,8 @@ impl NyaTermApp {
         let add_command_id = category_id.clone();
         let move_up_id = category_id.clone();
         let move_down_id = category_id.clone();
+        let outdent_id = category_id.clone();
+        let can_outdent = self.commands.can_outdent_quick_category(&category_id);
         let rename_id = category_id.clone();
         let delete_id = category_id.clone();
         let can_move_up = self
@@ -274,6 +455,13 @@ impl NyaTermApp {
                 .disabled(!can_move_down)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.move_quick_command_category(move_down_id.clone(), false, cx);
+                })),
+            NyaMenuItem::separator(),
+            NyaMenuItem::action(t!("quickCommands.moveToParentLevel"))
+                .icon("icons/chevron-up.svg")
+                .disabled(!can_outdent)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.outdent_quick_command_category(outdent_id.clone(), cx);
                 })),
             NyaMenuItem::separator(),
             NyaMenuItem::action(t!("quickCommands.edit"))
@@ -454,12 +642,14 @@ mod tests {
                 "Move up",
                 "Move down",
                 "",
+                "Move to parent level",
+                "",
                 "Edit",
                 "Delete",
             ]
         );
         // (label, shortcut, icon, disabled, checked, danger)
-        assert!(items[7].test_presentation().5, "delete should be dangerous");
+        assert!(items[9].test_presentation().5, "delete should be dangerous");
         assert!(items.iter().all(|item| item.children().is_none()));
     }
 
@@ -491,6 +681,25 @@ mod tests {
         assert_eq!(disabled(&app, &mut cx, "first"), (true, false));
         assert_eq!(disabled(&app, &mut cx, "middle"), (false, false));
         assert_eq!(disabled(&app, &mut cx, "last"), (false, true));
+    }
+
+    #[test]
+    fn group_menu_enables_outdent_only_for_nested_categories() {
+        let mut cx = TestAppContext::single();
+        let app = menu_app(&mut cx);
+        cx.update_entity(&app, |app, _| {
+            let mut child = category("child", 0);
+            child.parent_id = Some("root".into());
+            app.commands
+                .replace_quick_command_catalog(Vec::new(), vec![category("root", 0), child]);
+        });
+        for (id, disabled) in [("root", true), ("child", false)] {
+            let items = cx.update_entity(&app, |app, cx| {
+                app.quick_command_category_menu_items_for_test(id.into(), cx)
+            });
+            assert_eq!(items[6].test_label(), "Move to parent level");
+            assert_eq!(items[6].test_presentation().3, disabled);
+        }
     }
 
     /// `all` / `uncategorized` cannot be renamed or deleted, so they offer the add
