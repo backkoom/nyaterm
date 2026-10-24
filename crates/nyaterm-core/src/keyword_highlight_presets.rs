@@ -27,9 +27,17 @@ pub fn builtin_keyword_matcher(id: &str) -> Option<BuiltinKeywordMatcher> {
         return None;
     }
     Some(match id {
-        "builtin-error" | "builtin-warn" | "builtin-success" | "builtin-info" | "builtin-debug"
-        | "builtin-constant" | "builtin-net-interface-up" | "builtin-net-interface-down"
-        | "builtin-net-admin-down" | "builtin-net-standby" | "builtin-net-acl-permit"
+        "builtin-error"
+        | "builtin-warn"
+        | "builtin-success"
+        | "builtin-info"
+        | "builtin-debug"
+        | "builtin-constant"
+        | "builtin-net-interface-up"
+        | "builtin-net-interface-down"
+        | "builtin-net-admin-down"
+        | "builtin-net-standby"
+        | "builtin-net-acl-permit"
         | "builtin-net-acl-deny" => BuiltinKeywordMatcher::LiteralWords,
         "builtin-command" | "builtin-path" | "builtin-permissions" | "builtin-prompt" => {
             BuiltinKeywordMatcher::Structured

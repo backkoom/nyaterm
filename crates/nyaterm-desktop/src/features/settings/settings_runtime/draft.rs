@@ -538,8 +538,11 @@ impl NyaTermApp {
         // A full or disconnected store queue used to swallow the request and
         // leave the panel stuck on "unsaved changes" with no feedback.
         if !submitted {
-            let message =
-                t!("settings.applyFailed", error = "settings store is unavailable").to_string();
+            let message = t!(
+                "settings.applyFailed",
+                error = "settings store is unavailable"
+            )
+            .to_string();
             self.settings.update_store_status(message.clone(), false);
             self.shell.set_status(message);
             self.request_settings_panel_refresh(cx);
