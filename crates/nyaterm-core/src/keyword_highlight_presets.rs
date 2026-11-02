@@ -49,7 +49,8 @@ pub fn builtin_keyword_matcher(id: &str) -> Option<BuiltinKeywordMatcher> {
         | "builtin-perm-read"
         | "builtin-perm-write"
         | "builtin-perm-execute"
-        | "builtin-perm-special" => BuiltinKeywordMatcher::Structured,
+        | "builtin-perm-special"
+        | "builtin-ls-dir" => BuiltinKeywordMatcher::Structured,
         _ => BuiltinKeywordMatcher::Regex,
     })
 }
@@ -93,6 +94,7 @@ pub fn builtin_keyword_rule_ids() -> &'static [&'static str] {
         "builtin-perm-write",
         "builtin-perm-execute",
         "builtin-perm-special",
+        "builtin-ls-dir",
     ]
 }
 
@@ -118,6 +120,7 @@ pub fn builtin_keyword_rule_is_specialized(id: &str) -> bool {
             | "builtin-perm-write"
             | "builtin-perm-execute"
             | "builtin-perm-special"
+            | "builtin-ls-dir"
     )
 }
 
@@ -164,6 +167,7 @@ pub fn builtin_keyword_rule_ansi(id: &str) -> u8 {
         "builtin-perm-write" => 3,
         "builtin-perm-execute" => 2,
         "builtin-perm-special" => 5,
+        "builtin-ls-dir" => 4,
         _ => 7,
     }
 }
@@ -174,14 +178,24 @@ pub fn builtin_keyword_rule_ansi(id: &str) -> u8 {
 /// OxideTerm paints them in a grass green that none of the GitHub palettes
 /// provide, so these three keep an explicit value; everything else still
 /// follows the theme.
-fn builtin_keyword_rule_hex_override(id: &str, is_dark: bool) -> Option<&'static str> {
+fn builtin_keyword_rule_hex_override(id: &str, _is_dark: bool) -> Option<&'static str> {
+    // Sampled from OxideTerm's own output, so the two render identically. These
+    // deliberately stop following the theme: the reference is a fixed palette.
     match id {
-        // One accent for the prompt punctuation, the command head and operators.
-        // Shifted towards yellow against the theme's own green so it separates
-        // from `builtin-success` instead of reading as the same colour.
-        "builtin-prompt" | "builtin-command" | "builtin-operator" => {
-            Some(if is_dark { "#bae12d" } else { "#6f8a10" })
-        }
+        // Structure layer. The prompt punctuation is olive, the command head and
+        // the operators are a darker green — they are not one accent.
+        "builtin-prompt" => Some("#949800"),
+        "builtin-command" | "builtin-operator" => Some("#107C10"),
+        // Blue for anything path-shaped, including `ls -l` entry names.
+        "builtin-path" | "builtin-ls-dir" => Some("#0451A5"),
+        "builtin-number" => Some("#BC05BC"),
+        "builtin-datetime" => Some("#107C10"),
+        "builtin-address" => Some("#14CE14"),
+        "builtin-option" => Some("#0598BC"),
+        // Permission characters: cyan / olive / green, as OxideTerm renders them.
+        "builtin-perm-read" => Some("#0598BC"),
+        "builtin-perm-write" => Some("#B5BA00"),
+        "builtin-perm-execute" | "builtin-perm-special" => Some("#14CE14"),
         _ => None,
     }
 }
@@ -263,6 +277,7 @@ pub fn builtin_keyword_rule_label(id: &str) -> &'static str {
         "builtin-perm-write" => "Permission write",
         "builtin-perm-execute" => "Permission execute",
         "builtin-perm-special" => "Permission special",
+        "builtin-ls-dir" => "Directory",
         "builtin-net-keyword" => "Network keyword",
         "builtin-net-port" => "Network port",
         "builtin-net-address" => "Network address",
@@ -283,6 +298,9 @@ pub fn builtin_keyword_rule_label(id: &str) -> &'static str {
 }
 
 pub fn builtin_keyword_rule_swatch(id: &str, is_dark: bool) -> &'static str {
+    if let Some(hex) = builtin_keyword_rule_hex_override(id, is_dark) {
+        return hex;
+    }
     let dark = is_dark;
     match id {
         "builtin-error" => {
@@ -369,6 +387,8 @@ pub fn builtin_keyword_rule_swatch(id: &str, is_dark: bool) -> &'static str {
                 "#cf222e"
             }
         }
+        // Fixed, not palette-derived: matches OxideTerm's directory blue.
+        "builtin-ls-dir" => "#136CE0",
         // Network configuration palette: one meaning per colour, so an address
         // never borrows the "info" hue or a VLAN id the "success" hue.
         "builtin-net-keyword" => {

@@ -100,7 +100,7 @@ fn typed_command_colours_without_integration() {
         integrated: false,
         ..SemanticContext::default()
     };
-    let line = "[root@nginx-wan nginx-wan]# ls -lR";
+    let line = "[root@host host]# ls -lR";
     let ranges: Vec<(usize, usize, u32)> = highlighter.ranges(line, &context, &[]);
     let prompt_at = 0;
     let command_at = line.find("ls").expect("command");
@@ -128,7 +128,7 @@ fn typed_command_colours_when_integration_lacks_input_columns() {
         input_anchor_missing: true,
         ..SemanticContext::default()
     };
-    let line = "[root@nginx-wan ~]# ll";
+    let line = "[root@host ~]# ll";
     let ranges: Vec<(usize, usize, u32)> = highlighter.ranges(line, &context, &[]);
     let command_at = line.find("ll").expect("command");
     assert!(
@@ -351,12 +351,17 @@ fn permission_tokens_are_validated_before_character_decoration() {
         let line = format!("prefix {token} 18 root root");
         let result = colors(&line, false);
         for (index, byte) in token.bytes().enumerate() {
+            // The type byte keeps the terminal foreground, matching OxideTerm.
+            if index == 0 {
+                assert_eq!(result[7 + index], None, "{token}, column 0");
+                continue;
+            }
             let id = match byte {
-                b'-' | b'.' | b'+' => "builtin-operator",
-                _ if index == 0 => "builtin-debug",
-                b'r' => "builtin-info",
-                b'w' => "builtin-warn",
-                _ => "builtin-error",
+                b'r' => "builtin-perm-read",
+                b'w' => "builtin-perm-write",
+                b'x' => "builtin-perm-execute",
+                b's' | b'S' | b't' | b'T' => "builtin-perm-special",
+                _ => "builtin-operator",
             };
             assert_eq!(
                 result[7 + index],
@@ -385,10 +390,10 @@ fn listing_datetime_and_numbers_keep_windterm_colors_without_single_digit_noise(
     for number in ["18", "4096"] {
         assert_token(line, number, "builtin-number", false);
     }
-    for date in ["Oct", "21:37"] {
+    // Month, day and time all carry the date colour, like `ls --color`.
+    for date in ["Oct", "7", "21:37"] {
         assert_token(line, date, "builtin-datetime", false);
     }
-    assert_eq!(colors(line, false)[line.find(" 7 ").unwrap() + 1], None);
 }
 
 #[test]
@@ -963,7 +968,9 @@ fn readline_completion_pages_are_output_while_osc133_input_remains_active() {
     let page = screen.snapshot();
     assert!(page.scrollback_len > 0);
     let page_colors = snapshot_colors(&page);
-    assert!(!page_colors.contains(&Some(swatch("builtin-command"))));
+    // The reference palette paints the command head and dates the same green, so
+    // "the page contains no command colour" can no longer tell input from output.
+    // The date and option assertions below are what prove it was parsed as output.
     assert_eq!(&page_colors[..5], &[Some(swatch("builtin-datetime")); 5]);
     assert_eq!(page_colors[3 * 80], Some(swatch("builtin-option")));
     let agents = page
@@ -1211,16 +1218,22 @@ fn category_switches_disable_structured_children_and_light_colors_remain_distinc
     };
     let result = highlighter.matches(line, &context);
     assert!(result.iter().all(|m| m.priority != 10 && m.priority != 20));
+    // These follow the theme, so the light and dark values must differ.
+    assert_ne!(
+        builtin_keyword_rule_swatch("builtin-string", true),
+        builtin_keyword_rule_swatch("builtin-string", false)
+    );
+    // These are pinned to the reference palette and must not vary with it.
     for id in [
         "builtin-command",
-        "builtin-string",
         "builtin-path",
         "builtin-option",
         "builtin-number",
     ] {
-        assert_ne!(
+        assert_eq!(
             builtin_keyword_rule_swatch(id, true),
-            builtin_keyword_rule_swatch(id, false)
+            builtin_keyword_rule_swatch(id, false),
+            "{id}"
         );
     }
 }
@@ -1281,7 +1294,7 @@ fn prompt_prefix_survives_the_row_leaving_the_live_input_state() {
     // through to plain output and its text turned black. The prompt shape alone
     // has to keep colouring it, exactly like the live row.
     let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(true), true);
-    let line = "[root@nginx-wan ~]# ";
+    let line = "[root@host ~]# ";
     let context = SemanticContext {
         integrated: true,
         ..SemanticContext::default()
@@ -1291,10 +1304,12 @@ fn prompt_prefix_survives_the_row_leaving_the_live_input_state() {
         colors[start..end].fill(Some(color));
     }
     // Only the brackets carry the accent; the prompt words stay in the normal
-    // foreground.
+    // foreground. Derive the closing bracket from the text so the fixture can
+    // change without breaking the assertion.
+    let close = line.find(']').expect("closing bracket");
     assert_eq!(colors[0], Some(swatch("builtin-prompt")), "{colors:?}");
-    assert_eq!(colors[17], Some(swatch("builtin-prompt")), "{colors:?}");
-    assert!(colors[1..17].iter().all(Option::is_none), "{colors:?}");
+    assert_eq!(colors[close], Some(swatch("builtin-prompt")), "{colors:?}");
+    assert!(colors[1..close].iter().all(Option::is_none), "{colors:?}");
 }
 
 #[test]
@@ -1303,10 +1318,10 @@ fn scrolled_view_keeps_the_prompt_coloured() {
     // so the live-input heuristic cannot fire and history rows carry no anchors.
     // The prompt must not turn black just because the user scrolled back.
     let mut screen = TerminalScreen::new(40, 5);
-    screen.advance(b"\x1b]133;A\x07[root@nginx-wan ~]#\x1b]133;B\x07ls");
+    screen.advance(b"\x1b]133;A\x07[root@host ~]#\x1b]133;B\x07ls");
     screen.advance(b"\r\n\x1b]133;C\x07one\r\n");
-    screen.advance(b"[root@nginx-wan ~]# tail\r\ntwo\r\nthree\r\n");
-    screen.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07[root@nginx-wan ~]#\x1b]133;B\x07");
+    screen.advance(b"[root@host ~]# tail\r\ntwo\r\nthree\r\n");
+    screen.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07[root@host ~]#\x1b]133;B\x07");
     let scrolled = screen.viewport_snapshot(1);
     assert_eq!(
         scrolled.cursor.row,
@@ -1316,11 +1331,12 @@ fn scrolled_view_keeps_the_prompt_coloured() {
     let prompt_row = scrolled
         .rows()
         .iter()
-        .position(|row| row.text.starts_with("[root@nginx-wan ~]# tail"))
+        .position(|row| row.text.starts_with("[root@host ~]# tail"))
         .expect("history prompt row stays inside the window");
     assert!(scrolled.row(prompt_row).unwrap().shell_input.is_none());
     let colors = snapshot_colors(&scrolled);
     let base = prompt_row * 40;
+    let close = "[root@host ~]#".find(']').expect("closing bracket");
     assert_eq!(
         colors[base],
         Some(swatch("builtin-prompt")),
@@ -1328,13 +1344,13 @@ fn scrolled_view_keeps_the_prompt_coloured() {
         &colors[base..base + 19]
     );
     assert_eq!(
-        colors[base + 17],
+        colors[base + close],
         Some(swatch("builtin-prompt")),
         "{:?}",
         &colors[base..base + 19]
     );
     assert!(
-        colors[base + 1..base + 17].iter().all(Option::is_none),
+        colors[base + 1..base + close].iter().all(Option::is_none),
         "{:?}",
         &colors[base..base + 19]
     );

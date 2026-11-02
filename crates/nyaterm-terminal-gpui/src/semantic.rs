@@ -192,6 +192,12 @@ impl SemanticHighlighter {
     }
 
     fn child_color(&self, id: &str) -> u32 {
+        // A permission character's rule already carries its own colour, so use
+        // that; the child palette is only a fallback for rules that are switched
+        // off or absent.
+        if let Some(color) = self.color(id) {
+            return color;
+        }
         match id {
             "builtin-info" => self.children.read,
             "builtin-warn" => self.children.write,
@@ -244,12 +250,20 @@ impl SemanticHighlighter {
             if found.permissions {
                 // Permissions are one validated token. Decoration does not resolve overlaps.
                 for (index, byte) in line[found.start..found.end].bytes().enumerate() {
+                    // The type byte (`d`/`-`/`l`) stays in the terminal
+                    // foreground; OxideTerm does not colour it either.
+                    if index == 0 {
+                        continue;
+                    }
+                    // Same rules as the `ls -l` role parser, so a permission
+                    // string looks identical whether or not the line was
+                    // recognised as a listing.
                     let id = match byte {
-                        b'-' | b'.' | b'+' => "builtin-operator",
-                        _ if index == 0 => "builtin-debug",
-                        b'r' => "builtin-info",
-                        b'w' => "builtin-warn",
-                        _ => "builtin-error",
+                        b'r' => "builtin-perm-read",
+                        b'w' => "builtin-perm-write",
+                        b'x' => "builtin-perm-execute",
+                        b's' | b'S' | b't' | b'T' => "builtin-perm-special",
+                        _ => "builtin-operator",
                     };
                     append(
                         found.start + index,

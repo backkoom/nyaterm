@@ -468,11 +468,9 @@ fn file_listing_fields(line: &str) -> Vec<RoleField> {
     // Mode string: the type byte, then r/w/x/s/t each get their own colour so a
     // listing reads like `ls -l --color` (OxideTerm does the same).
     if line.len() >= 10 {
-        out.push(RoleField {
-            range: 0..1,
-            rule: "builtin-comment",
-            priority: 97,
-        });
+        // The type byte stays uncoloured: OxideTerm leaves `d` / `-` in the
+        // terminal foreground, and colouring it made the mode string read as a
+        // block of purple.
         for (offset, byte) in line.as_bytes()[1..10].iter().enumerate() {
             let rule = match byte {
                 b'r' => "builtin-perm-read",
@@ -496,7 +494,7 @@ fn file_listing_fields(line: &str) -> Vec<RoleField> {
         cursor += 1;
     }
     let mut column = 0;
-    while cursor < line.len() && column < 5 {
+    while cursor < line.len() && column < 7 {
         while cursor < line.len() && line.as_bytes()[cursor] == b' ' {
             cursor += 1;
         }
@@ -509,9 +507,9 @@ fn file_listing_fields(line: &str) -> Vec<RoleField> {
         }
         let token = &line[start..cursor];
         let rule = match column {
-            0 => "builtin-number",   // links
-            3 => "builtin-number",   // size
-            4 => "builtin-datetime", // month/day/time
+            0 => "builtin-number",           // links
+            3 => "builtin-number",           // size
+            4 | 5 | 6 => "builtin-datetime", // month/day/time
             _ => "",
         };
         if !rule.is_empty() {
@@ -530,6 +528,28 @@ fn file_listing_fields(line: &str) -> Vec<RoleField> {
             });
         }
         column += 1;
+    }
+    // Name column: OxideTerm colours by entry type, so a directory reads blue and
+    // an executable green while a plain file keeps the terminal foreground.
+    while cursor < line.len() && line.as_bytes()[cursor] == b' ' {
+        cursor += 1;
+    }
+    if cursor < line.len() {
+        let kind = line.as_bytes()[0];
+        let executable = matches!(line.as_bytes().get(3), Some(b'x' | b's' | b't'));
+        let rule = match kind {
+            b'd' => "builtin-ls-dir",
+            b'l' => "builtin-link",
+            _ if executable => "builtin-success",
+            _ => "",
+        };
+        if !rule.is_empty() {
+            out.push(RoleField {
+                range: cursor..line.len(),
+                rule,
+                priority: 96,
+            });
+        }
     }
     out
 }
@@ -2641,8 +2661,11 @@ mod tests {
         let line = "-rw-r--r--  1 root root  1234 Oct 30 10:00 file.txt";
         let fields = file_listing_fields(line);
         let texts: Vec<&str> = fields.iter().map(|f| &line[f.range.clone()]).collect();
-        // One field per permission character, plus the type byte.
-        assert!(texts.contains(&"-"), "{texts:?}");
+        // One field per permission character; the type byte stays unpainted.
+        assert!(
+            !fields.iter().any(|f| f.range == (0..1)),
+            "type byte must not be a field: {texts:?}"
+        );
         assert!(texts.contains(&"1"), "{texts:?}");
         assert!(texts.contains(&"1234"), "{texts:?}");
         assert!(texts.contains(&"Oct"), "{texts:?}");
